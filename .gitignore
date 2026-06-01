@@ -1,0 +1,5 @@
+server-out.txt
+server-err.txt
+node_modules/
+.env
+.DS_Store

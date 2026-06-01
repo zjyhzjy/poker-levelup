@@ -1,0 +1,14 @@
+{
+  "name": "shengji-zhaopengyou",
+  "version": "0.1.0",
+  "description": "Free open-source 5-player Shengji Zhao Pengyou web game prototype.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}
