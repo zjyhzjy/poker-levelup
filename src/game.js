@@ -148,7 +148,10 @@ export function startRound(room, random = Math.random) {
     if (firstRound) seat.level = room.firstLevel;
   }
   dealAll(room);
+  
   room.tableLog.push(`本轮从 ${seatName(room, room.starterSeat)} 开始逆时针摸牌。`);
+  // 在 startRound 函数发牌逻辑结束后加入：
+  room.tableLog.push(`【系统】本局游戏开始！所有玩家的当前级牌为: ${room.levelRank}`);
   if (!room.currentBid) {
     room.phase = PHASES.AUCTION_READY;
     room.tableLog.push("摸牌结束无人亮主，等待手动开始翻底拍卖。");
@@ -223,6 +226,10 @@ export function forceDealer(room, lastKittyCard, chosenSuit = null) {
   room.currentBid = { seat: seatIndex, playerId: dealer.playerId, strength: 0, levelRank: dealer.level, trumpSuit: room.trumpSuit, noTrump: false };
   room.phase = PHASES.FORCED_SUIT;
   room.tableLog.push(`${dealer.nickname} 被强制坐庄，可选择是否亮自己的常主花色改主。`);
+  // 【修复】：强制坐庄确立主花色后，立刻触发出牌排序变更
+  for (const seat of room.seats) {
+    sortHand(seat.hand, room);
+  }
 }
 
 export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
@@ -417,27 +424,150 @@ export function compareBid(a, b) {
   return a.strength - b.strength;
 }
 
+// 核心修复：精准分析手牌结构，严格划分拖拉机、对子与甩牌
 export function analyzeShape(cards, room) {
-  const sorted = [...cards].sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room));
+  if (cards.length === 0) return { type: "empty", unit: 0, value: 0 };
+
+  const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
   const groups = groupCards(sorted);
-  if (cards.length === 1) return { type: "single", length: 1 };
-  if (cards.length === 2 && groups.length === 1) return { type: "pair", length: 2, unit: 2 };
-  if (cards.length === 3 && groups.length === 1) return { type: "triple", length: 3, unit: 3 };
-  const tractorUnit = tractorUnitSize(groups);
-  if (tractorUnit && cards.length >= 4 && isConsecutiveGroups(groups, room)) {
-    return { type: "tractor", length: cards.length, unit: tractorUnit, groups: groups.length };
+
+  // 1. 如果全是单张
+  if (groups.every(g => g.length === 1)) {
+    if (cards.length === 1) return { type: "single", unit: 1, value: cardOrderValue(cards[0], room) };
+    return { type: "throw", unit: 1, value: 0 };
   }
-  return { type: "throw", length: cards.length };
+
+  // 2. 检查是否是纯正的【对子】或【三条】
+  const firstLen = groups[0].length;
+  if (groups.every(g => g.length === firstLen)) {
+    if (groups.length === 1) {
+      return { 
+        type: firstLen === 2 ? "pair" : "triple", // 兼容旧命名，改为 "triple"
+        unit: firstLen, 
+        value: cardOrderValue(groups[0][0], room) 
+      };
+    }
+    
+    // 如果有多个对子或多个三条，检查它们在动态牌序中是否构成【无缝拖拉机】
+    if (isTrueTractor(groups, room)) {
+      return { 
+        type: "tractor", 
+        unit: firstLen, 
+        count: groups.length, 
+        value: cardOrderValue(groups[0][0], room) // 拖拉机车头权重
+      };
+    }
+  }
+
+  // 3. 不符合标准单牌、单对、单三条或标准拖拉机的，一律打回为“甩牌”
+  return { type: "throw", unit: 0, value: 0 };
 }
 
+// 核心修复：真正符合升级精髓的“无缝动态拖拉机”判定算法
+function isTrueTractor(groups, room) {
+  // 必须全部是对子(len=2)或者全是三条(len=3)
+  const unitLen = groups[0].length;
+  if (unitLen < 2) return false;
+
+  // 获取这手牌的整体花色
+  const ledSuit = playSuit(groups[0][0], room);
+
+  // 遍历检查相邻两个组合之间在规则上是否“无缝连续”
+  for (let i = 0; i < groups.length - 1; i++) {
+    const cardA = groups[i][0];   // 较大的一组牌
+    const cardB = groups[i+1][0]; // 较小的一组牌
+
+    if (!isConsecutiveInRules(cardA, cardB, ledSuit, room)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// 裁判机：判定在当前定主状态下，两张牌在同一个花色序列里是否绝对紧邻
+function isConsecutiveInRules(cardA, cardB, ledSuit, room) {
+  const valA = cardOrderValue(cardA, room);
+  const valB = cardOrderValue(cardB, room);
+  
+  // 基础硬性条件：前面的牌必须比后面的牌大
+  if (valA <= valB) return false;
+
+  const level = room.levelRank;
+
+  // --- 情况 A：如果是副牌序列（比如你打出的梅花 1010JJ） ---
+  if (ledSuit !== "trump") {
+    // 升级铁律：级牌Q飞走了，那么在副牌里 K 和 J 是直接相邻的，10 和 J 也是直接相邻的！
+    const order = ["A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2"];
+    // 抽离级牌后的纯净副牌链
+    const cleanOrder = order.filter(r => r !== level);
+    
+    const idxA = cleanOrder.indexOf(cardA.rank);
+    const idxB = cleanOrder.indexOf(cardB.rank);
+    
+    // 如果在抽离级牌后的序列里索引正好相差1（例如 J 和 10），则是完美的副牌拖拉机
+    return (idxB - idxA === 1);
+  }
+
+  // --- 情况 B：如果是复杂的主牌序列（大小王、正副级牌、主花色普通牌） ---
+  // 主牌的绝对连续链条严格如下：
+  // 大王 -> 小王 -> 正主级牌 -> 副主级牌(按出牌顺序或特定) -> 主花色A -> 主花色K -> 主花色J (跳过级牌)
+  
+  // 我们可以通过在当前主牌权重池中找“断层间距”来暴力判定：
+  // 拿到 cardA 的权重，看看主牌中仅次于 cardA 的“下一张合法的牌”的权重是多少
+  const nextValidValue = getNextImmediateTrumpValue(valA, room);
+  return (valB === nextValidValue);
+}
+
+// 辅助裁判：获取主牌中紧随其后的下一个合法权重阶梯（封杀 AI2 的非法Q+A连对）
+function getNextImmediateTrumpValue(currentValue, room) {
+  // 建立一个本局所有可能出现在主牌中的单张核心权重快照
+  const sampleTrumpValues = [];
+  
+  // 1. 王牌
+  sampleTrumpValues.push(1000); // 大王
+  sampleTrumpValues.push(990);  // 小王
+  // 2. 级牌
+  sampleTrumpValues.push(980);  // 正主级牌 (如方片Q)
+  sampleTrumpValues.push(970);  // 副主级牌 (如红桃/黑桃/梅花Q)
+  
+  // 3. 普通主牌数字链（抽离级牌后的 A, K, J, 10...）
+  const order = ["A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2"];
+  order.forEach(rank => {
+    if (rank !== room.levelRank) {
+      sampleTrumpValues.push(500 + rankNumber(rank));
+    }
+  });
+
+  // 排序并找出正好小于当前权重的下一个最大值
+  const sortedValues = [...new Set(sampleTrumpValues)].sort((a, b) => b - a);
+  const currentIndex = sortedValues.indexOf(currentValue);
+  
+  if (currentIndex !== -1 && currentIndex < sortedValues.length - 1) {
+    return sortedValues[currentIndex + 1];
+  }
+  return -1;
+}
+
+
 export function validatePlay(room, seat, cards, leaderCards) {
-  if (!leaderCards) return { ok: true };
+  if (!leaderCards) {
+    // 作为首出牌者，如果选择了甩牌 (Throw)
+    const shape = analyzeShape(cards, room);
+    if (shape.type === "throw") {
+      return validateThrow(room, seat, cards);
+    }
+    return { ok: true };
+  }
+  
   if (cards.length !== leaderCards.length) return { ok: false, reason: "必须出相同张数" };
+  
   const ledSuit = playSuit(leaderCards[0], room);
   const available = seat.hand.filter((card) => playSuit(card, room) === ledSuit);
   const following = cards.filter((card) => playSuit(card, room) === ledSuit);
+  
   if (available.length >= cards.length && following.length !== cards.length) return { ok: false, reason: "有同门牌时必须跟同门" };
   if (available.length < cards.length && following.length !== available.length) return { ok: false, reason: "同门牌不足时要尽量跟完" };
+  
   const leaderShape = analyzeShape(leaderCards, room);
   if (following.length === cards.length) {
     const wanted = forcedRequirement(leaderShape, available, room);
@@ -445,6 +575,58 @@ export function validatePlay(room, seat, cards, leaderCards) {
     if (!shapeSatisfies(actual, wanted)) return { ok: false, reason: "需要优先跟同类牌型" };
   }
   return { ok: true };
+}
+
+// 【彻底修复 3】：精准拆解甩牌组合，防止非对应牌型发生阻挡误判
+function validateThrow(room, throwerSeat, cards) {
+  const ledSuit = playSuit(cards[0], room);
+  const throwerSorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  const tGroups = groupCards(throwerSorted); // 拆解出的组合，如 [[A,A,A], [K,K]]
+
+  // 遍历其他所有防守方玩家
+  for (const otherSeat of room.seats) {
+    if (otherSeat.index === throwerSeat.index) continue;
+
+    const otherSameSuit = otherSeat.hand.filter(c => playSuit(c, room) === ledSuit);
+    if (otherSameSuit.length === 0) continue;
+    
+    const oGroups = groupCards(otherSameSuit);
+
+    // 对你甩牌里的每一个原子组合进行针对性大牌扫描
+    for (const tGroup of tGroups) {
+      const tLen = tGroup.length; // 该组合的张数（1代表单张，2代表对子，3代表三条）
+      const tValue = cardOrderValue(tGroup[0], room);
+
+      // 寻找防守方手里有没有【相同结构】且【牌面更大】的牌进行阻挡
+      // 规则：能管住对子的只有更大的对子；能管住三条的只有更大的三条
+      const blocker = oGroups.find(oGroup => oGroup.length >= tLen && cardOrderValue(oGroup[0], room) > tValue);
+
+      if (blocker) {
+        // 如果你甩的是拖拉机（连对），防守方必须也有对应大小的连对才能阻挡
+        const tShape = analyzeShape(tGroup, room);
+        if (tShape.type === "tractor") {
+          // 扫描防守方手牌是否能凑出比你这个车头更大的拖拉机
+          const betterTractors = findTractors(otherSameSuit, room, tGroup.length);
+          if (betterTractors.length > 0 && cardOrderValue(betterTractors[0][0][0], room) > tValue) {
+            return { ok: false, reason: `甩牌失败！${otherSeat.nickname} 手中有更大的拖拉机阻挡。` };
+          }
+          continue; // 如果别人没有更大拖拉机，单凭三条或普通大对子是挡不住你拖拉机的，继续检查下一个组合
+        }
+
+        // 普通单张、对子、三条的阻挡确立
+        return { ok: false, reason: `甩牌失败！${otherSeat.nickname} 手中有更大的牌型阻挡。` };
+      }
+    }
+  }
+  return { ok: true };
+}
+
+// 补充辅助函数：检查两手牌的牌型原子结构是否完全对齐（处理甩牌跟牌校验）
+function isStructureMatch(cardsA, cardsB) {
+  const gA = groupCards(cardsA).map(g => g.length).sort((x, y) => y - x);
+  const gB = groupCards(cardsB).map(g => g.length).sort((x, y) => y - x);
+  if (gA.length !== gB.length) return false;
+  return gA.every((val, i) => val === gB[i]);
 }
 
 export function determineTrickWinner(room, plays) {
@@ -465,23 +647,84 @@ export function upgradeResult(attackers) {
   return { side: "attackers", steps: 3, label: "闲家队升 3 级" };
 }
 
+// 【彻底修复 2】：完善墩牌大小裁判，防止垫牌、不匹配牌型盗取胜利
 function comparePlay(room, challenger, currentBest, leadPlay) {
-  const leadSuit = playSuit(leadPlay.cards[0], room);
-  const challengerSuit = playSuit(challenger.cards[0], room);
-  const bestSuit = playSuit(currentBest.cards[0], room);
-  const challengerTrump = challengerSuit === "trump";
-  const bestTrump = bestSuit === "trump";
-  if (challengerTrump && !bestTrump) return 1;
-  if (!challengerTrump && bestTrump) return -1;
-  if (challengerSuit !== bestSuit && challengerSuit !== leadSuit) return -1;
-  if (challenger.cards.length !== currentBest.cards.length) return -1;
-  return maxCardValue(challenger.cards, room) - maxCardValue(currentBest.cards, room);
+  const leadPlayCards = leadPlay.cards;
+  const leadShape = analyzeShape(leadPlayCards, room);
+  const ledSuit = playSuit(leadPlayCards[0], room);
+
+  const challengerCards = challenger.cards;
+  const challengerShape = analyzeShape(challengerCards, room);
+  const challengerSuit = playSuit(challengerCards[0], room);
+
+  const bestCards = currentBest.cards;
+  const bestShape = analyzeShape(bestCards, room);
+  const bestSuit = playSuit(bestCards[0], room);
+
+  // 1. 张数不同，直接没有可比性
+  if (challengerCards.length !== leadPlayCards.length) return -1;
+
+  // 2. 判定挑战者是否属于“牌型与花色完全匹配”的合法压牌
+  let challengerValid = false;
+  let challengerIsTrumpCut = false;
+
+  // 挑战者的组合结构必须和首出完全一致（例如：首出是两对，挑战者也必须出两对）
+  if (challengerShape.type === leadShape.type && challengerShape.unit === leadShape.unit) {
+    if (challengerSuit === ledSuit) {
+      challengerValid = true; // 同花色同牌型正常跟牌
+    } else if (ledSuit !== "trump" && challengerSuit === "trump" && isAllTrumpCards(challengerCards, room)) {
+      challengerValid = true;
+      challengerIsTrumpCut = true; // 主牌杀副牌
+    }
+  }
+
+  // 特殊处理首出是“甩牌(throw)”的情况
+  if (leadShape.type === "throw") {
+    // 甩牌情况下，跟牌者必须完全是同花色，或者全为主牌“毙”掉，且内部的具体结构（对子、单张数量）要完全对得上才有资格赢
+    if (challengerSuit === ledSuit && isStructureMatch(challengerCards, leadPlayCards)) {
+      challengerValid = true;
+    } else if (ledSuit !== "trump" && challengerSuit === "trump" && isAllTrumpCards(challengerCards, room) && isStructureMatch(challengerCards, leadPlayCards)) {
+      challengerValid = true;
+      challengerIsTrumpCut = true;
+    }
+  }
+
+  // 如果挑战者不合法（属于未能跟出对应牌型的垫牌），直接判定输
+  if (!challengerValid) return -1;
+
+  // 3. 判定当前最优者是否是杀牌
+  let bestIsTrumpCut = (ledSuit !== "trump" && bestSuit === "trump" && isAllTrumpCards(bestCards, room));
+
+  // 4. 开始比大小
+  if (challengerIsTrumpCut) {
+    if (!bestIsTrumpCut) return 1; // 挑战者是杀牌，之前没人杀，挑战者大
+    return getShapeComparativeValue(challengerCards, room) - getShapeComparativeValue(bestCards, room);
+  }
+
+  if (bestIsTrumpCut) return -1; // 之前有人杀了，普通跟牌大不过杀牌
+
+  return getShapeComparativeValue(challengerCards, room) - getShapeComparativeValue(bestCards, room);
 }
 
-function maxCardValue(cards, room) {
-  return Math.max(...cards.map((card) => cardOrderValue(card, room)));
+
+// 辅助函数：判断一组牌是否全为主牌
+function isAllTrumpCards(cards, room) {
+  return cards.every(card => playSuit(card, room) === "trump");
 }
 
+// 辅助函数：获取牌型的真正用于比较的核心权重（解决只比最大单张的 Bug）
+// 比如对子比对子的大小，拖拉机比拖拉机车头的大小
+function getShapeComparativeValue(cards, room) {
+  if (cards.length === 0) return 0;
+  // 先按卡牌单张权力从大到小排序
+  const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  
+  // 对于升级/找朋友来说，不管是拖拉机还是对子、三条，排序后最顶端的那张牌（车头）就代表了整组牌的大小
+  // 因为前面已经严格校验过 shape.type 必须一致，所以直接对比最强单张的权重是完全安全且符合规则的
+  return cardOrderValue(sorted[0], room);
+}
+
+// 保留原有的单张权力值计算（无需修改，供上面调用）
 export function cardOrderValue(card, room) {
   if (card.rank === "bigJoker") return 1000;
   if (card.rank === "smallJoker") return 990;
@@ -523,14 +766,27 @@ function shapeSatisfies(shape, wanted) {
   return true;
 }
 
-function groupCards(cards) {
-  const map = new Map();
-  for (const card of cards) {
-    const key = `${card.rank}:${card.suit}`;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(card);
+// 辅助函数：将相同点数和花色的牌归类到一个组中
+function groupCards(sortedCards) {
+  const groups = [];
+  let currentGroup = [];
+  
+  for (const card of sortedCards) {
+    if (currentGroup.length === 0) {
+      currentGroup.push(card);
+    } else {
+      const prev = currentGroup[0];
+      // 只有花色和点数完全一致的牌，才算进同一个对子或三条组（三副牌规则）
+      if (card.rank === prev.rank && card.suit === prev.suit) {
+        currentGroup.push(card);
+      } else {
+        groups.push(currentGroup);
+        currentGroup = [card];
+      }
+    }
   }
-  return [...map.values()].sort((a, b) => b.length - a.length || a[0].label.localeCompare(b[0].label));
+  if (currentGroup.length > 0) groups.push(currentGroup);
+  return groups;
 }
 
 function tractorUnitSize(groups) {
@@ -540,10 +796,44 @@ function tractorUnitSize(groups) {
   return 0;
 }
 
+// 修复：考虑当前级牌（levelRank）被抽离后的动态连续性判定
 function isConsecutiveGroups(groups, room) {
-  const values = groups.map((group) => cardOrderValue(group[0], room)).sort((a, b) => a - b);
-  for (let i = 1; i < values.length; i += 1) {
-    if (values[i] - values[i - 1] !== 1 && values[i] - values[i - 1] !== 10) return false;
+  if (groups.length < 2) return false;
+
+  // 1. 获取当前主牌/副牌的动态牌序数组
+  // 升级规则中，除去大王、小王、主级牌、副级牌后，剩下的数字是按顺序连续的
+  const ledSuit = playSuit(groups[0][0], room);
+  
+  // 建立一个剔除了当前级牌的纯净大小顺序表
+  // 比如打 10，这里就是 ['A', 'K', 'Q', 'J', '9', '8', '7', '6', '5', '4', '3', '2']
+  const cleanRanks = RANKS.filter(r => r !== room.levelRank);
+
+  // 2. 将出牌组合映射到这个纯净顺序表的索引中
+  const indices = groups.map(group => {
+    const card = group[0];
+    
+    // 如果是王牌或者级牌，它们在拖拉机里的连续性有特殊规则（通常大小王、主级牌、副级牌可以连）
+    // 这里先处理普通花色和主牌普通数字的连续性
+    if (card.rank === "bigJoker" || card.rank === "smallJoker" || card.rank === room.levelRank) {
+      // 特殊高阶拖拉机判定（如大王+小王，或者主级牌+副级牌），这里赋予它们特定的虚拟连续索引
+      if (card.rank === "bigJoker") return 100;
+      if (card.rank === "smallJoker") return 99;
+      // 级牌在主牌拖拉机中比较特殊，通常作为单独的档位
+      return 98; 
+    }
+    
+    return cleanRanks.indexOf(card.rank);
+  }).sort((a, b) => a - b);
+
+  // 3. 检查索引是否完全连续 (在 cleanRanks 中邻近)
+  for (let i = 1; i < indices.length; i++) {
+    // 如果包含任何无法识别的牌，或者索引不连续，则不是拖拉机
+    if (indices[i] === -1 || indices[i - 1] === -1) return false;
+    if (indices[i] - indices[i - 1] !== 1) {
+      // 特殊兼容：处理主牌中大小王与级牌、级牌与A之间的特殊连法
+      // 如果属于正常普通牌，差值不为 1 则直接失败
+      if (indices[i] < 90) return false;
+    }
   }
   return true;
 }
@@ -693,36 +983,185 @@ function nextSeat(index) {
   return (index + 1) % SEATS;
 }
 
-function sortHand(hand, room) {
-  hand.sort((a, b) => handSortValue(a, room) - handSortValue(b, room) || a.copy - b.copy);
+// 【完美重构】：真正动态红黑交替的手牌理牌算法
+export function sortHand(hand, room) {
+  const currentLevel = room.levelRank || room.firstLevel;
+
+  // 1. 拆分卡牌：先挑出主牌（王、级牌、主花色普通牌）和副牌
+  const trumpCards = [];
+  const spadeCards = [];
+  const heartCards = [];
+  const clubCards = [];
+  const diamondCards = [];
+
+  for (const card of hand) {
+    // 判定是否是主牌
+    const isJoker = card.rank === "bigJoker" || card.rank === "smallJoker";
+    const isLevel = card.rank === currentLevel;
+    const isTrumpSuit = (!room.noTrump && room.trumpSuit && card.suit === room.trumpSuit);
+
+    if (isJoker || isLevel || isTrumpSuit) {
+      trumpCards.push(card);
+    } else {
+      // 纯副牌分类
+      if (card.suit === "spades") spadeCards.push(card);
+      else if (card.suit === "hearts") heartCards.push(card);
+      else if (card.suit === "clubs") clubCards.push(card);
+      else if (card.suit === "diamonds") diamondCards.push(card);
+    }
+  }
+
+  // 2. 主牌区内部排序：大牌靠左
+  trumpCards.sort((a, b) => {
+    const valA = trumpSortValue(a, room);
+    const valB = trumpSortValue(b, room);
+    if (valA !== valB) return valA - valB; // 权重小的排前面（最左）
+    return a.copy - b.copy;
+  });
+
+  // 3. 副牌各个花色内部排序：点数从大到小（A最大，2最小）
+  const sortByRank = (a, b) => {
+    const order = ["A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2"];
+    const idxA = order.indexOf(a.rank);
+    const idxB = order.indexOf(b.rank);
+    if (idxA !== idxB) return idxA - idxB;
+    return a.copy - b.copy;
+  };
+  spadeCards.sort(sortByRank);
+  heartCards.sort(sortByRank);
+  clubCards.sort(sortByRank);
+  diamondCards.sort(sortByRank);
+
+  // 4. 动态构建【红黑相间】的副牌花色顺序
+  const blackSuits = []; // 存放有牌的黑色副牌组
+  const redSuits = [];   // 存放有牌的红色副牌组
+
+  if (spadeCards.length > 0) blackSuits.push(spadeCards);
+  if (clubCards.length > 0) blackSuits.push(clubCards);
+  if (heartCards.length > 0) redSuits.push(heartCards);
+  if (diamondCards.length > 0) redSuits.push(diamondCards);
+
+  const sideCardsSorted = [];
+  
+  // 交叉合并算法：只要红黑都有，就交替插入，彻底封杀“红红”相邻
+  while (blackSuits.length > 0 || redSuits.length > 0) {
+    if (blackSuits.length > 0) {
+      sideCardsSorted.push(...blackSuits.shift());
+    }
+    if (redSuits.length > 0) {
+      sideCardsSorted.push(...redSuits.shift());
+    }
+  }
+
+  // 5. 最终合体：主牌在最左边，绝对动态红黑相间的副牌紧随其后
+  const finalHand = [...trumpCards, ...sideCardsSorted];
+
+  // 6. 把排好序的牌写回玩家手牌数组中
+  hand.length = 0;
+  for (const card of finalHand) {
+    hand.push(card);
+  }
 }
 
-function handSortValue(card, room) {
-  const levelRank = room.levelRank;
+// 辅助函数：专门计算主牌区内部的绝对大小权重（值越小越靠左）
+function trumpSortValue(card, room) {
+  const currentLevel = room.levelRank || room.firstLevel;
+  
   if (card.rank === "bigJoker") return 0;
   if (card.rank === "smallJoker") return 10;
-  if (levelRank && !room.noTrump && card.suit === room.trumpSuit && card.rank === levelRank) return 20;
-  if (levelRank && card.rank === levelRank) return 30 + suitSortIndex(card.suit, room);
-  if (!room.noTrump && card.suit === room.trumpSuit) return 100 + rankSortIndex(card.rank);
+  
+  // 级牌层
+  if (card.rank === currentLevel) {
+    if (!room.noTrump && room.trumpSuit && card.suit === room.trumpSuit) return 20;
+    const order = ["spades", "hearts", "clubs", "diamonds"];
+    return 30 + order.indexOf(card.suit);
+  }
+  
+  // 普通主牌
+  const rankOrder = ["A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2"];
+  return 100 + rankOrder.indexOf(card.rank);
+}
+
+function seatName(room, seatIndex) {
+  return room.seats[seatIndex]?.nickname || `座位${seatIndex + 1}`;
+}
+
+export function publicState(room, viewerId = null) {
+  const viewerSeat = room.seats.find(s => s.playerId === viewerId);
+  return {
+    code: room.code,
+    phase: room.phase,
+    round: room.round,
+    starterSeat: room.starterSeat,
+    levelRank: room.levelRank,
+    trumpSuit: room.trumpSuit,
+    noTrump: room.noTrump,
+    dealerSeat: room.dealerSeat,
+    currentBid: room.currentBid,
+    revealedKitty: room.revealedKitty,
+    friendCall: room.friendCall,
+    friendSeat: room.friendSeat,
+    currentLeader: room.currentLeader,
+    turnSeat: room.turnSeat,
+    currentTrick: room.currentTrick,
+    scores: room.scores,
+    lastResult: room.lastResult,
+    tableLog: room.tableLog.slice(-40),
+    seats: room.seats.map((seat) => ({
+      index: seat.index,
+      playerId: seat.playerId,
+      nickname: seat.nickname,
+      level: seat.level,
+      connected: seat.connected,
+      isAi: seat.isAi === true,
+      handCount: seat.hand.length,
+      takenTrickPoints: seat.takenTrickPoints,
+      isYou: seat.playerId === viewerId,
+      hand: seat.playerId === viewerId ? seat.hand : []
+    }))
+  };
+}
+
+// 核心修复：计算卡牌在手牌中的摆放权重（值越小越靠左/前）
+function handSortValue(card, room) {
+  const currentLevel = room.levelRank || room.firstLevel; // 未定主时，使用本局初始级牌
+  
+  // 1. 大王
+  if (card.rank === "bigJoker") return 0;
+  // 2. 小王
+  if (card.rank === "smallJoker") return 10;
+  
+  // 3. 级牌（常主点数，如所有的 2）
+  if (card.rank === currentLevel) {
+    // 3a. 如果已经确定了主花色，且这张级牌正好处在主花色上（正主级牌，最大）
+    if (!room.noTrump && room.trumpSuit && card.suit === room.trumpSuit) return 20;
+    // 3b. 其余花色的级牌（副主级牌）
+    return 30 + suitSortIndex(card.suit, room);
+  }
+  
+  // 4. 已经定主后的普通主牌（主花色的其他数字）
+  if (!room.noTrump && room.trumpSuit && card.suit === room.trumpSuit) {
+    return 100 + rankSortIndex(card.rank);
+  }
+  
+  // 5. 普通副牌区（这里引入“红黑相间”的花色交替推荐顺序：黑桃 -> 红桃 -> 梅花 -> 方片）
   return 300 + suitSortIndex(card.suit, room) * 20 + rankSortIndex(card.rank);
 }
 
-function rankSortIndex(rank) {
-  return RANKS.indexOf(rank) >= 0 ? RANKS.indexOf(rank) : 99;
-}
-
+// 辅助函数：根据当前主牌状态，动态调整花色排序索引
 function suitSortIndex(suit, room) {
-  const order = suitOrder(room.trumpSuit);
+  // 如果确立了主花色，主花色在主牌区已被拎走。副牌区按 [黑桃, 红桃, 梅花, 方片] 顺次排列实现红黑相间
+  // 如果未确定主花色，默认也按此顺序实现红黑相间
+  const order = ["spades", "hearts", "clubs", "diamonds"];
   const index = order.indexOf(suit);
   return index >= 0 ? index : 99;
 }
 
-function suitOrder(trumpSuit) {
-  if (trumpSuit === "hearts") return ["hearts", "spades", "diamonds", "clubs"];
-  if (trumpSuit === "diamonds") return ["diamonds", "spades", "hearts", "clubs"];
-  if (trumpSuit === "spades") return ["spades", "hearts", "clubs", "diamonds"];
-  if (trumpSuit === "clubs") return ["clubs", "hearts", "spades", "diamonds"];
-  return ["spades", "hearts", "diamonds", "clubs"];
+// 辅助函数：将牌面字母（A-2）转换为排序索引（A最大，2最小。注意：级牌数字会被上面接管，这里只需处理基础相对大小）
+function rankSortIndex(rank) {
+  const order = ["A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2"];
+  const index = order.indexOf(rank);
+  return index >= 0 ? index : 99;
 }
 
 function pickCards(hand, ids) {
