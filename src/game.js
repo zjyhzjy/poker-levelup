@@ -1086,41 +1086,6 @@ function seatName(room, seatIndex) {
   return room.seats[seatIndex]?.nickname || `座位${seatIndex + 1}`;
 }
 
-export function publicState(room, viewerId = null) {
-  const viewerSeat = room.seats.find(s => s.playerId === viewerId);
-  return {
-    code: room.code,
-    phase: room.phase,
-    round: room.round,
-    starterSeat: room.starterSeat,
-    levelRank: room.levelRank,
-    trumpSuit: room.trumpSuit,
-    noTrump: room.noTrump,
-    dealerSeat: room.dealerSeat,
-    currentBid: room.currentBid,
-    revealedKitty: room.revealedKitty,
-    friendCall: room.friendCall,
-    friendSeat: room.friendSeat,
-    currentLeader: room.currentLeader,
-    turnSeat: room.turnSeat,
-    currentTrick: room.currentTrick,
-    scores: room.scores,
-    lastResult: room.lastResult,
-    tableLog: room.tableLog.slice(-40),
-    seats: room.seats.map((seat) => ({
-      index: seat.index,
-      playerId: seat.playerId,
-      nickname: seat.nickname,
-      level: seat.level,
-      connected: seat.connected,
-      isAi: seat.isAi === true,
-      handCount: seat.hand.length,
-      takenTrickPoints: seat.takenTrickPoints,
-      isYou: seat.playerId === viewerId,
-      hand: seat.playerId === viewerId ? seat.hand : []
-    }))
-  };
-}
 
 // 核心修复：计算卡牌在手牌中的摆放权重（值越小越靠左/前）
 function handSortValue(card, room) {
@@ -1187,9 +1152,7 @@ function assertPhase(room, phase) {
   if (room.phase !== phase) throw new Error(`当前阶段不是 ${phase}`);
 }
 
-function seatName(room, seatIndex) {
-  return room.seats[seatIndex]?.nickname || `座位${seatIndex + 1}`;
-}
+
 
 export function publicState(room, viewerId = null) {
   const viewerSeat = findSeatByPlayer(room, viewerId);
