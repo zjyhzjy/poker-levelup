@@ -2,71 +2,94 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>升级找朋友</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/style.css">
   </head>
   <body>
     <main id="app">
+
+      <!-- 加入界面 -->
       <section class="join-screen" data-view="join">
-        <div class="brand">
-          <p>5 人联机</p>
-          <h1>升级找朋友</h1>
-        </div>
-        <form id="joinForm" class="join-panel">
-          <label>
-            昵称
-            <input id="nickname" maxlength="16" autocomplete="nickname" required placeholder="输入昵称">
-          </label>
-          <label>
-            房间码
-            <input id="roomCode" maxlength="8" placeholder="留空创建新房间">
-          </label>
-          <div class="actions">
-            <button type="submit">进入房间</button>
-            <button type="button" id="createRoom">创建房间</button>
+        <div class="join-bg"></div>
+        <div class="join-content">
+          <div class="brand">
+            <div class="brand-suits">♠ ♥ ♣ ♦</div>
+            <h1>升级找朋友</h1>
+            <p>五人联机 · 三副牌</p>
           </div>
-        </form>
+          <form id="joinForm" class="join-panel">
+            <label>
+              <span>昵称</span>
+              <input id="nickname" maxlength="16" autocomplete="nickname" required placeholder="输入昵称">
+            </label>
+            <label>
+              <span>房间码</span>
+              <input id="roomCode" maxlength="8" placeholder="留空则创建新房间">
+            </label>
+            <div class="join-actions">
+              <button type="submit" class="btn-primary">进入房间</button>
+              <button type="button" id="createRoom" class="btn-secondary">创建房间</button>
+            </div>
+          </form>
+        </div>
       </section>
 
+      <!-- 游戏界面：整个都是牌桌 -->
       <section class="game-screen hidden" data-view="game">
-        <header class="topbar">
-          <div>
-            <strong>升级找朋友</strong>
-            <span id="roomBadge"></span>
-          </div>
-          <div id="phaseBadge"></div>
-        </header>
 
-        <section class="table-area">
+        <!-- 顶部信息条 -->
+        <div class="topbar">
+          <div class="topbar-left">
+            <span class="game-title">升级找朋友</span>
+            <span id="roomBadge" class="badge"></span>
+          </div>
+          <div id="phaseBadge" class="phase-badge"></div>
+          <div class="topbar-right">
+            <span id="roundInfo" class="round-info"></span>
+            <button id="fullscreenBtn" class="topbar-btn" title="全屏">⛶</button>
+          </div>
+        </div>
+
+        <!-- 整个牌桌区域（绝对定位的所有元素） -->
+        <div class="table-felt">
+
+          <!-- 座位（5个，绝对定位） -->
           <div id="seats" class="seats"></div>
-          <div class="center-table">
-            <div id="roundInfo" class="round-info"></div>
-            <div id="trick" class="trick"></div>
-            <div class="scoreline">
-              <span id="scoreInfo"></span>
-              <span id="turnInfo"></span>
+
+          <!-- 桌面中央信息 -->
+          <div class="table-center">
+            <div id="scoreInfo" class="score-info"></div>
+            <div id="turnInfo" class="turn-info"></div>
+          </div>
+
+          <!-- 底部控制区（在桌布内） -->
+          <div class="control-zone">
+            <div id="errorBox" class="error-box"></div>
+            <div id="contextControls" class="context-controls"></div>
+            <div class="hand-zone">
+              <div class="hand-meta">
+                <span id="selectionInfo" class="selection-info"></span>
+              </div>
+              <div id="hand" class="hand"></div>
             </div>
           </div>
-        </section>
 
-        <section class="control-strip">
-          <div id="contextControls"></div>
-          <div id="errorBox" class="error"></div>
-        </section>
+        </div>
 
-        <section class="hand-panel">
-          <div class="hand-head">
-            <h2>我的手牌</h2>
-            <div id="selectionInfo"></div>
+        <!-- 收起式日志 -->
+        <div id="logDrawer" class="log-drawer">
+          <button class="log-toggle" id="logToggle">📜 记录</button>
+          <div class="log-panel" id="logPanel">
+            <div id="log"></div>
           </div>
-          <div id="hand" class="hand"></div>
-        </section>
+        </div>
 
-        <aside class="log-panel">
-          <h2>牌桌记录</h2>
-          <div id="log"></div>
-        </aside>
       </section>
     </main>
     <script type="module" src="/app.js"></script>

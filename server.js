@@ -10,9 +10,11 @@ import {
   chooseForcedTrump,
   confirmDealer,
   createRoom,
+  forceDealer,
   joinRoom,
   leaveSeat,
   makeBid,
+  passBid,
   playCards,
   publicState,
   resetToLobby,
@@ -55,6 +57,8 @@ server.on("upgrade", (req, socket) => {
     "",
     ""
   ].join("\r\n"));
+
+  // Assign a temporary playerId — may be overridden by reconnect
   const client = { socket, playerId: crypto.randomUUID(), roomCode: null, nickname: "" };
   sockets.set(socket, client);
   socket.on("data", (buffer) => handleFrame(client, buffer));
@@ -94,6 +98,33 @@ function sendJson(res, data) {
 function handleMessage(client, message) {
   try {
     const { type, payload = {} } = JSON.parse(message);
+
+    // ── Reconnect: client sends their stored playerId ──────────────
+    if (type === "reconnect") {
+      const storedId = String(payload.playerId || "").trim();
+      const code = String(payload.code || "").trim().toUpperCase();
+      if (!storedId) throw new Error("无效的玩家ID");
+      const room = rooms.get(code);
+      if (!room) throw new Error("房间不存在");
+
+      // Find the seat that held this playerId
+      const seat = room.seats.find(s => s.playerId === storedId);
+      if (seat) {
+        // Re-use old playerId and reconnect
+        client.playerId = storedId;
+        client.roomCode = code;
+        client.nickname = seat.nickname;
+        seat.connected = true;
+        room.spectators.delete(storedId);
+        send(client, "hello", { playerId: client.playerId });
+        broadcast(room);
+      } else {
+        // Not found — treat as normal join
+        attachToRoom(client, room, payload.nickname);
+      }
+      return;
+    }
+
     if (type === "createRoom") {
       const room = createRoom();
       rooms.set(room.code, room);
@@ -104,28 +135,58 @@ function handleMessage(client, message) {
       const code = String(payload.code || "").trim().toUpperCase();
       const room = rooms.get(code);
       if (!room) throw new Error("房间不存在");
+      // Try reconnect by playerId first
+      const storedId = String(payload.playerId || "").trim();
+      if (storedId) {
+        const seat = room.seats.find(s => s.playerId === storedId);
+        if (seat) {
+          client.playerId = storedId;
+          client.roomCode = code;
+          client.nickname = seat.nickname;
+          seat.connected = true;
+          room.spectators.delete(storedId);
+          send(client, "hello", { playerId: client.playerId });
+          broadcast(room);
+          return;
+        }
+      }
       attachToRoom(client, room, payload.nickname);
       return;
     }
+
     const room = currentRoom(client);
     const actions = {
-      sit: () => sit(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname),
-      addAi: () => addAiPlayer(room, Number(payload.seatIndex)),
-      leaveSeat: () => leaveSeat(room, client.playerId),
-      startRound: () => startRound(room),
-      bid: () => makeBid(room, client.playerId, payload.cardIds || []),
-      startAuction: () => startAuction(room),
-      confirmDealer: () => confirmDealer(room),
-      revealKitty: () => revealKittyCard(room),
-      chooseForcedTrump: () => chooseForcedTrump(room, client.playerId, payload.suit || null, { noTrump: payload.noTrump, cardIds: payload.cardIds || [] }),
-      bury: () => buryKitty(room, client.playerId, payload.cardIds || []),
-      callFriend: () => callFriend(room, client.playerId, payload),
-      play: () => playCards(room, client.playerId, payload.cardIds || []),
-      nextRoundLobby: () => resetToLobby(room)
+      sit:              () => sit(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname),
+      addAi:            () => addAiPlayer(room, Number(payload.seatIndex)),
+      leaveSeat:        () => leaveSeat(room, client.playerId),
+      startRound:       () => startRound(room),
+      bid:              () => makeBid(room, client.playerId, payload.cardIds || []),
+      passBid:          () => passBid(room, client.playerId),
+      // Manual auction start — just transitions to auction phase, no auto-flip
+      startAuction:     () => startAuction(room),
+      // Manual reveal one card at a time
+      revealKitty:      () => revealKittyCard(room),
+      // Manual force dealer (after all 7 cards revealed and no bid)
+      forceDealer:      () => {
+        const lastCard = room.revealedKitty[room.revealedKitty.length - 1];
+        if (!lastCard) throw new Error("还没有翻完底牌");
+        forceDealer(room, lastCard);
+      },
+      chooseForcedTrump:() => chooseForcedTrump(room, client.playerId, payload.suit || null, { noTrump: payload.noTrump, cardIds: payload.cardIds || [] }),
+      bury:             () => buryKitty(room, client.playerId, payload.cardIds || []),
+      callFriend:       () => callFriend(room, client.playerId, payload),
+      play:             () => playCards(room, client.playerId, payload.cardIds || []),
+      nextRoundLobby:   () => resetToLobby(room)
     };
     if (!actions[type]) throw new Error("未知操作");
     actions[type]();
     broadcast(room);
+
+    // After a bid is placed, schedule 10s timeout for others to respond
+    if (type === "bid" && room.currentBid && room.phase !== "burying") {
+      scheduleBidTimeout(room);
+    }
+
     scheduleAi(room);
   } catch (error) {
     send(client, "error", { message: error.message });
@@ -151,6 +212,22 @@ function broadcast(room) {
   }
 }
 
+// After a bid is placed, give other players 10s to respond before auto-confirming
+function scheduleBidTimeout(room) {
+  const bidAtSchedule = room.currentBid;
+  if (!bidAtSchedule) return;
+  setTimeout(() => {
+    if (room.currentBid !== bidAtSchedule) return;
+    if (!["dealing", "auctionReady", "auction"].includes(room.phase)) return;
+    for (const seat of room.seats) {
+      if (seat.playerId && !room.bidResponses[seat.index]) {
+        room.bidResponses[seat.index] = "pass";
+      }
+    }
+    try { confirmDealer(room); broadcast(room); scheduleAi(room); } catch (_) {}
+  }, 10000);
+}
+
 function scheduleAi(room) {
   setTimeout(() => {
     let moved = false;
@@ -158,6 +235,9 @@ function scheduleAi(room) {
       moved = runAiStep(room);
     } catch (error) {
       room.tableLog.push(`AI 操作失败：${error.message}`);
+      broadcast(room);
+      setTimeout(() => scheduleAi(room), 1500);
+      return;
     }
     if (moved) {
       broadcast(room);
@@ -191,26 +271,16 @@ function handleFrame(client, buffer) {
     const byte1 = buffer[offset++];
     const byte2 = buffer[offset++];
     const opcode = byte1 & 0x0f;
-    if (opcode === 0x8) {
-      client.socket.end();
-      return;
-    }
+    if (opcode === 0x8) { client.socket.end(); return; }
     let length = byte2 & 0x7f;
-    if (length === 126) {
-      length = buffer.readUInt16BE(offset);
-      offset += 2;
-    } else if (length === 127) {
-      length = Number(buffer.readBigUInt64BE(offset));
-      offset += 8;
-    }
+    if (length === 126) { length = buffer.readUInt16BE(offset); offset += 2; }
+    else if (length === 127) { length = Number(buffer.readBigUInt64BE(offset)); offset += 8; }
     const masked = (byte2 & 0x80) !== 0;
     const mask = masked ? buffer.subarray(offset, offset + 4) : null;
     if (masked) offset += 4;
     const payload = buffer.subarray(offset, offset + length);
     offset += length;
-    if (masked) {
-      for (let i = 0; i < payload.length; i += 1) payload[i] ^= mask[i % 4];
-    }
+    if (masked) { for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4]; }
     if (opcode === 0x1) handleMessage(client, payload.toString("utf8"));
   }
 }

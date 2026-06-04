@@ -49,7 +49,11 @@ export function cardName(card) {
 export function levelAdvance(rank, steps) {
   const index = LEVEL_RANKS.indexOf(rank);
   if (index < 0) return rank;
-  return LEVEL_RANKS[(index + steps) % LEVEL_RANKS.length];
+  // LEVEL_RANKS = ["A","K","Q","J","10","9","8","7","6","5","4","3","2"]
+  // index 0=A (highest), 12=2 (lowest).
+  // Upgrading = moving toward A (decreasing index), cycling: after A comes 2.
+  const newIndex = ((index - steps) % LEVEL_RANKS.length + LEVEL_RANKS.length) % LEVEL_RANKS.length;
+  return LEVEL_RANKS[newIndex];
 }
 
 export function rankNumber(rank) {
