@@ -313,6 +313,7 @@ function renderCenter(room) {
     throwEl.innerHTML = "";
     throwEl.style.display = "none";
   }
+  let resultEl = document.getElementById("roundResultDisplay");
   if (!resultEl) {
     resultEl = document.createElement("div");
     resultEl.id = "roundResultDisplay";

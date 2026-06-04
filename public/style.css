@@ -25,7 +25,9 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
-  width: 100%; height: 100%;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   font-family: 'Noto Serif SC', serif;
   background: var(--felt-edge);
@@ -41,7 +43,9 @@ button, input, select { font: inherit; }
 /* ─── Join Screen ────────────────────────────────────────── */
 .join-screen {
   position: relative;
-  width: 100vw; height: 100vh;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -170,7 +174,11 @@ button, input, select { font: inherit; }
 /* ─── Safe area (iPhone notch / home bar) ────────────────── */
 .game-screen {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--felt-edge);
@@ -438,6 +446,15 @@ button, input, select { font: inherit; }
   background: linear-gradient(to top, rgba(0,0,0,.75) 0%, rgba(0,0,0,.5) 70%, transparent 100%);
   gap: 6px;
   overflow: visible;
+  /* Let taps pass through empty areas to seats underneath; re-enable on
+     interactive children only (buttons / selects / cards). */
+  pointer-events: none;
+}
+
+.control-zone button,
+.control-zone select,
+.control-zone .card {
+  pointer-events: auto;
 }
 
 .error-box {
@@ -450,11 +467,17 @@ button, input, select { font: inherit; }
 
 /* Action buttons row */
 .context-controls {
+  position: relative;
+  z-index: 60; /* above hand cards (max z-index 50) so taps always hit buttons */
   display: flex;
   gap: 7px;
   flex-wrap: wrap;
   justify-content: center;
   align-items: center;
+}
+
+.context-controls:not(:empty) {
+  margin-bottom: 4px;
 }
 
 .context-controls button,
