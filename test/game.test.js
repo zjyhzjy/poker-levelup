@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, decideAiBid, evaluateBid, makeBid, passBid, playCards, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, buryKitty, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, decideAiBid, evaluateBid, makeBid, passBid, playCards, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -302,6 +302,32 @@ test("朋友现身时设置 friendReveal 供前端动画", () => {
   playCards(room, "p1", [spadeA.id]); // 领出黑桃A → 匹配朋友牌 → 现身
   assert.equal(room.friendSeat, 1);
   assert.ok(room.friendReveal && room.friendReveal.seat === 1 && room.friendReveal.seq >= 1);
+});
+
+test("6 人房间：配置正确、发牌 26 张底 6 张、扣底跳过叫朋友直接开打", () => {
+  const room = createRoom("SIX", { seatCount: 6 });
+  assert.equal(room.seatCount, 6);
+  assert.equal(room.kittySize, 6);
+  assert.equal(room.fixedTeams, true);
+  assert.equal(room.seats.length, 6);
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  startRound(room, () => 0.3);
+  assert.deepEqual(room.seats.map((s) => s.hand.length), [26, 26, 26, 26, 26, 26]);
+  assert.equal(room.kitty.length, 6);
+  // 走到扣底：庄家扣 6 张后，6 人应跳过叫朋友直接进入出牌
+  room.phase = "burying"; room.dealerSeat = 0; room.levelRank = "2"; room.trumpSuit = "hearts";
+  const bury = room.seats[0].hand.slice(0, 6).map((c) => c.id);
+  buryKitty(room, "p0", bury);
+  assert.equal(room.phase, "playing", "6 人扣底后跳过叫朋友直接开打");
+  assert.equal(room.friendSeat, null);
+});
+
+test("5 人房间默认配置不变（回归）", () => {
+  const room = createRoom("FIVE");
+  assert.equal(room.seatCount, 5);
+  assert.equal(room.kittySize, 7);
+  assert.equal(room.fixedTeams, false);
+  assert.equal(room.seats.length, 5);
 });
 
 test("通关判定：在 A 上还要升级才算越过 A 夺冠", () => {

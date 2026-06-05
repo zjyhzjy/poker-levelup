@@ -422,6 +422,14 @@ button, input, select { font: inherit; }
 .screen-pos-3 { top: 10%;      left: 10%; }
 .screen-pos-4 { bottom: 30%;   left: 5%; }
 
+/* 6 人布局（六边形，viewer 在 pos 0 底部中央）。两类选择器特异性高于媒体查询里的
+   单类 .screen-pos-N，因此覆盖五边形定位并新增顶部中央 pos 3 与左下 pos 5。 */
+.players-6 .screen-pos-1 { bottom: 30%; right: 4%; top: auto; left: auto; }
+.players-6 .screen-pos-2 { top: 13%; right: 6%; bottom: auto; left: auto; }
+.players-6 .screen-pos-3 { top: 7%; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
+.players-6 .screen-pos-4 { top: 13%; left: 6%; right: auto; bottom: auto; }
+.players-6 .screen-pos-5 { bottom: 30%; left: 4%; right: auto; top: auto; }
+
 /* Played cards: above token for bottom-side seats (pos 1 & 4) so hand doesn't cover them */
 .seat-played {
   margin-top: 4px;

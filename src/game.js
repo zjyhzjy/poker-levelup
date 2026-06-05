@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import { cardScore, createDeck, levelAdvance, LEVEL_RANKS, rankNumber, RANKS, shuffle, SUITS } from "./cards.js";
 
-const SEATS = 5;
-const HAND_SIZE = 31;
-const KITTY_SIZE = 7;
+const DEFAULT_SEATS = 5;
+// 每人手牌数 = (162 − 底牌)/人数，底牌随人数取整除：5 人留 7 张底（每人 31），
+// 6 人留 6 张底（每人 26）。三副牌总分恒为 300，升级分线不随人数变。
+function kittyFor(seatCount) { return seatCount === 6 ? 6 : 7; }
 const PHASES = {
   LOBBY: "lobby",
   DEALING: "dealing",
@@ -20,8 +21,8 @@ function uid(prefix = "id") {
   return `${prefix}_${crypto.randomBytes(5).toString("hex")}`;
 }
 
-function emptySeats() {
-  return Array.from({ length: SEATS }, (_, index) => ({
+function emptySeats(seatCount) {
+  return Array.from({ length: seatCount }, (_, index) => ({
     index,
     playerId: null,
     nickname: "",
@@ -36,11 +37,15 @@ function emptySeats() {
   }));
 }
 
-export function createRoom(code = randomRoomCode()) {
+export function createRoom(code = randomRoomCode(), options = {}) {
+  const seatCount = options.seatCount === 6 ? 6 : DEFAULT_SEATS;
   return {
     code,
+    seatCount,
+    kittySize: kittyFor(seatCount),
+    fixedTeams: seatCount === 6, // 6 人隔座固定队（{0,2,4} vs {1,3,5}），不叫朋友
     phase: PHASES.LOBBY,
-    seats: emptySeats(),
+    seats: emptySeats(seatCount),
     spectators: new Map(),
     hostId: null,
     round: 0,
@@ -177,7 +182,7 @@ export function startRound(room, random = Math.random, options = {}) {
   room.kitty = [];
   room.deck = shuffle(createDeck(), random);
   room.phase = PHASES.DEALING;
-  room.starterSeat = firstRound ? Math.floor(random() * SEATS) : nextSeat(room.starterSeat);
+  room.starterSeat = firstRound ? Math.floor(random() * room.seatCount) : nextSeat(room.starterSeat, room.seatCount);
   room.currentLeader = room.starterSeat;
   room.turnSeat = room.starterSeat;
   for (const seat of room.seats) {
@@ -201,13 +206,13 @@ export function startRound(room, random = Math.random, options = {}) {
 // starter). Returns true if more cards remain to be dealt, false when finished.
 export function dealRound(room) {
   if (room.phase !== PHASES.DEALING || !room.dealing) return false;
-  for (let i = 0; i < SEATS && room.deck.length > KITTY_SIZE; i += 1) {
+  for (let i = 0; i < room.seatCount && room.deck.length > room.kittySize; i += 1) {
     const card = room.deck.shift();
     room.seats[room.dealCursor].hand.push(card);
-    room.dealCursor = nextSeat(room.dealCursor);
+    room.dealCursor = nextSeat(room.dealCursor, room.seatCount);
   }
   for (const seat of room.seats) sortHand(seat.hand, room, seat.level);
-  if (room.deck.length <= KITTY_SIZE) {
+  if (room.deck.length <= room.kittySize) {
     room.kitty = room.deck.splice(0);
     finishDealing(room);
     return false;
@@ -288,7 +293,7 @@ export function revealKittyCard(room) {
   if (!card) throw new Error("没有可翻的底牌");
   room.revealedKitty.push(card);
   room.tableLog.push(`翻底：${card.label}`);
-  if (room.revealedKitty.length === KITTY_SIZE) {
+  if (room.revealedKitty.length === room.kittySize) {
     forceDealer(room, card);
   }
 }
@@ -311,7 +316,7 @@ export function forceDealer(room, lastKittyCard) {
   // 点数映射位置：A=1(starterSeat 自己)、2=第2个、… K=13、王=14/15。
   const count = forceCount(lastKittyCard); // 1 for A/jokers, number for 2-K
   let seatIndex = room.starterSeat;
-  for (let i = 1; i < count; i += 1) seatIndex = nextSeat(seatIndex);
+  for (let i = 1; i < count; i += 1) seatIndex = nextSeat(seatIndex, room.seatCount);
   const dealer = room.seats[seatIndex];
   room.dealerSeat = seatIndex;
   room.levelRank = dealer.level;
@@ -329,8 +334,8 @@ export function forceDealer(room, lastKittyCard) {
   }
 }
 
-function prevSeat(index) {
-  return (index + SEATS - 1) % SEATS;
+function prevSeat(index, seatCount) {
+  return (index + seatCount - 1) % seatCount;
 }
 
 export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
@@ -378,12 +383,22 @@ export function buryKitty(room, playerId, cardIds) {
   assertPhase(room, PHASES.BURYING);
   const dealer = findSeatByPlayer(room, playerId);
   if (!dealer || dealer.index !== room.dealerSeat) throw new Error("只有庄家可以扣底");
-  if (cardIds.length !== KITTY_SIZE) throw new Error("必须扣 7 张");
+  if (cardIds.length !== room.kittySize) throw new Error(`必须扣 ${room.kittySize} 张`);
   const cards = removeCards(dealer.hand, cardIds);
   room.hiddenKitty = cards;
   sortHand(dealer.hand, room);
-  room.phase = PHASES.FRIEND;
-  room.tableLog.push(`${dealer.nickname} 已扣底，等待叫朋友。`);
+  if (room.fixedTeams) {
+    // 6 人固定队：无需叫朋友，扣底后直接开打（隔座为友）。
+    room.phase = PHASES.PLAYING;
+    room.currentLeader = room.dealerSeat;
+    room.turnSeat = room.dealerSeat;
+    room.currentTrick = [];
+    room.lastTrick = [];
+    room.tableLog.push(`${dealer.nickname} 已扣底，开打（隔座为友，固定队）。`);
+  } else {
+    room.phase = PHASES.FRIEND;
+    room.tableLog.push(`${dealer.nickname} 已扣底，等待叫朋友。`);
+  }
 }
 
 export function callFriend(room, playerId, call) {
@@ -473,10 +488,10 @@ export function playCards(room, playerId, cardIds) {
     room.tableLog.push(`${seat.nickname} 出牌：${cards.map((card) => card.label).join("、")}`);
   }
 
-  if (room.currentTrick.length === SEATS) {
+  if (room.currentTrick.length === room.seatCount) {
     finishTrick(room);
   } else {
-    room.turnSeat = nextSeat(room.turnSeat);
+    room.turnSeat = nextSeat(room.turnSeat, room.seatCount);
   }
 }
 
@@ -706,7 +721,8 @@ function buildForcedFollow(room, seat, leaderCards) {
 // that the dealer is a known enemy (to non-dealers) and everyone else is unknown.
 function aiRelation(room, selfIndex, otherIndex) {
   if (otherIndex === selfIndex) return "self";
-  if (room.friendSeat !== null) {
+  // 固定队（6人）队伍从一开始就已知；找朋友（5人）则朋友亮明后才确定。
+  if (room.fixedTeams || room.friendSeat !== null) {
     const team = dealerTeamSeats(room);
     return team.includes(selfIndex) === team.includes(otherIndex) ? "ally" : "enemy";
   }
@@ -729,17 +745,17 @@ function trickStanding(room, seat) {
     winnerCards: winPlay.cards,
     rel: aiRelation(room, seat.index, winnerSeat),
     points: trick.reduce((sum, play) => sum + play.points, 0),
-    isLast: trick.length === SEATS - 1,
+    isLast: trick.length === room.seatCount - 1,
     winnerRuffed
   };
 }
 
 // Could an enemy (or as-yet-unknown player) still play after me this trick?
 function enemyBehind(room, seat) {
-  const remaining = SEATS - room.currentTrick.length - 1;
+  const remaining = room.seatCount - room.currentTrick.length - 1;
   let s = seat.index;
   for (let k = 0; k < remaining; k += 1) {
-    s = nextSeat(s);
+    s = nextSeat(s, room.seatCount);
     const r = aiRelation(room, seat.index, s);
     if (r === "enemy" || r === "unknown") return true;
   }
@@ -854,10 +870,10 @@ function voidProgress(room, seat, cards) {
 
 // Is a known teammate still due to play after me in the current trick?
 function allyBehind(room, seat) {
-  const remaining = SEATS - room.currentTrick.length - 1;
+  const remaining = room.seatCount - room.currentTrick.length - 1;
   let s = seat.index;
   for (let k = 0; k < remaining; k += 1) {
-    s = nextSeat(s);
+    s = nextSeat(s, room.seatCount);
     if (aiRelation(room, seat.index, s) === "ally") return true;
   }
   return false;
@@ -1973,7 +1989,7 @@ function chooseAiBury(room, dealer) {
   if (!profile.voidDiscard) {
     return [...hand]
       .sort((a, b) => cardScore(a) - cardScore(b) || cardOrderValue(a, room) - cardOrderValue(b, room))
-      .slice(0, KITTY_SIZE);
+      .slice(0, room.kittySize);
   }
   // medium/hard: keep points, trump and side Aces; bury junk while emptying the
   // shortest side suits first so the dealer can later ruff (扣底造空门).
@@ -1983,17 +1999,17 @@ function chooseAiBury(room, dealer) {
   const junk = hand
     .filter((c) => !isTrump(c) && cardScore(c) === 0 && c.rank !== "A")
     .sort((a, b) => (suitLen[a.suit] - suitLen[b.suit]) || (cardOrderValue(a, room) - cardOrderValue(b, room)));
-  const bury = junk.slice(0, KITTY_SIZE);
-  if (bury.length < KITTY_SIZE) {
+  const bury = junk.slice(0, room.kittySize);
+  if (bury.length < room.kittySize) {
     // Not enough junk: add the least valuable remainder, keeping points/trump for last.
     const used = new Set(bury.map((c) => c.id));
     const rank = (c) => (cardScore(c) > 0 ? 2 : 0) + (isTrump(c) ? 1 : 0);
     const extra = hand
       .filter((c) => !used.has(c.id))
       .sort((a, b) => rank(a) - rank(b) || cardOrderValue(a, room) - cardOrderValue(b, room));
-    for (const c of extra) { if (bury.length >= KITTY_SIZE) break; bury.push(c); }
+    for (const c of extra) { if (bury.length >= room.kittySize) break; bury.push(c); }
   }
-  return bury.slice(0, KITTY_SIZE);
+  return bury.slice(0, room.kittySize);
 }
 
 // Call a high SIDE card the dealer can't fully satisfy alone (ordinal = how many
@@ -2168,6 +2184,11 @@ function calledCardLabel(call) {
 }
 
 function dealerTeamSeats(room) {
+  if (room.fixedTeams) {
+    // 6 人隔座固定队：与庄家同奇偶的座位是一队（{0,2,4} 或 {1,3,5}）。
+    const parity = room.dealerSeat % 2;
+    return room.seats.map((s) => s.index).filter((i) => i % 2 === parity);
+  }
   return room.friendSeat === null || room.friendSeat === room.dealerSeat ? [room.dealerSeat] : [room.dealerSeat, room.friendSeat];
 }
 
@@ -2199,8 +2220,8 @@ function forceCount(card) {
   return Number(card.rank);
 }
 
-function nextSeat(index) {
-  return (index + 1) % SEATS;
+function nextSeat(index, seatCount) {
+  return (index + 1) % seatCount;
 }
 
 // 【完美重构】：真正动态红黑交替的手牌理牌算法
@@ -2398,6 +2419,8 @@ export function publicState(room, viewerId = null) {
     revealedKitty: room.revealedKitty,
     friendCall: room.friendCall,
     friendSeat: room.friendSeat,
+    fixedTeams: room.fixedTeams === true,
+    seatCount: room.seatCount,
     friendReveal: room.friendReveal || null,
     // 历史墩（供“本局牌局”回看）。card 精简为 rank/suit/label（省去 id，减小 payload）。
     // 高频广播会带上全部历史；公开高并发部署可改为按需请求（参考 hint 的请求-响应）。
@@ -2450,4 +2473,4 @@ export function publicState(room, viewerId = null) {
   };
 }
 
-export const constants = { PHASES, SEATS, HAND_SIZE, KITTY_SIZE };
+export const constants = { PHASES, DEFAULT_SEATS };

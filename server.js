@@ -38,7 +38,7 @@ const sockets = new Map();
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname === "/api/rooms" && req.method === "POST") {
-    const room = createRoom();
+    const room = createRoom(undefined, { seatCount: Number(url.searchParams.get("seatCount")) });
     rooms.set(room.code, room);
     sendJson(res, { code: room.code });
     return;
@@ -147,7 +147,7 @@ function handleMessage(client, message) {
     }
 
     if (type === "createRoom") {
-      const room = createRoom();
+      const room = createRoom(undefined, { seatCount: Number(payload.seatCount) });
       rooms.set(room.code, room);
       // Adopt the client-owned stable id so future reconnects map to this seat.
       const stableId = String(payload.playerId || "").trim();

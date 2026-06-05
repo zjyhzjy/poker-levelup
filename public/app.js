@@ -71,7 +71,7 @@ $("#joinForm").addEventListener("submit", (e) => {
 });
 
 $("#createRoom").addEventListener("click", () => {
-  connectAndJoin("", $("#nickname").value.trim());
+  connectAndJoin("", $("#nickname").value.trim(), Number($("#seatCountSel")?.value) || 5);
 });
 
 // 复制邀请链接（含房间码深链），朋友打开即自动填入房间码、一键加入。
@@ -98,8 +98,9 @@ $("#roomBadge")?.addEventListener("click", copyInvite);
   if (lastRoom) $("#roomCode").value = lastRoom;
 })();
 
-function connectAndJoin(code, nickname) {
+function connectAndJoin(code, nickname, seatCount) {
   state.nickname = nickname || "玩家";
+  state.createSeatCount = seatCount === 6 ? 6 : 5; // 仅创建房间时生效
   localStorage.setItem("szp.nickname", state.nickname);
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}`);
@@ -115,7 +116,7 @@ function connectAndJoin(code, nickname) {
       if (!joined) {
         joined = true;
         state.playerId = getMyId();
-        send(code ? "joinRoom" : "createRoom", { code, nickname: state.nickname, playerId: state.playerId });
+        send(code ? "joinRoom" : "createRoom", { code, nickname: state.nickname, playerId: state.playerId, seatCount: state.createSeatCount });
       }
     }
     if (msg.type === "state") {
@@ -368,12 +369,13 @@ function animateTrickPoints(winnerSeat, points) {
 /* ─── Seats + Played Cards ───────────────────────────────── */
 /* ─── Seats + Played Cards ───────────────────────────────── */
 // Screen positions (0=bottom-center/you, 1=bottom-right, 2=top-right, 3=top-left, 4=bottom-left)
-function seatToScreenPos(serverIndex, viewerSeatIndex) {
-  return (serverIndex - viewerSeatIndex + 5) % 5;
+function seatToScreenPos(serverIndex, viewerSeatIndex, seatCount) {
+  return (serverIndex - viewerSeatIndex + seatCount) % seatCount;
 }
 
 function renderSeats(room) {
   const seatsEl = document.querySelector("#seats");
+  seatsEl.className = `seats players-${room.seatCount || 5}`;
 
   const currentPlayed = {};
   for (const play of room.currentTrick) currentPlayed[play.seat] = play.cards;
@@ -381,8 +383,11 @@ function renderSeats(room) {
   for (const play of (room.lastTrick || [])) lastPlayed[play.seat] = play.cards;
 
   const isDealer = (i) => room.dealerSeat === i;
-  const isFriend = (i) => room.friendSeat !== null && room.friendSeat === i;
-  const friendRevealed = room.friendSeat !== null;
+  const myParity = (room.viewerSeat ?? 0) % 2;
+  const isFriend = (i) => room.fixedTeams
+    ? (i !== (room.viewerSeat ?? 0) && i % 2 === myParity) // 6人固定队：与自己同奇偶（隔座）的是队友
+    : (room.friendSeat !== null && room.friendSeat === i);
+  const friendRevealed = room.fixedTeams || room.friendSeat !== null;
   const inBiddingPhase = ["dealing","auctionReady","auction"].includes(room.phase);
   const showBids = ["dealing","auctionReady","auction","forcedSuit","burying"].includes(room.phase);
   const seatBids = room.seatBids || {};
@@ -390,7 +395,7 @@ function renderSeats(room) {
   const viewerSeatIndex = room.viewerSeat ?? 0;
 
   seatsEl.innerHTML = room.seats.map((seat) => {
-    const screenPos = seatToScreenPos(seat.index, viewerSeatIndex);
+    const screenPos = seatToScreenPos(seat.index, viewerSeatIndex, room.seatCount || 5);
     const initial = escapeHtml((seat.nickname || "?")[0].toUpperCase());
     const isActive = room.phase === "playing" && room.turnSeat === seat.index;
     const youClass = seat.isYou ? "you" : "";
@@ -412,7 +417,7 @@ function renderSeats(room) {
     }
 
     // Cards beside seat — bottom seats (pos 1,4) show cards ABOVE the token
-    const playedAbove = screenPos === 1 || screenPos === 4;
+    const playedAbove = screenPos === 1 || screenPos === (room.seatCount || 5) - 1;
     let sideCardsHTML = "";
     let currentPlayShown = false;
     if (showBids && seatBids[seat.index]) {
@@ -553,7 +558,8 @@ function playedCardHTML(card) {
 /* ─── Center Table Info ──────────────────────────────────── */
 function renderCenter(room) {
   // Score display: show team scores only after friend is revealed
-  const friendRevealed = room.friendSeat !== null;
+  // （6 人固定队从开局就已知队伍，直接显示）
+  const friendRevealed = room.fixedTeams || room.friendSeat !== null;
   if (friendRevealed || room.phase === "roundOver") {
     $("#scoreInfo").textContent = `闲家 ${room.scores.attackers} 分 · 庄家队 ${room.scores.dealerTeam} 分`;
   } else {

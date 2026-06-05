@@ -36,6 +36,13 @@
               <span>房间码</span>
               <input id="roomCode" maxlength="8" placeholder="留空则创建新房间">
             </label>
+            <label>
+              <span>人数（仅创建房间用）</span>
+              <select id="seatCountSel">
+                <option value="5">5 人 · 找朋友（2 打 3）</option>
+                <option value="6">6 人 · 隔座固定队（3 打 3）</option>
+              </select>
+            </label>
             <div class="join-actions">
               <button type="submit" class="btn-primary">进入房间</button>
               <button type="button" id="createRoom" class="btn-secondary">创建房间</button>
