@@ -750,7 +750,7 @@ function renderControls(room) {
     if (room.viewerSeat === room.dealerSeat) {
       parts.push(`
         <select id="forcedSuit">
-          <option value="">不亮，使用底牌花色（${room.trumpSuit ? suitSymbol(room.trumpSuit) : "无主"}）</option>
+          <option value="">${room.fixedTeams ? "暂不定主（按无主打）" : `不亮，使用底牌花色（${room.trumpSuit ? suitSymbol(room.trumpSuit) : "无主"}）`}</option>
           <option value="noTrump">亮所选3张王为无主</option>
           <option value="spades">♠ 黑桃</option>
           <option value="hearts">♥ 红桃</option>

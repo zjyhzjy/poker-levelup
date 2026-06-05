@@ -156,12 +156,20 @@ export function startRound(room, random = Math.random, options = {}) {
   if (room.seats.some((seat) => !seat.playerId)) throw new Error(`需要 ${room.seatCount} 名玩家全部坐下`);
   room.round += 1;
   const firstRound = room.round === 1;
-  const level = firstRound ? LEVEL_RANKS[Math.floor(random() * LEVEL_RANKS.length)] : null;
-  room.firstLevel = room.firstLevel ?? level;
-  room.levelRank = null;
   room.trumpSuit = null;
   room.noTrump = false;
-  room.dealerSeat = null;
+  if (room.fixedTeams) {
+    // 6 人轮庄：两队各共享一个等级（按隔座奇偶），赢队轮流坐庄、打坐庄队的等级。
+    if (firstRound) { room.teamLevels = { 0: "2", 1: "2" }; room.nextDealerSeat = Math.floor(random() * room.seatCount); }
+    room.dealerSeat = room.nextDealerSeat ?? 0;
+    room.levelRank = room.teamLevels[room.dealerSeat % 2];
+  } else {
+    // 5 人：抢庄定庄，个人等级。
+    const level = firstRound ? LEVEL_RANKS[Math.floor(random() * LEVEL_RANKS.length)] : null;
+    room.firstLevel = room.firstLevel ?? level;
+    room.levelRank = null;
+    room.dealerSeat = null;
+  }
   room.currentBid = null;
   room.seatBids = {};
   room.bidResponses = {};
@@ -182,14 +190,17 @@ export function startRound(room, random = Math.random, options = {}) {
   room.kitty = [];
   room.deck = shuffle(createDeck(), random);
   room.phase = PHASES.DEALING;
-  room.starterSeat = firstRound ? Math.floor(random() * room.seatCount) : nextSeat(room.starterSeat, room.seatCount);
+  room.starterSeat = room.fixedTeams
+    ? room.dealerSeat // 6 人轮庄：庄家先摸先出
+    : (firstRound ? Math.floor(random() * room.seatCount) : nextSeat(room.starterSeat, room.seatCount));
   room.currentLeader = room.starterSeat;
   room.turnSeat = room.starterSeat;
   for (const seat of room.seats) {
     seat.hand = [];
     seat.takenTrickPoints = 0;
     seat.lockedTriples = []; // 本局内被“锁定”的三条（不可再拆成对子出）
-    if (firstRound) seat.level = room.firstLevel;
+    if (room.fixedTeams) seat.level = room.teamLevels[seat.index % 2]; // 6人=所属队共享等级
+    else if (firstRound) seat.level = room.firstLevel;
   }
 
   room.tableLog.push(`本轮从 ${seatName(room, room.starterSeat)} 开始逆时针摸牌。`);
@@ -229,8 +240,14 @@ function finishDealing(room) {
     return;
   }
   if (room.phase === PHASES.DEALING) {
-    room.phase = PHASES.AUCTION_READY;
-    room.tableLog.push("摸牌结束无人亮主，等待手动开始翻底拍卖。");
+    if (room.fixedTeams) {
+      // 6 人轮庄：庄家已定，跳过抢庄，直接由庄家选主花色。
+      room.phase = PHASES.FORCED_SUIT;
+      room.tableLog.push(`${seatName(room, room.dealerSeat)} 坐庄（打 ${room.levelRank}），请选择主花色。`);
+    } else {
+      room.phase = PHASES.AUCTION_READY;
+      room.tableLog.push("摸牌结束无人亮主，等待手动开始翻底拍卖。");
+    }
   }
 }
 
@@ -347,8 +364,7 @@ export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
     if (cards.length !== 3 || !cards.every((card) => card.suit === "joker")) throw new Error("亮无主需要选择 3 张王");
     room.noTrump = true;
     room.trumpSuit = null;
-    room.currentBid.noTrump = true;
-    room.currentBid.trumpSuit = null;
+    if (room.currentBid) { room.currentBid.noTrump = true; room.currentBid.trumpSuit = null; }
     sortHand(dealer.hand, room);
     room.tableLog.push(`${dealer.nickname} 亮 3 张王，强制定为无主。`);
     giveKittyToDealer(room);
@@ -357,11 +373,11 @@ export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
   if (suit && !SUITS.includes(suit)) throw new Error("花色不存在");
   if (suit) {
     const hasLevelCard = dealer.hand.some((card) => card.rank === room.levelRank && card.suit === suit);
-    if (!hasLevelCard) throw new Error(`你手里没有 ${suit} 的级牌，不能亮此花色`);
+    // 6 人轮庄的庄家由轮转指定（非抢来），有权直接定主，不要求手里有该花色级牌。
+    if (!hasLevelCard && !room.fixedTeams) throw new Error(`你手里没有 ${suit} 的级牌，不能亮此花色`);
     room.trumpSuit = suit;
     room.noTrump = false;
-    room.currentBid.trumpSuit = suit;
-    room.currentBid.noTrump = false;
+    if (room.currentBid) { room.currentBid.trumpSuit = suit; room.currentBid.noTrump = false; }
   }
   // If suit is null: keep whatever noTrump/trumpSuit forceDealer already set
   sortHand(dealer.hand, room);
@@ -1142,10 +1158,25 @@ function finishRound(room, lastWinner) {
     : [];
   // 通关：升级方若已在 A 上还要再升（越过 A），即夺冠。
   let champion = null;
-  for (const seatIndex of upgradedSeats) {
-    const seat = room.seats[seatIndex];
-    if (crossesChampion(seat.level, result.steps)) champion = result.side;
-    seat.level = levelAdvance(seat.level, result.steps);
+  if (room.fixedTeams) {
+    // 6 人轮庄：升级赢队的共享等级；并决定下局坐庄（庄家队守住→连庄、轮到隔座队友；
+    // 闲家队上台→下家坐庄、坐庄队易主）。
+    if (result.steps > 0) {
+      const winParity = result.side === "dealer" ? room.dealerSeat % 2 : (room.dealerSeat + 1) % 2;
+      if (crossesChampion(room.teamLevels[winParity], result.steps)) champion = result.side;
+      room.teamLevels[winParity] = levelAdvance(room.teamLevels[winParity], result.steps);
+    }
+    for (const seat of room.seats) seat.level = room.teamLevels[seat.index % 2]; // 同步每人显示=队等级
+    const dealerHeld = result.side !== "attackers"; // dealer 升或 push（不升不降）都算庄家队守住
+    room.nextDealerSeat = dealerHeld
+      ? (room.dealerSeat + 2) % room.seatCount  // 连庄：轮到隔座同队下一人
+      : (room.dealerSeat + 1) % room.seatCount; // 闲家上台：下家（异队）坐庄
+  } else {
+    for (const seatIndex of upgradedSeats) {
+      const seat = room.seats[seatIndex];
+      if (crossesChampion(seat.level, result.steps)) champion = result.side;
+      seat.level = levelAdvance(seat.level, result.steps);
+    }
   }
   room.lastResult = { attackers, buriedBonus, result, upgradedSeats, champion };
   // 战绩：累积每局结果，供“战绩”面板展示。
@@ -2047,11 +2078,20 @@ export function chooseAiFriendCard(room, dealer) {
 // better than the kitty-card suit (must hold a level card of it); easy keeps it.
 function chooseAiForcedTrump(room, dealer) {
   const profile = aiProfile(dealer);
+  const level = room.levelRank ?? dealer.level;
+  const suitStrength = (s) => dealer.hand.filter((c) => c.suit === s || c.rank === level || c.suit === "joker").length;
+  // 6 人轮庄：庄家必须定主，从所有花色里选最强的（不要求手里有级牌）。
+  if (room.fixedTeams) {
+    let best = null;
+    for (const s of SUITS) {
+      const strength = suitStrength(s);
+      if (!best || strength > best.strength) best = { suit: s, strength };
+    }
+    return best ? best.suit : SUITS[0];
+  }
   if (!profile.pull) return null; // easy doesn't manage trump — keep the kitty suit
   // Use the round's level rank (what chooseForcedTrump validates against) so we
   // never propose a suit the dealer can't actually reveal a level card for.
-  const level = room.levelRank ?? dealer.level;
-  const suitStrength = (s) => dealer.hand.filter((c) => c.suit === s || c.rank === level || c.suit === "joker").length;
   let best = null;
   for (const s of SUITS) {
     if (!dealer.hand.some((c) => c.rank === level && c.suit === s)) continue;
