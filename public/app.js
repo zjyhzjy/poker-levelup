@@ -169,6 +169,8 @@ function render() {
   try { maybeAnimateTrickPoints(room); } catch(e) { console.error("trickPoints:", e); }
   try { maybeAnimateFriendReveal(room); } catch(e) { console.error("friendReveal:", e); }
   if ($("#historyPanel")?.classList.contains("open")) { try { renderHistory(room); } catch(e) { console.error("history:", e); } }
+  if ($("#standingsPanel")?.classList.contains("open")) { try { renderStandings(room); } catch(e) { console.error("standings:", e); } }
+  try { maybeAnimateChampion(room); } catch(e) { console.error("champion:", e); }
 }
 
 // Spectators (joined but not seated) — listed small in the table's top-left.
@@ -647,6 +649,9 @@ function renderCenter(room) {
 
   if (room.phase === "roundOver" && room.lastResult) {
     const r = room.lastResult;
+    const champLine = r.champion
+      ? `<div class="champ-banner">🏆 ${r.champion === "dealer" ? "庄家队" : "闲家队"} 打过 A，夺冠！</div>`
+      : "";
     const lines = [
       `本局闲家得分：${r.attackers} 分`,
       r.buriedBonus > 0 ? `底牌加成：+${r.buriedBonus} 分` : null,
@@ -655,7 +660,7 @@ function renderCenter(room) {
         ? `升级：${r.upgradedSeats.map((i) => seatName(room, i)).join("、")}`
         : null
     ].filter(Boolean).join("<br>");
-    resultEl.innerHTML = lines;
+    resultEl.innerHTML = champLine + lines;
     resultEl.style.display = "block";
   } else {
     resultEl.innerHTML = "";
@@ -944,17 +949,18 @@ function renderLog(room) {
     .map((line) => `<div>${escapeHtml(line)}</div>`).join("");
 }
 
-// Log drawer toggle（日志与牌局回看互斥展开）
-$("#logToggle").addEventListener("click", () => {
-  $("#historyPanel").classList.remove("open");
-  $("#logPanel").classList.toggle("open");
-});
-$("#historyToggle").addEventListener("click", () => {
-  $("#logPanel").classList.remove("open");
-  const panel = $("#historyPanel");
+// 抽屉：记录 / 牌局 / 战绩 三者互斥展开。
+function openDrawer(id, render) {
+  for (const p of ["#logPanel", "#historyPanel", "#standingsPanel"]) {
+    if (p !== id) $(p).classList.remove("open");
+  }
+  const panel = $(id);
   panel.classList.toggle("open");
-  if (panel.classList.contains("open")) renderHistory(state.room);
-});
+  if (panel.classList.contains("open") && render) render(state.room);
+}
+$("#logToggle").addEventListener("click", () => openDrawer("#logPanel"));
+$("#historyToggle").addEventListener("click", () => openDrawer("#historyPanel", renderHistory));
+$("#standingsToggle").addEventListener("click", () => openDrawer("#standingsPanel", renderStandings));
 
 // 本局牌局回看：逐墩展示谁出了什么、谁赢、几分（数据来自 publicState.tricks）。
 function renderHistory(room) {
@@ -969,6 +975,43 @@ function renderHistory(room) {
     }).join("");
     return `<div class="history-trick"><div class="history-head">第 ${i + 1} 墩 · ${seatName(room, t.winner)} +${t.points}</div>${plays}</div>`;
   }).join("");
+}
+
+// 战绩：各家当前等级 + 历次对局结果（数据来自 publicState.matchLog）。
+function renderStandings(room) {
+  const el = $("#standings");
+  if (!el) return;
+  const levels = room.seats.filter((s) => s.playerId).map((s) =>
+    `<div class="sd-lvrow"><span class="sd-seat">${seatName(room, s.index)}</span><span class="sd-lv">打 ${escapeHtml(s.level || "-")}</span></div>`).join("");
+  const log = room.matchLog || [];
+  const rows = log.length
+    ? log.slice().reverse().map((m) => {
+        const champ = m.champion ? ` · 🏆${m.champion === "dealer" ? "庄家队" : "闲家队"}夺冠` : "";
+        return `<div class="sd-row"><span class="sd-rnd">第${m.round}局</span><span>闲家 ${m.attackers}</span><span class="sd-res">${escapeHtml(m.label)}${champ}</span></div>`;
+      }).join("")
+    : `<div class="history-empty">还没有完成的对局</div>`;
+  el.innerHTML = `<div class="sd-head">各家等级</div>${levels}<div class="sd-head">历史对局</div>${rows}`;
+}
+
+// 通关庆祝：检测 champion 这一局首次出现，撒一阵金色彩屑。
+let lastChampRound = null;
+function maybeAnimateChampion(room) {
+  const r = room.lastResult;
+  if (!r || !r.champion || room.phase !== "roundOver") return;
+  if (room.round === lastChampRound) return;
+  lastChampRound = room.round;
+  for (let i = 0; i < 18; i++) {
+    const e = document.createElement("div");
+    e.className = "champ-confetti";
+    e.textContent = ["🎉", "🏆", "✨", "🎊", "⭐"][i % 5];
+    e.style.left = `${Math.random() * 100}vw`;
+    e.style.top = "-40px";
+    document.body.appendChild(e);
+    e.animate([
+      { transform: "translateY(0) rotate(0deg)", opacity: 1 },
+      { transform: `translateY(105vh) rotate(${(Math.random() * 720 - 360) | 0}deg)`, opacity: .85 }
+    ], { duration: 1800 + Math.random() * 1200, easing: "cubic-bezier(.3,.6,.5,1)", delay: Math.random() * 400 }).onfinish = () => e.remove();
+  }
 }
 
 // Re-render on orientation change so layout updates immediately

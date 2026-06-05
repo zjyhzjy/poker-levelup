@@ -1102,6 +1102,12 @@ function finishTrick(room) {
   room.turnSeat = winner;
 }
 
+// 通关判定：升级是 A→2 循环、没有封顶，故“当前已是 A 还要再升（steps≥1）”即视为
+// 越过 A 夺冠。不额外强加“打 A 必须守庄”那道坎（简化规则，可按需收紧）。
+export function crossesChampion(level, steps) {
+  return steps > 0 && level === "A";
+}
+
 function finishRound(room, lastWinner) {
   // Final settlement: recompute team scores from each seat's captured points
   // using the final team assignment (rule 96), then add the doubled kitty bonus.
@@ -1118,13 +1124,24 @@ function finishRound(room, lastWinner) {
   const upgradedSeats = result.steps > 0
     ? (result.side === "dealer" ? dealerTeamSeats(room) : attackerSeats(room))
     : [];
+  // 通关：升级方若已在 A 上还要再升（越过 A），即夺冠。
+  let champion = null;
   for (const seatIndex of upgradedSeats) {
     const seat = room.seats[seatIndex];
+    if (crossesChampion(seat.level, result.steps)) champion = result.side;
     seat.level = levelAdvance(seat.level, result.steps);
   }
-  room.lastResult = { attackers, buriedBonus, result, upgradedSeats };
+  room.lastResult = { attackers, buriedBonus, result, upgradedSeats, champion };
+  // 战绩：累积每局结果，供“战绩”面板展示。
+  (room.matchLog ||= []).push({
+    round: room.round, attackers, label: result.label,
+    dealerSeat: room.dealerSeat, friendSeat: room.friendSeat,
+    champion, levels: room.seats.map((s) => s.level)
+  });
   room.phase = PHASES.ROUND_OVER;
-  room.tableLog.push(`本局结束，闲家 ${attackers} 分。${result.label}`);
+  const champLabel = champion === "dealer" ? "（庄家队打过 A，夺冠！🏆）"
+    : champion === "attackers" ? "（闲家队打过 A，夺冠！🏆）" : "";
+  room.tableLog.push(`本局结束，闲家 ${attackers} 分。${result.label}${champLabel}`);
 }
 
 export function resetToLobby(room) {
@@ -2402,6 +2419,7 @@ export function publicState(room, viewerId = null) {
     scores: room.scores,
     seatPersonalScores: room.seatPersonalScores || {},
     lastResult: room.lastResult,
+    matchLog: room.matchLog || [],
     tableLog: room.tableLog.slice(-40),
     seats: room.seats.map((seat) => ({
       index: seat.index,

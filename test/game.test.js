@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, decideAiBid, evaluateBid, makeBid, passBid, playCards, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, decideAiBid, evaluateBid, makeBid, passBid, playCards, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -302,4 +302,12 @@ test("朋友现身时设置 friendReveal 供前端动画", () => {
   playCards(room, "p1", [spadeA.id]); // 领出黑桃A → 匹配朋友牌 → 现身
   assert.equal(room.friendSeat, 1);
   assert.ok(room.friendReveal && room.friendReveal.seat === 1 && room.friendReveal.seq >= 1);
+});
+
+test("通关判定：在 A 上还要升级才算越过 A 夺冠", () => {
+  assert.equal(crossesChampion("A", 1), true, "打 A 又升 → 夺冠");
+  assert.equal(crossesChampion("A", 3), true);
+  assert.equal(crossesChampion("A", 0), false, "没升级不算");
+  assert.equal(crossesChampion("K", 1), false, "还没到 A 不算");
+  assert.equal(crossesChampion("2", 2), false);
 });

@@ -945,6 +945,26 @@ body.desktop #historyToggle { right: 82px; }
 .hcard.red { color: #ff7a7a; }
 .hcard.black { color: #ededed; }
 
+#standingsToggle { right: 132px; }
+body.desktop #standingsToggle { right: 164px; }
+.standings-list { padding: 6px 8px; font-size: 11px; color: #ddd; }
+.sd-head { color: var(--gold); font-weight: 600; margin: 6px 0 3px; }
+.sd-lvrow, .sd-row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 3px; }
+.sd-row { border-bottom: 1px solid rgba(200,144,45,.12); }
+.sd-seat { color: #ccc; }
+.sd-lv { color: #ffd84d; font-weight: 600; }
+.sd-rnd { color: #aaa; flex-shrink: 0; }
+.sd-res { color: #bbb; text-align: right; }
+.champ-banner {
+  font-size: 1.35em; font-weight: 800; color: #ffd84d;
+  text-shadow: 0 2px 8px rgba(0,0,0,.7), 0 0 16px rgba(255,180,0,.7);
+  margin-bottom: 6px;
+}
+.champ-confetti {
+  position: fixed; z-index: 300; pointer-events: none;
+  font-size: 26px; will-change: transform, opacity;
+}
+
 #log {
   padding: 10px;
   display: grid;
