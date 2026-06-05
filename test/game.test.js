@@ -120,3 +120,38 @@ test("AI 抢庄只用手里真实的常主牌", () => {
     assert.ok(c && c.rank === "K" && c.suit === "spades"); // 只用手里的同花级牌
   }
 });
+
+test("AI 领牌会兑现确定的赢张（基础）", () => {
+  const room = createRoom("CASH");
+  room.levelRank = "2"; room.trumpSuit = "hearts"; room.dealerSeat = 1; room.friendSeat = null;
+  const deck = createDeck();
+  const spadeA = deck.find((c) => c.rank === "A" && c.suit === "spades"); // 副牌最大、必赢
+  const lows = [deck.find((c) => c.rank === "4" && c.suit === "clubs"),
+                deck.find((c) => c.rank === "6" && c.suit === "clubs"),
+                deck.find((c) => c.rank === "3" && c.suit === "diamonds")];
+  const ai = room.seats[1];
+  ai.playerId = "ai1"; ai.isAi = true; ai.aiLevel = "medium";
+  ai.hand = [spadeA, ...lows];
+  let cashes = 0;
+  for (let k = 0; k < 40; k++) { ai.aiRngState = (k * 2654435761) | 0; const p = chooseAiPlay(room, ai, null); if (p.length === 1 && p[0].rank === "A") cashes++; }
+  assert.ok(cashes > 30, `应当通常兑现黑桃A，实际 ${cashes}/40`);
+});
+
+test("AI 垫牌优先做空门（基础）", () => {
+  const room = createRoom("VOID");
+  room.levelRank = "2"; room.trumpSuit = "hearts"; room.dealerSeat = 0; room.friendSeat = null;
+  const deck = createDeck();
+  const spadeK = deck.find((c) => c.rank === "K" && c.suit === "spades"); // 敌家领黑桃
+  const club3 = deck.find((c) => c.rank === "3" && c.suit === "clubs");   // 短门（仅此一张梅花）
+  const diamonds = [deck.find((c) => c.rank === "4" && c.suit === "diamonds"),
+                    deck.find((c) => c.rank === "6" && c.suit === "diamonds")];
+  room.seats[0].playerId = "e0";
+  const ai = room.seats[1];
+  ai.playerId = "ai1"; ai.isAi = true; ai.aiLevel = "medium";
+  ai.hand = [club3, ...diamonds]; // 黑桃缺门、无主，只能垫牌
+  room.currentTrick = [{ seat: 0, cards: [spadeK], shape: analyzeShape([spadeK], room), points: 10 }];
+  room.turnSeat = 1;
+  let voided = 0;
+  for (let k = 0; k < 40; k++) { ai.aiRngState = (k * 40503 + 7) | 0; const p = chooseAiPlay(room, ai, [spadeK]); if (p.length === 1 && p[0].suit === "clubs") voided++; }
+  assert.ok(voided > 30, `应当优先垫掉短门梅花做空门，实际 ${voided}/40`);
+});

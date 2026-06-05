@@ -540,13 +540,17 @@ export function recommendPlay(room, playerId) {
 }
 
 // ─── AI difficulty profiles ─────────────────────────────────
-// easy   : 被动；只跟最小牌、几乎不抢庄、不喂分、领牌乱出。
-// medium : 稳健；会用最小牌抢墩、给已确认队友喂分、按长副牌发牌、按手牌强度抢庄。
-// hard   : 在 medium 基础上会算牌（找绝对大牌/拔主）、风险意识、抢庄更积极。
+// Fundamentals — contest tricks, feed a winning partner, cash sure winners, follow
+// correctly, protect points — apply to EVERY level (even easy, per the basics every
+// player knows). Difficulty = consistency (temperature) + advanced reads:
+//   pull        : declarer pulls trump from strength
+//   voidDiscard : create voids when discarding / bury to void short suits
+//   riskAware   : avoid over-ruff, duck behind a teammate, use known voids
+//   temp        : softmax temperature — higher = looser/more mistakes (easy)
 export const AI_PROFILES = {
-  easy:   { contest: false, feed: false, lead: "low",     bidRatio: 0.95, riskAware: false, temp: 1.1 },
-  medium: { contest: true,  feed: true,  lead: "develop", bidRatio: 0.52, riskAware: false, temp: 0.5 },
-  hard:   { contest: true,  feed: true,  lead: "pull",    bidRatio: 0.42, riskAware: true,  temp: 0.2 }
+  easy:   { contest: true, feed: true, pull: false, voidDiscard: false, riskAware: false, bidRatio: 0.62, temp: 1.6  },
+  medium: { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: false, bidRatio: 0.50, temp: 0.55 },
+  hard:   { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: true,  bidRatio: 0.42, temp: 0.12 }
 };
 export function aiProfile(seat) {
   return AI_PROFILES[seat?.aiLevel] || AI_PROFILES.medium;
@@ -665,11 +669,24 @@ function trickStanding(room, seat) {
   const winnerRuffed = ledSuit !== "trump" && winPlay.cards.every((c) => playSuit(c, room) === "trump");
   return {
     winnerSeat,
+    winnerCards: winPlay.cards,
     rel: aiRelation(room, seat.index, winnerSeat),
     points: trick.reduce((sum, play) => sum + play.points, 0),
     isLast: trick.length === SEATS - 1,
     winnerRuffed
   };
+}
+
+// Could an enemy (or as-yet-unknown player) still play after me this trick?
+function enemyBehind(room, seat) {
+  const remaining = SEATS - room.currentTrick.length - 1;
+  let s = seat.index;
+  for (let k = 0; k < remaining; k += 1) {
+    s = nextSeat(s);
+    const r = aiRelation(room, seat.index, s);
+    if (r === "enemy" || r === "unknown") return true;
+  }
+  return false;
 }
 
 // Would playing `cards` win the trick as it stands? Reuses the engine's own
@@ -722,18 +739,28 @@ function followCandidates(room, seat, leaderCards) {
   return out;
 }
 
-function scoreFollow(room, seat, cards, stand, profile) {
+function scoreFollow(room, seat, cards, stand, profile, seen) {
   const beats = candidateBeats(room, seat, cards);
   const cost = cards.reduce((sum, c) => sum + spendCost(c, room), 0);
   const pts = cards.reduce((sum, c) => sum + cardScore(c), 0);
   let u = -cost * 0.5;
 
-  // Partner already holds the trick → never overtake your own teammate. Feed points
-  // when the win is safe, otherwise just play low and keep your cards.
+  // Partner holds the trick.
   if (stand.rel === "ally") {
-    const secure = stand.isLast || stand.winnerRuffed;
-    if (profile.feed && secure) u += pts * 2.5;
-    else u -= pts * 0.2;
+    const allyBoss = stand.winnerRuffed || isComboBoss(room, seat, stand.winnerCards, seen);
+    if (stand.isLast || allyBoss) {                 // securely winning → pour points in / keep low
+      if (profile.feed) u += pts * 2.5;
+      else u -= pts * 0.2;
+      return u;
+    }
+    // 3rd-hand-high: ally winning but beatable and an enemy still acts behind me.
+    // Secure the team's points — but ONLY with a guaranteed boss, never a card the
+    // next player could beat, so I never waste a losable card on my own partner.
+    if (beats && stand.points > 0 && enemyBehind(room, seat) && isComboBoss(room, seat, cards, seen)) {
+      u += stand.points * 1.5 + 1;
+    } else {
+      u -= pts * 0.2;
+    }
     return u;
   }
 
@@ -749,8 +776,23 @@ function scoreFollow(room, seat, cards, stand, profile) {
     u += reward;
   } else {
     u -= pts * 3.5;                                 // never gift points to enemies/unknowns
+    if (profile.voidDiscard) u += voidProgress(room, seat, cards); // shed toward a void
   }
   return u;
+}
+
+// Small nudge to discard from my shortest side suit, working toward a void I can
+// later ruff. Tiny, so it only breaks ties among low non-point discards.
+function voidProgress(room, seat, cards) {
+  const counts = {};
+  for (const c of seat.hand) if (playSuit(c, room) !== "trump") counts[c.suit] = (counts[c.suit] || 0) + 1;
+  let b = 0;
+  for (const c of cards) {
+    if (playSuit(c, room) === "trump") continue;
+    const n = counts[c.suit] || 1;
+    if (n <= 3) b += (4 - n) * 0.6; // shorter suit → bigger nudge to empty it
+  }
+  return b;
 }
 
 // Is a known teammate still due to play after me in the current trick?
@@ -768,7 +810,8 @@ function chooseFollow(room, seat, leaderCards, profile) {
   const cands = followCandidates(room, seat, leaderCards);
   if (!cands.length) return null;
   const stand = trickStanding(room, seat);
-  const scores = cands.map((c) => scoreFollow(room, seat, c, stand, profile));
+  const seen = seenCounts(room, seat);
+  const scores = cands.map((c) => scoreFollow(room, seat, c, stand, profile, seen));
   return chooseWeighted(cands, scores, seat, profile);
 }
 
@@ -780,8 +823,6 @@ function chooseFollow(room, seat, leaderCards, profile) {
 // ruff risk a human also accepts when cashing winners.
 function chooseLead(room, seat, profile) {
   const hand = seat.hand;
-  if (profile.lead === "low") return [lowestCard(hand, room)];
-
   const seen = seenCounts(room, seat);
   const cands = leadCandidates(room, seat).filter((c) => validatePlay(room, seat, c, null).ok);
   if (!cands.length) return [lowestCard(hand, room)];
@@ -845,14 +886,15 @@ function scoreLead(room, seat, cards, profile, seen) {
   // Boss combo: cash a guaranteed winner — bank points, clear cards, apply pressure.
   let u = 3 + pts * 3 + len * 1.5;
   if (isTrump) {
-    if (seat.index === room.dealerSeat) u += 4 + len; // dealer pulls trump from strength
-    else u -= 2;                                       // attackers usually hold trump back
+    // Declarer pulls trump from strength (basic). easy doesn't manage trump, so it
+    // doesn't get the pull bonus and leaves its trump back.
+    if (seat.index === room.dealerSeat && profile.pull) u += 4 + len;
+    else u -= 2;
   } else if (len === 1 && pts === 0) {
-    // cashing a bare side ace risks a ruff. hard cashes it only when no enemy is
-    // known to be void in that suit (and the suit is still fairly full); medium
-    // leaves bare side singles alone.
+    // Cashing a bare side ace is basic, but it risks a ruff once the suit dries up
+    // or an opponent is known void — back off then (all levels read this much).
     const ruffable = enemyVoidIn(room, seat, head.suit) || suitPlayed(room, head.suit) > 8;
-    if (!profile.riskAware || ruffable) u -= 4;
+    if (ruffable) u -= 4;
   }
   return u;
 }
@@ -1823,8 +1865,8 @@ function isAutoSeat(room, seatIndex) {
 function chooseAiBury(room, dealer) {
   const profile = aiProfile(dealer);
   const hand = dealer.hand;
-  // easy: just bury the lowest non-scoring cards (original behaviour).
-  if (profile.lead === "low") {
+  // easy: keep points but otherwise just bury the lowest cards (no void planning).
+  if (!profile.voidDiscard) {
     return [...hand]
       .sort((a, b) => cardScore(a) - cardScore(b) || cardOrderValue(a, room) - cardOrderValue(b, room))
       .slice(0, KITTY_SIZE);
@@ -1882,7 +1924,7 @@ export function chooseAiFriendCard(room, dealer) {
 // better than the kitty-card suit (must hold a level card of it); easy keeps it.
 function chooseAiForcedTrump(room, dealer) {
   const profile = aiProfile(dealer);
-  if (profile.lead === "low") return null;
+  if (!profile.pull) return null; // easy doesn't manage trump — keep the kitty suit
   // Use the round's level rank (what chooseForcedTrump validates against) so we
   // never propose a suit the dealer can't actually reveal a level card for.
   const level = room.levelRank ?? dealer.level;
