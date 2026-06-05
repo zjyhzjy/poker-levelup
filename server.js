@@ -129,6 +129,9 @@ function handleMessage(client, message) {
     if (type === "createRoom") {
       const room = createRoom();
       rooms.set(room.code, room);
+      // Adopt the client-owned stable id so future reconnects map to this seat.
+      const stableId = String(payload.playerId || "").trim();
+      if (stableId) client.playerId = stableId;
       attachToRoom(client, room, payload.nickname);
       return;
     }
@@ -150,6 +153,9 @@ function handleMessage(client, message) {
           broadcast(room);
           return;
         }
+        // Fresh join: still adopt the client-owned id so that if this player
+        // later sits down, their seat is keyed by the stable id and reconnect works.
+        client.playerId = storedId;
       }
       attachToRoom(client, room, payload.nickname);
       return;

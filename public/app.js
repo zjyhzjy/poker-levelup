@@ -1,7 +1,18 @@
 /* ─── State ──────────────────────────────────────────────── */
+// Stable, client-owned player identity. Generated once and reused forever so we
+// can always reclaim our seat after a refresh, app switch, or dropped connection.
+function getMyId() {
+  let id = localStorage.getItem("szp.playerId");
+  if (!id) {
+    id = (crypto.randomUUID && crypto.randomUUID()) || `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem("szp.playerId", id);
+  }
+  return id;
+}
+
 const state = {
   ws: null,
-  playerId: localStorage.getItem("szp.playerId") || "",
+  playerId: getMyId(),
   nickname: localStorage.getItem("szp.nickname") || "",
   room: null,
   selected: new Set()
@@ -27,6 +38,17 @@ $("#createRoom").addEventListener("click", () => {
   connectAndJoin("", $("#nickname").value.trim());
 });
 
+// On load, if we were in a room before, prefill the code and try to reconnect.
+// If the room is gone, the server replies with an error and we stay on the join
+// screen so the player can create/join a fresh room.
+(() => {
+  const lastRoom = localStorage.getItem("szp.roomCode");
+  if (lastRoom) {
+    $("#roomCode").value = lastRoom;
+    if (state.nickname) connectAndJoin(lastRoom, state.nickname);
+  }
+})();
+
 function connectAndJoin(code, nickname) {
   state.nickname = nickname || "玩家";
   localStorage.setItem("szp.nickname", state.nickname);
@@ -39,21 +61,18 @@ function connectAndJoin(code, nickname) {
   ws.addEventListener("message", (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === "hello") {
-      state.playerId = msg.payload.playerId;
-      localStorage.setItem("szp.playerId", state.playerId);
+      // Ignore the server's temporary id — we always identify with our stable id
+      // so the server keys our seat by it and reconnects map back to us.
       if (!joined) {
         joined = true;
-        // If we have a stored playerId different from server's, try reconnect
-        const storedId = localStorage.getItem("szp.playerId.prev") || "";
-        if (code && storedId && storedId !== state.playerId) {
-          send("joinRoom", { code, nickname: state.nickname, playerId: storedId });
-        } else {
-          send(code ? "joinRoom" : "createRoom", { code, nickname: state.nickname, playerId: state.playerId });
-        }
+        state.playerId = getMyId();
+        send(code ? "joinRoom" : "createRoom", { code, nickname: state.nickname, playerId: state.playerId });
       }
     }
     if (msg.type === "state") {
       state.room = msg.payload;
+      // Remember the room so a refresh / reopen can auto-reconnect us back in.
+      if (state.room.code) localStorage.setItem("szp.roomCode", state.room.code);
       // Preserve selected cards that are still in hand
       const hand = msg.payload.seats.find(s => s.isYou)?.hand || [];
       const handIds = new Set(hand.map(c => c.id));
@@ -63,10 +82,6 @@ function connectAndJoin(code, nickname) {
       render();
     }
     if (msg.type === "error") showError(msg.payload.message);
-  });
-  ws.addEventListener("close", () => {
-    // Save current playerId for reconnect attempts
-    if (state.playerId) localStorage.setItem("szp.playerId.prev", state.playerId);
   });
 }
 
