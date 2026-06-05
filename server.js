@@ -162,6 +162,20 @@ function handleMessage(client, message) {
       return;
     }
 
+    // Ephemeral emote (throw tomato / send flower at a seat) — broadcast to the
+    // whole room as a transient event, not part of the persistent game state.
+    if (type === "emote") {
+      const room = currentRoom(client);
+      const target = Number(payload.target);
+      if (!Number.isInteger(target) || target < 0 || target >= 5) return;
+      const kind = payload.kind === "flower" ? "flower" : "tomato";
+      const fromSeat = room.seats.find((s) => s.playerId === client.playerId)?.index ?? null;
+      for (const c of sockets.values()) {
+        if (c.roomCode === room.code) send(c, "emote", { from: fromSeat, target, kind });
+      }
+      return;
+    }
+
     const room = currentRoom(client);
     const actions = {
       sit:              () => sit(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname, payload.avatar),

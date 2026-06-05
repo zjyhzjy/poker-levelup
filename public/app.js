@@ -115,6 +115,7 @@ function connectAndJoin(code, nickname) {
       }
       render();
     }
+    if (msg.type === "emote") playEmote(msg.payload);
     if (msg.type === "error") showError(msg.payload.message);
   });
 }
@@ -161,6 +162,101 @@ function renderSpectators(room) {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* ─── Emotes: throw tomato / send flower at a player's avatar ─── */
+let emoteMenuEl = null;
+function openEmoteMenu(targetIndex, anchorEl) {
+  closeEmoteMenu();
+  const menu = document.createElement("div");
+  menu.className = "emote-menu";
+  menu.innerHTML = `
+    <button class="emote-btn" data-kind="tomato" title="砸西红柿">🍅</button>
+    <button class="emote-btn" data-kind="flower" title="送花">🌹</button>`;
+  document.body.appendChild(menu);
+  const r = anchorEl.getBoundingClientRect();
+  menu.style.left = `${r.left + r.width / 2}px`;
+  menu.style.top = `${r.top - 6}px`;
+  menu.querySelectorAll("[data-kind]").forEach((b) =>
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      send("emote", { target: targetIndex, kind: b.dataset.kind });
+      closeEmoteMenu();
+    }));
+  emoteMenuEl = menu;
+  setTimeout(() => document.addEventListener("click", closeEmoteMenu, { once: true }), 0);
+}
+function closeEmoteMenu() {
+  if (emoteMenuEl) { emoteMenuEl.remove(); emoteMenuEl = null; }
+}
+
+function seatTokenEl(seatIndex) {
+  const viewer = state.room?.viewerSeat ?? 0;
+  const pos = seatToScreenPos(seatIndex, viewer);
+  return document.querySelector(`.seat.screen-pos-${pos} .seat-token`);
+}
+
+function playEmote({ from, target, kind }) {
+  const targetEl = seatTokenEl(target);
+  if (!targetEl) return;
+  const tr = targetEl.getBoundingClientRect();
+  const endX = tr.left + tr.width / 2;
+  const endY = tr.top + tr.height / 2;
+  let startX = window.innerWidth / 2;
+  let startY = window.innerHeight - 60;
+  if (from != null) {
+    const fromEl = seatTokenEl(from);
+    if (fromEl) { const fr = fromEl.getBoundingClientRect(); startX = fr.left + fr.width / 2; startY = fr.top + fr.height / 2; }
+  }
+  const proj = document.createElement("div");
+  proj.className = "emote-proj";
+  proj.textContent = kind === "flower" ? "🌹" : "🍅";
+  proj.style.left = `${startX}px`;
+  proj.style.top = `${startY}px`;
+  document.body.appendChild(proj);
+  const dx = endX - startX, dy = endY - startY;
+  const anim = proj.animate([
+    { transform: "translate(-50%,-50%) translate(0,0) scale(.5) rotate(0deg)", opacity: 1, offset: 0 },
+    { transform: `translate(-50%,-50%) translate(${dx * 0.5}px, ${dy * 0.5 - 90}px) scale(1.15) rotate(200deg)`, opacity: 1, offset: 0.6 },
+    { transform: `translate(-50%,-50%) translate(${dx}px, ${dy}px) scale(1) rotate(340deg)`, opacity: 1, offset: 1 }
+  ], { duration: 620, easing: "cubic-bezier(.4,.1,.5,1)" });
+  anim.onfinish = () => {
+    proj.remove();
+    emoteBurst(endX, endY, kind);
+    targetEl.animate(
+      kind === "tomato"
+        ? [{ transform: "translate(0,0)" }, { transform: "translate(-4px,2px)" }, { transform: "translate(4px,-2px)" }, { transform: "translate(-3px,1px)" }, { transform: "translate(0,0)" }]
+        : [{ transform: "scale(1)" }, { transform: "scale(1.14)" }, { transform: "scale(1)" }],
+      { duration: 440, easing: "ease-out" });
+  };
+}
+
+function emoteBurst(x, y, kind) {
+  const particles = kind === "flower" ? ["🌸", "🌷", "💕", "✨", "🌹"] : ["🍅", "💥", "🍅", "💦"];
+  const n = 8;
+  for (let i = 0; i < n; i++) {
+    const p = document.createElement("div");
+    p.className = "emote-particle";
+    p.textContent = particles[i % particles.length];
+    p.style.left = `${x}px`;
+    p.style.top = `${y}px`;
+    document.body.appendChild(p);
+    const ang = (Math.PI * 2 * i) / n + Math.random() * 0.5;
+    const dist = 30 + Math.random() * 42;
+    p.animate([
+      { transform: "translate(-50%,-50%) translate(0,0) scale(1)", opacity: 1 },
+      { transform: `translate(-50%,-50%) translate(${Math.cos(ang) * dist}px, ${Math.sin(ang) * dist + 20}px) scale(.4)`, opacity: 0 }
+    ], { duration: 700 + Math.random() * 220, easing: "cubic-bezier(.2,.6,.4,1)" }).onfinish = () => p.remove();
+  }
+  const splat = document.createElement("div");
+  splat.className = `emote-splat ${kind}`;
+  splat.style.left = `${x}px`;
+  splat.style.top = `${y}px`;
+  document.body.appendChild(splat);
+  splat.animate([
+    { transform: "translate(-50%,-50%) scale(.2)", opacity: .85 },
+    { transform: "translate(-50%,-50%) scale(1.35)", opacity: 0 }
+  ], { duration: 600, easing: "ease-out" }).onfinish = () => splat.remove();
 }
 
 /* ─── Seats + Played Cards ───────────────────────────────── */
@@ -266,7 +362,7 @@ function renderSeats(room) {
       ${playedAbove ? playedDiv : ""}
       <div class="seat-token-wrap">
         ${roleBadge}
-        <div class="seat-token ${seat.avatar ? "has-avatar" : ""}">${seat.avatar || initial}</div>
+        <div class="seat-token ${seat.avatar ? "has-avatar" : ""} ${seat.playerId && !seat.isYou ? "emote-target" : ""}"${seat.playerId && !seat.isYou ? ` data-emote="${seat.index}"` : ""}>${seat.avatar || initial}</div>
         ${personalScore}
       </div>
       <div class="seat-name">${seat.nickname || `座位${seat.index + 1}`}</div>
@@ -276,6 +372,9 @@ function renderSeats(room) {
       ${!playedAbove ? playedDiv : ""}
     </div>`;
   }).join("");
+
+  seatsEl.querySelectorAll("[data-emote]").forEach(el =>
+    el.addEventListener("click", (e) => { e.stopPropagation(); openEmoteMenu(Number(el.dataset.emote), el); }));
 
   seatsEl.querySelectorAll("[data-sit]").forEach(btn =>
     btn.addEventListener("click", () => send("sit", { seatIndex: Number(btn.dataset.sit), nickname: state.nickname, avatar: state.avatar })));

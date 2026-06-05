@@ -961,6 +961,64 @@ body.desktop .seat-token.has-avatar { font-size: 34px; }
 body.desktop .spectator-title { font-size: 12px; }
 body.desktop .spectator-name { font-size: 12px; }
 
+/* ─── Emotes (tomato / flower) ─────────────────────────────── */
+.seat-token.emote-target { cursor: pointer; }
+.emote-proj {
+  position: fixed;
+  z-index: 9999;
+  font-size: 34px;
+  pointer-events: none;
+  will-change: transform;
+  filter: drop-shadow(0 4px 6px rgba(0,0,0,.45));
+}
+.emote-particle {
+  position: fixed;
+  z-index: 9998;
+  font-size: 20px;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+.emote-splat {
+  position: fixed;
+  z-index: 9997;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.emote-splat.tomato { background: radial-gradient(circle, rgba(220,40,30,.7) 0%, rgba(180,20,20,.22) 58%, transparent 70%); }
+.emote-splat.flower { background: radial-gradient(circle, rgba(255,120,180,.6) 0%, rgba(255,205,90,.22) 58%, transparent 70%); }
+
+.emote-menu {
+  position: fixed;
+  z-index: 9999;
+  transform: translate(-50%, -100%);
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: rgba(18,28,20,.96);
+  border: 1px solid rgba(200,144,45,.5);
+  border-radius: 12px;
+  box-shadow: 0 6px 22px rgba(0,0,0,.55);
+  animation: bidPop .25s ease-out;
+}
+.emote-btn {
+  font-size: 24px;
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(200,144,45,.3);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform .1s, background .1s;
+}
+.emote-btn:hover { background: rgba(200,144,45,.25); transform: translateY(-2px); }
+
 /* ─── Friend announcement banner (center of table) ─────────── */
 .friend-banner {
   display: none;
@@ -977,3 +1035,47 @@ body.desktop .spectator-name { font-size: 12px; }
   animation: bidPop .45s cubic-bezier(.34,1.56,.64,1);
 }
 body.desktop .friend-banner { font-size: 20px; padding: 8px 22px; }
+
+/* ─── Desktop-only fancy flourishes (mobile stays plain) ───── */
+body.desktop .table-felt {
+  box-shadow: inset 0 0 220px rgba(0,0,0,.55), inset 0 0 70px rgba(0,0,0,.35);
+}
+/* Hand cards lift & glow on hover */
+body.desktop .card { transition: transform .16s cubic-bezier(.34,1.56,.64,1), box-shadow .16s; }
+body.desktop .card:hover {
+  transform: translateY(-12px) !important;
+  box-shadow: var(--shadow-card-hover), 0 0 0 1px rgba(200,144,45,.5);
+  z-index: 60 !important;
+}
+/* Richer seat tokens */
+body.desktop .seat-token {
+  background: radial-gradient(circle at 35% 28%, #45564a 0%, #1b2620 75%);
+  box-shadow: 0 5px 16px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.14);
+}
+body.desktop .seat-token.emote-target { transition: box-shadow .15s, transform .15s; }
+body.desktop .seat-token.emote-target:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 0 3px var(--gold-dim), 0 0 16px rgba(200,144,45,.55);
+}
+/* Shimmering gold title */
+body.desktop .game-title {
+  background: linear-gradient(90deg, var(--gold) 0%, #fff3c4 50%, var(--gold) 100%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: titleShimmer 4s linear infinite;
+}
+@keyframes titleShimmer {
+  0%   { background-position: 0% center; }
+  100% { background-position: 200% center; }
+}
+/* Played cards get a soft glow on desktop */
+body.desktop .played-card {
+  box-shadow: 0 6px 16px rgba(0,0,0,.5), 0 0 0 1px rgba(200,144,45,.25), inset 0 1px 0 rgba(255,255,255,.7);
+}
+/* Emote visuals scale up on desktop */
+body.desktop .emote-proj { font-size: 46px; }
+body.desktop .emote-particle { font-size: 26px; }
+body.desktop .emote-splat { width: 96px; height: 96px; }
+body.desktop .emote-btn { font-size: 30px; width: 52px; height: 52px; }
