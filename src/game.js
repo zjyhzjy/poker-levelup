@@ -113,6 +113,8 @@ export function addAiPlayer(room, seatIndex, aiLevel = "medium") {
   seat.connected = true;
   seat.isAi = true;
   seat.aiLevel = level;
+  seat.aiRngState = (Math.random() * 2 ** 31) | 0; // per-seat randomness
+  seat.aiBias = Math.random() - 0.5;               // stable personality (-0.5..0.5)
 }
 
 export function leaveSeat(room, playerId) {
@@ -510,12 +512,41 @@ export function runAiStep(room) {
 // medium : 稳健；会用最小牌抢墩、给已确认队友喂分、按长副牌发牌、按手牌强度抢庄。
 // hard   : 在 medium 基础上会算牌（找绝对大牌/拔主）、风险意识、抢庄更积极。
 export const AI_PROFILES = {
-  easy:   { contest: false, feed: false, lead: "low",     bidRatio: 0.95, riskAware: false },
-  medium: { contest: true,  feed: true,  lead: "develop", bidRatio: 0.52, riskAware: false },
-  hard:   { contest: true,  feed: true,  lead: "pull",    bidRatio: 0.42, riskAware: true  }
+  easy:   { contest: false, feed: false, lead: "low",     bidRatio: 0.95, riskAware: false, temp: 1.1 },
+  medium: { contest: true,  feed: true,  lead: "develop", bidRatio: 0.52, riskAware: false, temp: 0.5 },
+  hard:   { contest: true,  feed: true,  lead: "pull",    bidRatio: 0.42, riskAware: true,  temp: 0.2 }
 };
 export function aiProfile(seat) {
   return AI_PROFILES[seat?.aiLevel] || AI_PROFILES.medium;
+}
+
+// Per-seat PRNG (advanced each draw) so same-level AIs don't play identically.
+function aiRandom(seat) {
+  let a = (seat.aiRngState ?? 0x9e3779b9) | 0;
+  a = (a + 0x6D2B79F5) | 0;
+  seat.aiRngState = a;
+  let t = Math.imul(a ^ (a >>> 15), 1 | a);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+// Pick among scored candidates by softmax sampling. Low temperature ≈ argmax
+// (hard, decisive); higher temperature spreads the choice over the *reasonable*
+// options (easy, looser). Bad moves (point leaks, non-boss leads) score far lower,
+// so their weight is ~0 — variety never becomes "瞎出". A small per-seat bias gives
+// each AI a consistent personality.
+function chooseWeighted(cands, scores, seat, profile) {
+  if (cands.length <= 1) return cands[0] ?? null;
+  let best = 0;
+  for (let i = 1; i < scores.length; i += 1) if (scores[i] > scores[best]) best = i;
+  const T = (profile.temp ?? 0.4) * (1 + 0.3 * (seat.aiBias ?? 0));
+  if (T <= 0.02) return cands[best];
+  const weights = scores.map((s) => Math.exp((s - scores[best]) / T));
+  let total = 0;
+  for (const w of weights) total += w;
+  let r = aiRandom(seat) * total;
+  for (let i = 0; i < cands.length; i += 1) { r -= weights[i]; if (r <= 0) return cands[i]; }
+  return cands[best];
 }
 
 // Top-level entry: always returns a LEGAL play. The heuristic only *prefers*;
@@ -549,7 +580,32 @@ function safeAiPlay(room, seat, leaderCards) {
   }
   const legal = findAnyLegalCombination(room, seat, leaderCards, length);
   if (legal) return legal;
-  return seat.hand.slice(0, length);
+  return legalFollow(room, seat, leaderCards);
+}
+
+// A guaranteed-legal follow, used when the bounded search above gives up (e.g.
+// following a long tractor). If short of the led suit, play all of it plus the
+// lowest fillers (the shape check is skipped when you can't fully follow). If you
+// DO hold enough led-suit cards, a compliant play exists using only those — try
+// the cheap shapes, then exhaustively search that small pool.
+function legalFollow(room, seat, leaderCards) {
+  const length = leaderCards.length;
+  const ledSuit = playSuit(leaderCards[0], room);
+  const ledAsc = seat.hand.filter((c) => playSuit(c, room) === ledSuit)
+    .sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room));
+  if (ledAsc.length < length) {
+    const fillers = seat.hand.filter((c) => playSuit(c, room) !== ledSuit)
+      .sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room));
+    return [...ledAsc, ...fillers.slice(0, length - ledAsc.length)];
+  }
+  const ledDesc = [...ledAsc].reverse();
+  const tryCands = [ledAsc.slice(0, length), ...simpleGroupedCandidates(ledAsc, length)];
+  for (const t of findHandTractors(ledDesc, room)) if (t.length === length) tryCands.push(t);
+  for (const c of tryCands) {
+    if (c.length === length && validatePlay(room, seat, c, leaderCards).ok) return c;
+  }
+  const within = findAnyLegalCombination(room, seat, leaderCards, length, ledAsc);
+  return within || ledAsc.slice(0, length);
 }
 
 // Relationship of `otherIndex` to `selfIndex` from self's knowledge.
@@ -570,11 +626,17 @@ function trickStanding(room, seat) {
   const trick = room.currentTrick;
   if (!trick.length) return null;
   const winnerSeat = determineTrickWinner(room, trick);
+  const ledSuit = playSuit(trick[0].cards[0], room);
+  const winPlay = trick.find((p) => p.seat === winnerSeat);
+  // A ruff (trump played on a side-suit lead) is hard to overtake, so feeding the
+  // partner points there is safe even when more players are still to act.
+  const winnerRuffed = ledSuit !== "trump" && winPlay.cards.every((c) => playSuit(c, room) === "trump");
   return {
     winnerSeat,
     rel: aiRelation(room, seat.index, winnerSeat),
     points: trick.reduce((sum, play) => sum + play.points, 0),
-    isLast: trick.length === SEATS - 1
+    isLast: trick.length === SEATS - 1,
+    winnerRuffed
   };
 }
 
@@ -613,6 +675,7 @@ function followCandidates(room, seat, leaderCards) {
   }
   const legal = findAnyLegalCombination(room, seat, leaderCards, length);
   if (legal) raw.push(legal);
+  raw.push(legalFollow(room, seat, leaderCards)); // guaranteed-legal backstop
 
   const seen = new Set();
   const out = [];
@@ -632,56 +695,93 @@ function scoreFollow(room, seat, cards, stand, profile) {
   const cost = cards.reduce((sum, c) => sum + spendCost(c, room), 0);
   const pts = cards.reduce((sum, c) => sum + cardScore(c), 0);
   let u = -cost * 0.5;
+
+  // Partner already holds the trick → never overtake your own teammate. Feed points
+  // when the win is safe, otherwise just play low and keep your cards.
+  if (stand.rel === "ally") {
+    const secure = stand.isLast || stand.winnerRuffed;
+    if (profile.feed && secure) u += pts * 2.5;
+    else u -= pts * 0.2;
+    return u;
+  }
+
+  // An enemy / unknown holds the trick.
   if (beats) {
     if (!profile.contest) { u -= 100; return u; } // easy never goes out of its way to win
-    let reward = stand.points * 2 + 1;             // points captured + tiny lead bonus
+    let reward = (stand.points * 2 + 1) * (1 + 0.2 * (seat.aiBias ?? 0)); // +personality
     if (profile.riskAware && !stand.isLast) {       // win isn't secured if others still act
       reward *= 0.5;
       u -= pts * 1.0;                               // and my own points could be overtaken
+      if (allyBehind(room, seat)) reward *= 0.4;    // a teammate can still take it — duck
     }
     u += reward;
-  } else if (stand.rel === "ally") {
-    if (profile.feed && stand.isLast) u += pts * 2.5; // safely feed points to a known teammate
-    else u -= pts * 0.2;
   } else {
     u -= pts * 3.5;                                 // never gift points to enemies/unknowns
   }
   return u;
 }
 
+// Is a known teammate still due to play after me in the current trick?
+function allyBehind(room, seat) {
+  const remaining = SEATS - room.currentTrick.length - 1;
+  let s = seat.index;
+  for (let k = 0; k < remaining; k += 1) {
+    s = nextSeat(s);
+    if (aiRelation(room, seat.index, s) === "ally") return true;
+  }
+  return false;
+}
+
 function chooseFollow(room, seat, leaderCards, profile) {
   const cands = followCandidates(room, seat, leaderCards);
   if (!cands.length) return null;
   const stand = trickStanding(room, seat);
-  let best = null;
-  let bestU = -Infinity;
-  for (const c of cands) {
-    const u = scoreFollow(room, seat, c, stand, profile);
-    if (u > bestU) { bestU = u; best = c; }
-  }
-  return best;
+  const scores = cands.map((c) => scoreFollow(room, seat, c, stand, profile));
+  return chooseWeighted(cands, scores, seat, profile);
 }
 
-// Leading. easy dumps the lowest card; medium develops the longest side suit
-// while preserving pairs/tractors/trump; hard also pulls trump from strength.
+// Leading. easy dumps the lowest card. medium/hard build candidate leads — the
+// safe low probe plus every *boss* group they hold (pairs/tractors/trump/point
+// winners the opponents can no longer out-group) — and lead the best-scoring one.
+// Because only boss combos are offered alongside the probe, a multi-card or high
+// lead is always a winner (it can't be out-grouped); side combos accept the small
+// ruff risk a human also accepts when cashing winners.
 function chooseLead(room, seat, profile) {
   const hand = seat.hand;
   if (profile.lead === "low") return [lowestCard(hand, room)];
 
-  const sortedDesc = [...hand].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
-  const singletonIds = new Set(groupCards(sortedDesc).filter((g) => g.length === 1).map((g) => g[0].id));
+  const seen = seenCounts(room, seat);
+  const cands = leadCandidates(room, seat).filter((c) => validatePlay(room, seat, c, null).ok);
+  if (!cands.length) return [lowestCard(hand, room)];
+  const scores = cands.map((c) => scoreLead(room, seat, c, profile, seen));
+  return chooseWeighted(cands, scores, seat, profile);
+}
 
-  // hard: when dealer and trump-dominant, pull a boss trump to strip opponents.
-  if (profile.lead === "pull" && seat.index === room.dealerSeat) {
-    const trumps = hand.filter((c) => playSuit(c, room) === "trump")
-      .sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
-    if (trumps.length >= 10 && trumps[0] && isTrumpBoss(room, seat, trumps[0])) return [trumps[0]];
+function leadCandidates(room, seat) {
+  const sortedDesc = [...seat.hand].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  const groups = groupCards(sortedDesc);
+  const cands = [developProbe(room, seat, groups)];
+  for (const g of groups) {
+    if (g.length >= 3) cands.push(g.slice(0, 3)); // triple
+    if (g.length >= 2) cands.push(g.slice(0, 2)); // pair
+    cands.push([g[0]]);                            // single (boss winners are cashed)
   }
+  for (const t of findHandTractors(sortedDesc, room)) {
+    // Skip TRUMP tractors: the engine's two tractor checks (forcedRequirement's
+    // findTractors vs analyzeShape's isConsecutiveInRules) disagree on joker/level
+    // trump runs, which can leave a follower with no legal play. Side-suit tractors
+    // are safe (both checks agree there). Trump is still pulled via pairs/singles.
+    if (t.every((c) => playSuit(c, room) === "trump")) continue;
+    cands.push(t);
+  }
+  return cands;
+}
 
-  // Lead the lowest non-point singleton from the longest side suit (keep trump
-  // and grouped cards back). Falls back to any low side card, then to baseline.
+// The safe default: lowest non-point singleton from the longest side suit.
+function developProbe(room, seat, groups) {
+  const singletonIds = new Set(groups.filter((g) => g.length === 1).map((g) => g[0].id));
   const bySuit = {};
-  for (const c of hand) {
+  for (const c of seat.hand) {
     if (playSuit(c, room) === "trump") continue;
     (bySuit[c.suit] ||= []).push(c);
   }
@@ -692,37 +792,142 @@ function chooseLead(room, seat, profile) {
       .sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room))[0];
     if (pick) return [pick];
   }
-  const anyLowSide = Object.values(bySuit).flat()
+  const anyLow = Object.values(bySuit).flat()
     .filter((c) => cardScore(c) === 0)
     .sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room))[0];
-  if (anyLowSide) return [anyLowSide];
-  return [lowestCard(hand, room)];
+  return anyLow ? [anyLow] : [lowestCard(seat.hand, room)];
 }
 
-// Card-counting: is `card` the highest remaining trump (no stronger copy can be
-// in an opponent's hand)? Counts copies visible in my hand + everything played.
-function isTrumpBoss(room, seat, card) {
-  const myVal = cardOrderValue(card, room);
-  const visible = new Map();
-  const key = (c) => (c.rank === "bigJoker" || c.rank === "smallJoker") ? c.rank : `${c.rank}|${c.suit}`;
-  const bump = (c) => { if (playSuit(c, room) === "trump") visible.set(key(c), (visible.get(key(c)) || 0) + 1); };
+function scoreLead(room, seat, cards, profile, seen) {
+  const head = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room))[0];
+  const isTrump = playSuit(head, room) === "trump";
+  const pts = cards.reduce((s, c) => s + cardScore(c), 0);
+  const len = cards.length;
+  const boss = isComboBoss(room, seat, cards, seen);
+
+  // Non-point low single = the probe: pick it only when nothing is worth cashing.
+  if (len === 1 && !boss && cardScore(head) === 0) return 0.5 - cardOrderValue(head, room) * 0.01;
+  // A non-boss high card / combo can be beaten or ruffed — don't throw it away.
+  if (!boss) return -5 - cardOrderValue(head, room) * 0.01 - len;
+
+  // Boss combo: cash a guaranteed winner — bank points, clear cards, apply pressure.
+  let u = 3 + pts * 3 + len * 1.5;
+  if (isTrump) {
+    if (seat.index === room.dealerSeat) u += 4 + len; // dealer pulls trump from strength
+    else u -= 2;                                       // attackers usually hold trump back
+  } else if (len === 1 && pts === 0) {
+    // cashing a bare side ace risks a ruff. hard cashes it only when no enemy is
+    // known to be void in that suit (and the suit is still fairly full); medium
+    // leaves bare side singles alone.
+    const ruffable = enemyVoidIn(room, seat, head.suit) || suitPlayed(room, head.suit) > 8;
+    if (!profile.riskAware || ruffable) u -= 4;
+  }
+  return u;
+}
+
+// Has `seatIndex` shown void in `suit` (a side suit) — i.e. failed to follow it
+// in a past trick? Used by hard to judge ruff risk when cashing winners.
+function isVoidIn(room, seatIndex, suit) {
+  for (const t of room.finishedTricks) {
+    if (playSuit(t.plays[0].cards[0], room) !== suit) continue;
+    const play = t.plays.find((p) => p.seat === seatIndex);
+    if (play && !play.cards.some((c) => playSuit(c, room) === suit)) return true;
+  }
+  return false;
+}
+
+function enemyVoidIn(room, seat, suit) {
+  for (const other of room.seats) {
+    if (other.index === seat.index) continue;
+    if (aiRelation(room, seat.index, other.index) === "ally") continue;
+    if (isVoidIn(room, other.index, suit)) return true;
+  }
+  return false;
+}
+
+// ── card-counting helpers for "boss" detection ──────────────
+// A group (single/pair/triple/tractor) is "boss" when no opponent can still
+// assemble a higher group of the same width: for every stronger card type the
+// copies not yet seen (3 − seen) are fewer than the group's width.
+function cardKey(c) { return (c.rank === "bigJoker" || c.rank === "smallJoker") ? c.rank : `${c.rank}|${c.suit}`; }
+
+function seenCounts(room, seat) {
+  const m = new Map();
+  const bump = (c) => m.set(cardKey(c), (m.get(cardKey(c)) || 0) + 1);
   for (const c of seat.hand) bump(c);
   for (const t of room.finishedTricks) for (const p of t.plays) for (const c of p.cards) bump(c);
   for (const p of room.currentTrick) for (const c of p.cards) bump(c);
+  return m;
+}
 
-  const stronger = [];
-  if (myVal < 1000) stronger.push("bigJoker");
-  if (myVal < 990) stronger.push("smallJoker");
-  for (const s of SUITS) {
-    if (cardOrderValue({ rank: room.levelRank, suit: s }, room) > myVal) stronger.push(`${room.levelRank}|${s}`);
-  }
-  if (!room.noTrump && room.trumpSuit) {
-    for (const r of RANKS) {
-      if (r === room.levelRank) continue;
-      if (cardOrderValue({ rank: r, suit: room.trumpSuit }, room) > myVal) stronger.push(`${r}|${room.trumpSuit}`);
+function suitPlayed(room, suit) {
+  let n = 0;
+  for (const t of room.finishedTricks) for (const p of t.plays) for (const c of p.cards) if (c.suit === suit) n += 1;
+  return n;
+}
+
+// Card types that out-rank `head` and could beat its group if grouped together.
+function strongerTypes(room, head) {
+  const headVal = cardOrderValue(head, room);
+  const out = [];
+  if (playSuit(head, room) === "trump") {
+    if (headVal < 1000) out.push("bigJoker");
+    if (headVal < 990) out.push("smallJoker");
+    for (const s of SUITS) if (cardOrderValue({ rank: room.levelRank, suit: s }, room) > headVal) out.push(`${room.levelRank}|${s}`);
+    if (!room.noTrump && room.trumpSuit) {
+      for (const r of RANKS) {
+        if (r === room.levelRank) continue;
+        if (cardOrderValue({ rank: r, suit: room.trumpSuit }, room) > headVal) out.push(`${r}|${room.trumpSuit}`);
+      }
+    }
+  } else {
+    for (const r of RANKS) { // only higher cards of the SAME side suit out-group it
+      if (r === room.levelRank || r === head.rank) continue;
+      const c = { rank: r, suit: head.suit };
+      if (playSuit(c, room) !== "trump" && cardOrderValue(c, room) > headVal) out.push(`${r}|${head.suit}`);
     }
   }
-  return stronger.every((k) => (visible.get(k) || 0) >= 3);
+  return out;
+}
+
+function isGroupBoss(room, head, unit, seen) {
+  for (const k of strongerTypes(room, head)) {
+    if (3 - (seen.get(k) || 0) >= unit) return false; // an opponent could still out-group it
+  }
+  return true;
+}
+
+function isComboBoss(room, seat, cards, seen) {
+  const shape = analyzeShape(cards, room);
+  if (shape.type === "throw" || shape.type === "empty") return false;
+  const groups = groupCards([...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)));
+  const unit = shape.type === "tractor" ? shape.unit : groups[0].length;
+  return isGroupBoss(room, groups[0][0], unit, seen);
+}
+
+// Find tractors held in `sortedDesc` (consecutive pairs/triples by the engine's
+// own ordering), e.g. ♣10♣10♣J♣J → one 4-card tractor.
+function findHandTractors(sortedDesc, room) {
+  const pairGroups = groupCards(sortedDesc).filter((g) => g.length >= 2);
+  const out = [];
+  let i = 0;
+  while (i < pairGroups.length) {
+    let j = i;
+    while (j + 1 < pairGroups.length) {
+      const a = pairGroups[j][0];
+      const b = pairGroups[j + 1][0];
+      const suit = playSuit(a, room);
+      if (playSuit(b, room) === suit && isConsecutiveInRules(a, b, suit, room)) j += 1;
+      else break;
+    }
+    if (j > i) {
+      const run = pairGroups.slice(i, j + 1);
+      const unit = Math.min(...run.map((g) => g.length));
+      out.push(run.flatMap((g) => g.slice(0, unit)));
+    }
+    i = j + 1;
+  }
+  return out;
 }
 
 // Derive team scores from each seat's captured trick points plus failed-throw
@@ -1528,6 +1733,11 @@ function chooseAiBury(room, dealer) {
 // of the dealer accidentally becoming its own friend (which forced 4打1).
 export function chooseAiFriendCard(room, dealer) {
   const level = room.levelRank;
+  const isTrump = (c) => playSuit(c, room) === "trump";
+  // Prefer recruiting a partner in the dealer's SHORTEST side suit (the dealer's
+  // weak spot, so the friend complements it).
+  const suitLen = {};
+  for (const c of dealer.hand) if (!isTrump(c)) suitLen[c.suit] = (suitLen[c.suit] || 0) + 1;
   const RANK_PREF = ["A", "K", "10", "Q", "J", "9", "8", "7", "6", "5"];
   let best = null;
   for (const rank of RANK_PREF) {
@@ -1537,7 +1747,7 @@ export function chooseAiFriendCard(room, dealer) {
       const ordinal = held + 1;
       if (ordinal > 3) continue; // dealer holds all 3 copies — nobody else can have it
       const pts = (rank === "K" || rank === "10" || rank === "5") ? 1 : 0;
-      const score = (held === 0 ? 100 : 0) + rankNumber(rank) + pts * 5 - held * 10;
+      const score = (held === 0 ? 60 : 0) + rankNumber(rank) + pts * 5 - (suitLen[suit] || 0) * 3 - held * 10;
       if (!best || score > best.score) best = { ordinal, rank, suit, score };
     }
   }
@@ -1573,18 +1783,24 @@ export function decideAiBid(room, seat) {
   const profile = aiProfile(seat);
   const hand = seat.hand;
   const level = seat.level;
-  const bySuit = {};
-  for (const c of hand) if (c.rank === level && c.suit !== "joker") (bySuit[c.suit] ||= []).push(c);
+  const jokers = hand.filter((c) => c.suit === "joker").length;
+  // Candidate bid suits = suits where I hold a level card. Pick the one that makes
+  // the strongest trump (most jokers + level cards + that suit), not just the suit
+  // with the most level cards.
+  const levelBySuit = {};
+  for (const c of hand) if (c.rank === level && c.suit !== "joker") (levelBySuit[c.suit] ||= []).push(c);
   let best = null;
-  for (const s of Object.keys(bySuit)) {
-    const strength = Math.min(bySuit[s].length, 3);
-    if (!best || strength > best.strength) best = { cards: bySuit[s].slice(0, strength), strength };
+  for (const s of Object.keys(levelBySuit)) {
+    const strength = Math.min(levelBySuit[s].length, 3);
+    const trumpCount = hand.filter((c) => c.suit === "joker" || c.rank === level || c.suit === s).length;
+    if (!best || trumpCount > best.trumpCount) best = { suit: s, strength, trumpCount, cards: levelBySuit[s].slice(0, strength) };
   }
   if (!best) return null; // no level card → nothing legal to bid with
 
-  const trumpSuit = best.cards[0].suit;
-  const trumpCount = hand.filter((c) => c.suit === "joker" || c.rank === level || c.suit === trumpSuit).length;
-  if (trumpCount / hand.length < profile.bidRatio) return null; // hand not dealer-worthy
+  // Worth being dealer if trump-rich, or if I hold strong top control (≥2 jokers).
+  const ratio = best.trumpCount / hand.length;
+  const worthy = ratio >= profile.bidRatio || (jokers >= 2 && best.trumpCount >= hand.length * 0.4);
+  if (!worthy) return null;
   if (room.currentBid && best.strength <= room.currentBid.strength) return null; // can't beat
   return { cardIds: best.cards.map((c) => c.id), strength: best.strength };
 }
@@ -1624,11 +1840,13 @@ function simpleGroupedCandidates(hand, length) {
   return out;
 }
 
-function findAnyLegalCombination(room, seat, leaderCards, length) {
-  const sorted = [...seat.hand].sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room));
+function findAnyLegalCombination(room, seat, leaderCards, length, pool = seat.hand) {
+  const sorted = [...pool].sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room));
   const combo = [];
   let checked = 0;
-  const limit = 12000;
+  // Large enough to exhaust a single suit's follows (e.g. C(20,6)≈39k) when called
+  // on the small led-suit pool by legalFollow.
+  const limit = 80000;
   function search(start) {
     if (checked > limit) return null;
     if (combo.length === length) {
