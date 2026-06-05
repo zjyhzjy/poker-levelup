@@ -1223,18 +1223,31 @@ function getNextImmediateTrumpValue(currentValue, room) {
 
 export function validatePlay(room, seat, cards, leaderCards) {
   // 三条锁定：若本局某副三条曾在“可不拆”的选择时刻被保留（没拆），则之后
-  // 不能再把它拆成对子出。领牌永不强制，故直接拒绝；跟牌时只有“别无他法”
-  // （该门可出的牌全部属于这副被锁三条）时才放行，避免死锁。
+  // 不能再把它拆成对子出。领牌永不强制，故直接拒绝；跟牌时只在“竞争性场合”
+  // （同门跟牌、或全主牌杀副牌）判违规——普通垫牌里两张同点牌不构成“拆对”。
+  // 同时凡是“别无他法”（避开锁定对就凑不齐张数）一律放行，保证任何局面
+  // 都存在至少一种合法出牌，杜绝规则死锁。
   const lockedKey = lockedPairViolation(seat, cards, room);
   if (lockedKey) {
     if (!leaderCards) {
       return { ok: false, reason: "这副三条已锁定，不能拆成对子出（可整体出三条或拆成单张）" };
     }
-    const ledSuitForLock = playSuit(leaderCards[0], room);
-    const availForLock = seat.hand.filter((c) => playSuit(c, room) === ledSuitForLock);
     const [lr, ls] = lockedKey.split("|");
-    const forced = availForLock.length > 0 && availForLock.every((c) => c.rank === lr && c.suit === ls);
-    if (!forced) {
+    const ledSuitForLock = playSuit(leaderCards[0], room);
+    const lockedSuit = playSuit({ rank: lr, suit: ls }, room);
+    const availForLock = seat.hand.filter((c) => playSuit(c, room) === ledSuitForLock);
+    const lockedInHand = seat.hand.filter((c) => c.rank === lr && c.suit === ls).length;
+    // 竞争性场合：锁定对属于领出花色（同门跟牌），或副牌领出时整手全为主牌（杀牌）。
+    const competitive = lockedSuit === ledSuitForLock
+      || (ledSuitForLock !== "trump" && lockedSuit === "trump" && cards.every((c) => playSuit(c, room) === "trump"));
+    // 别无他法（任一成立即放行）：
+    //  - 手里非锁定牌不足以凑齐张数；
+    //  - 锁定对属于领出花色且该门牌被迫全部打出；
+    //  - 该门可出的牌全部属于这副被锁三条。
+    const forced = (seat.hand.length - lockedInHand) < leaderCards.length
+      || (lockedSuit === ledSuitForLock && availForLock.length <= leaderCards.length)
+      || (availForLock.length > 0 && availForLock.every((c) => c.rank === lr && c.suit === ls));
+    if (competitive && !forced) {
       return { ok: false, reason: "这副三条已锁定，不能拆成对子出（请改出单张）" };
     }
   }
@@ -1270,7 +1283,7 @@ export function validatePlay(room, seat, cards, leaderCards) {
   }
 
   if (following.length === cards.length) {
-    const wanted = forcedRequirement(leaderShape, available, room);
+    const wanted = forcedRequirement(leaderShape, available, room, seat.lockedTriples || []);
     const actual = analyzeShape(cards, room);
     const followingSameSuit = cards.filter((c) => playSuit(c, room) === ledSuit);
     if (!shapeSatisfies(actual, wanted, followingSameSuit, available, room)) {
@@ -1292,7 +1305,11 @@ function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available)
   let mustSingles = 0;  // number of singles required
 
   const availGroups = groupCards([...available].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)));
-  const availPairs   = availGroups.filter(g => g.length >= 2).length;
+  // 锁定的三条不能拆成对子出，不计入“可用对子”（计入会与锁定规则冲突造成死锁）；
+  // 整组三张打出不算拆对，所以三条数照常统计。
+  const lockedSet = new Set(seat.lockedTriples || []);
+  const isLockedGroup = (g) => lockedSet.has(`${g[0].rank}|${g[0].suit}`);
+  const availPairs   = availGroups.filter(g => g.length >= 2 && !isLockedGroup(g)).length;
   const availTriples = availGroups.filter(g => g.length >= 3).length;
 
   for (const lg of leaderGroups) {
@@ -1682,11 +1699,22 @@ function recordTripleLockDecision(room, seat, cards, leaderCards) {
   }
 }
 
-function forcedRequirement(leaderShape, available, room) {
+function forcedRequirement(leaderShape, available, room, lockedTriples = []) {
+  // 被锁定的三条不能再拆成对子出，因此在计算“必须跟对”的强制要求时，
+  // 锁定组不计入可用对子——否则会与锁定规则互相矛盾，造成无牌可出的死锁
+  // （例如锁定三条只剩两张、又恰好是该门唯一的天然对子时）。
+  const lockedSet = new Set(lockedTriples);
+  const isLockedGroup = (g) => lockedSet.has(`${g[0].rank}|${g[0].suit}`);
+
   if (leaderShape.type === "tractor") {
-    const tractors = findTractors(available, room, leaderShape.count * leaderShape.unit);
+    // 对子拖拉机里锁定点数恰好用 2 张（= 拆对，违规），故检测可跟的拖拉机时
+    // 把锁定牌整体剔除；三张单位的拖拉机用整组三张，不触发拆对，无需剔除。
+    const tractorPool = leaderShape.unit === 2
+      ? available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`))
+      : available;
+    const tractors = findTractors(tractorPool, room, leaderShape.count * leaderShape.unit);
     if (tractors.length) return { type: "tractor", unit: leaderShape.unit, count: leaderShape.count };
-    const pairsAvail = groupCards(available).filter((g) => g.length >= leaderShape.unit);
+    const pairsAvail = groupCards(available).filter((g) => g.length >= leaderShape.unit && !isLockedGroup(g));
     const pairCount = Math.min(leaderShape.count, pairsAvail.length);
     if (pairCount > 0) return { type: "pairs", unit: leaderShape.unit, count: pairCount };
     return { type: "any" };
@@ -1695,7 +1723,7 @@ function forcedRequirement(leaderShape, available, room) {
   if (leaderShape.type === "triple") {
     const tripleGroups = groupCards(available).filter((g) => g.length >= 3);
     if (tripleGroups.length >= 1) return { type: "triple", count: 1 };
-    const pairGroups = groupCards(available).filter((g) => g.length >= 2);
+    const pairGroups = groupCards(available).filter((g) => g.length >= 2 && !isLockedGroup(g));
     if (pairGroups.length >= 1) return { type: "pair", count: 1 };
     return { type: "any" };
   }
@@ -1703,7 +1731,7 @@ function forcedRequirement(leaderShape, available, room) {
   if (leaderShape.type === "pair") {
     // 只有存在“天然对子”（恰好成对）时才强制跟对子；
     // 若只有三条而无对子，可选择不拆三张（规则允许）。
-    const hasNaturalPair = groupCards(available).some((g) => g.length === 2);
+    const hasNaturalPair = groupCards(available).some((g) => g.length === 2 && !isLockedGroup(g));
     if (hasNaturalPair) return { type: "pair", count: 1 };
     return { type: "any" };
   }

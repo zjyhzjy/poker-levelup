@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, createRoom, decideAiBid, evaluateBid, revealKittyCard, runAiStep, startAuction, startRound, upgradeResult } from "../src/game.js";
+import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, createRoom, decideAiBid, evaluateBid, revealKittyCard, runAiStep, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -154,4 +154,60 @@ test("AI 垫牌优先做空门（基础）", () => {
   let voided = 0;
   for (let k = 0; k < 40; k++) { ai.aiRngState = (k * 40503 + 7) | 0; const p = chooseAiPlay(room, ai, [spadeK]); if (p.length === 1 && p[0].suit === "clubs") voided++; }
   assert.ok(voided > 30, `应当优先垫掉短门梅花做空门，实际 ${voided}/40`);
+});
+
+test("三条锁定剩两张时不死锁：锁定对不强制跟对，单张合法", () => {
+  // 复刻 bench seed 75×7919 的死锁：锁定三条只剩两张、恰是该门唯一天然对子。
+  const room = createRoom("LOCK1");
+  room.levelRank = "7"; room.trumpSuit = "hearts"; room.dealerSeat = 0; room.friendSeat = null;
+  const deck = createDeck();
+  const bigJokers = deck.filter((c) => c.rank === "bigJoker").slice(0, 2); // 敌家领对大王（主牌对）
+  room.seats[0].playerId = "e0";
+  const ai = room.seats[1];
+  ai.playerId = "ai1"; ai.isAi = true; ai.aiLevel = "medium";
+  ai.hand = [
+    ...deck.filter((c) => c.rank === "6" && c.suit === "hearts").slice(0, 2), // 锁定三条剩两张
+    deck.find((c) => c.rank === "A" && c.suit === "hearts"),
+    deck.find((c) => c.rank === "Q" && c.suit === "hearts"),
+    deck.find((c) => c.rank === "9" && c.suit === "hearts"),
+    deck.find((c) => c.rank === "8" && c.suit === "spades")
+  ];
+  ai.lockedTriples = ["6|hearts"];
+  room.currentTrick = [{ seat: 0, cards: bigJokers, shape: analyzeShape(bigJokers, room), points: 0 }];
+  room.turnSeat = 1;
+  // 锁定对不计入“必须跟对”→ 两张主牌单张合法
+  assert.equal(validatePlay(room, ai, [ai.hand[2], ai.hand[3]], bigJokers).ok, true);
+  // 把锁定三条拆成对子仍然非法（并非别无他法）
+  assert.equal(validatePlay(room, ai, ai.hand.slice(0, 2), bigJokers).ok, false);
+  // AI 必须给出一手合法牌
+  const play = chooseAiPlay(room, ai, bigJokers);
+  assert.equal(validatePlay(room, ai, play, bigJokers).ok, true);
+});
+
+test("三条锁定剩两张时不死锁：跟三条领出同样有合法出牌", () => {
+  // 复刻 bench seed 17×7919 的死锁：三条领出，跟家唯一对子是锁定对。
+  const room = createRoom("LOCK2");
+  room.levelRank = "A"; room.trumpSuit = "spades"; room.dealerSeat = 0; room.friendSeat = null;
+  const deck = createDeck();
+  const club3s = deck.filter((c) => c.rank === "3" && c.suit === "clubs").slice(0, 3); // 敌家领梅花333
+  room.seats[0].playerId = "e0";
+  const ai = room.seats[1];
+  ai.playerId = "ai1"; ai.isAi = true; ai.aiLevel = "medium";
+  ai.hand = [
+    deck.find((c) => c.rank === "Q" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "8" && c.suit === "clubs"),
+    ...deck.filter((c) => c.rank === "7" && c.suit === "clubs").slice(0, 2), // 锁定三条剩两张
+    deck.find((c) => c.rank === "5" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "9" && c.suit === "diamonds")
+  ];
+  ai.lockedTriples = ["7|clubs"];
+  room.currentTrick = [{ seat: 0, cards: club3s, shape: analyzeShape(club3s, room), points: 0 }];
+  room.turnSeat = 1;
+  // 锁定对不计入“必须跟对”→ 三张梅花单张合法
+  assert.equal(validatePlay(room, ai, [ai.hand[0], ai.hand[1], ai.hand[4]], club3s).ok, true);
+  // 含锁定对的跟牌仍然非法
+  assert.equal(validatePlay(room, ai, [ai.hand[2], ai.hand[3], ai.hand[0]], club3s).ok, false);
+  // AI 必须给出一手合法牌
+  const play = chooseAiPlay(room, ai, club3s);
+  assert.equal(validatePlay(room, ai, play, club3s).ok, true);
 });
