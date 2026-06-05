@@ -231,8 +231,10 @@ export function makeBid(room, playerId, cardIds) {
   if (!bid) throw new Error("只能亮自己的常主牌，或任意 3 张王");
   if (room.currentBid && compareBid(bid, room.currentBid) <= 0) throw new Error("必须用更高强度抢庄");
   room.currentBid = { ...bid, seat: seat.index, playerId, cards };
-  room.seatBids[seat.index] = { ...bid, cards };
-  room.bidResponses[seat.index] = "bid";
+  // 盖庄后其他座位需对更高的庄重新表态：清空旧的亮牌与响应，只保留本次亮庄者。
+  // 否则 _checkAllBidResponded 会把陈旧的 pass/bid 计入而提前定庄，跳过被盖者再抢。
+  room.seatBids = { [seat.index]: { ...bid, cards } };
+  room.bidResponses = { [seat.index]: "bid" };
   room.dealerSeat = seat.index;
   room.levelRank = bid.levelRank;
   room.noTrump = bid.noTrump;
@@ -641,8 +643,52 @@ function legalFollow(room, seat, leaderCards) {
   for (const c of tryCands) {
     if (c.length === length && validatePlay(room, seat, c, leaderCards).ok) return c;
   }
+  const built = buildForcedFollow(room, seat, leaderCards);
+  if (built) return built;
   const within = findAnyLegalCombination(room, seat, leaderCards, length, ledAsc);
   return within || ledAsc.slice(0, length);
+}
+
+// 结构化兜底：当 findAnyLegalCombination 因同门牌过多触发组合爆炸（超上限返回
+// null）时，按 forcedRequirement 的要求确定性地拼出一手合法跟牌——先放满足强制
+// 牌型（拖拉机 / 若干对子 / 对 / 三条）所需的最小牌，再用最小同门单张补足张数。
+// shapeSatisfies 是“至少包含”语义，补单张只增不减组数，故构造结果能通过校验。
+// 放在穷举之前调用，长拖拉机等情形直接 O(n log n) 解决，同时避开 8 万次慢穷举。
+function buildForcedFollow(room, seat, leaderCards) {
+  const length = leaderCards.length;
+  const ledSuit = playSuit(leaderCards[0], room);
+  const available = seat.hand.filter((c) => playSuit(c, room) === ledSuit);
+  if (available.length < length) return null; // 短门由 legalFollow 上半段处理
+  const lk = seat.lockedTriples || [];
+  const lockedSet = new Set(lk);
+  const isLocked = (g) => lockedSet.has(`${g[0].rank}|${g[0].suit}`);
+  const wanted = forcedRequirement(analyzeShape(leaderCards, room), available, room, lk);
+  const asc = [...available].sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room));
+  const desc = [...asc].reverse();
+
+  const chosen = [];
+  const used = new Set();
+  const take = (cards) => { for (const c of cards) if (!used.has(c.id)) { used.add(c.id); chosen.push(c); } };
+
+  if (wanted.type === "tractor") {
+    const need = wanted.count * wanted.unit;
+    const pool = wanted.unit === 2 ? available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`)) : available;
+    const found = findTractors(pool, room, need); // 与 forcedRequirement 同源，必有解
+    if (found.length) take(found[0].flatMap((g) => g.slice(0, wanted.unit)).slice(-need)); // 取最小的连续段
+  } else if (wanted.type === "pairs") {
+    const groups = groupCards(desc).filter((g) => g.length >= wanted.unit && !isLocked(g));
+    for (const g of groups.slice(-wanted.count)) take(g.slice(0, wanted.unit)); // 最小的 count 组
+  } else if (wanted.type === "triple") {
+    const g = groupCards(desc).find((gr) => gr.length >= 3);
+    if (g) take(g.slice(0, 3));
+  } else if (wanted.type === "pair") {
+    const g = groupCards(desc).find((gr) => gr.length >= 2 && !isLocked(gr));
+    if (g) take(g.slice(0, 2));
+  }
+  for (const c of asc) { if (chosen.length >= length) break; take([c]); } // 最小同门单张补足
+  if (chosen.length < length) return null;
+  const out = chosen.slice(0, length);
+  return validatePlay(room, seat, out, leaderCards).ok ? out : null;
 }
 
 // Relationship of `otherIndex` to `selfIndex` from self's knowledge.

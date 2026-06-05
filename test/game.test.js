@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, createRoom, decideAiBid, evaluateBid, revealKittyCard, runAiStep, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, createRoom, decideAiBid, evaluateBid, makeBid, passBid, revealKittyCard, runAiStep, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -210,4 +210,56 @@ test("三条锁定剩两张时不死锁：跟三条领出同样有合法出牌",
   // AI 必须给出一手合法牌
   const play = chooseAiPlay(room, ai, club3s);
   assert.equal(validatePlay(room, ai, play, club3s).ok, true);
+});
+
+test("盖庄后清空其他座位旧响应，不提前定庄、被盖者保留再抢机会", () => {
+  const room = createRoom("BID2");
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) {
+    const s = room.seats[i];
+    s.playerId = `p${i}`; s.nickname = `P${i}`; s.level = "2";
+  }
+  room.phase = "auction"; room.dealing = false;
+  const h2 = deck.filter((c) => c.rank === "2" && c.suit === "hearts"); // 三副牌共 3 张
+  room.seats[1].hand = [h2[0]];        // 单张级牌 → 强度1
+  room.seats[3].hand = [h2[1], h2[2]]; // 一对级牌 → 强度2
+
+  makeBid(room, "p1", [h2[0].id]);     // seat1 先亮 1 张
+  passBid(room, "p0");
+  passBid(room, "p2");
+  makeBid(room, "p3", [h2[1].id, h2[2].id]); // seat3 用更高强度盖庄
+  passBid(room, "p4");
+
+  // 盖庄后旧的 pass/bid 必须清空，只保留盖庄者；故 4 人响应数 < 5，绝不提前定庄。
+  assert.equal(room.phase, "auction", "盖庄后不应因陈旧响应提前定庄");
+  assert.deepEqual(Object.keys(room.bidResponses).sort(), ["3", "4"]);
+  assert.equal(1 in room.bidResponses, false, "被盖庄的 seat1 应重新获得表态机会");
+  assert.equal(room.currentBid.seat, 3);
+});
+
+test("跟超长副牌拖拉机时同门牌极多也不返回非法牌", () => {
+  const room = createRoom("LONGTR");
+  room.levelRank = "2"; room.trumpSuit = "spades"; room.dealerSeat = 0; room.friendSeat = null;
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 2) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  // 敌家领出 clubs 四连对 4455 6677（避开级牌 2 与主 spades）
+  const lead = [...cardsOf("4", "clubs"), ...cardsOf("5", "clubs"), ...cardsOf("6", "clubs"), ...cardsOf("7", "clubs")];
+  assert.equal(analyzeShape(lead, room).type, "tractor");
+  room.seats[0].playerId = "e0";
+  const ai = room.seats[1];
+  ai.playerId = "ai1"; ai.isAi = true; ai.aiLevel = "medium";
+  // 跟家 clubs 极多（A~10 多条三条/对子可拼成 >8 张长拖拉机，但无“恰好 8 张”的简单候选），
+  // 迫使 findAnyLegalCombination 组合爆炸超上限 → 必须靠结构化兜底给出合法牌。
+  // 无 K：最大对子 A 孤立（与 Q 间断开），故“取最大几个对子”拼不出合法拖拉机；
+  // 合法四连对只在 Q-J-10-9-8 段里，且 3/6 干扰单张迫使穷举深入直至超限。
+  ai.hand = [
+    ...cardsOf("A", "clubs", 3), ...cardsOf("Q", "clubs", 3), ...cardsOf("J", "clubs", 3),
+    ...cardsOf("10", "clubs", 3), ...cardsOf("9", "clubs", 3), ...cardsOf("8", "clubs", 2),
+    ...cardsOf("6", "clubs", 3), ...cardsOf("3", "clubs", 3)
+  ];
+  room.currentTrick = [{ seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 }];
+  room.turnSeat = 1;
+  const play = chooseAiPlay(room, ai, lead);
+  assert.equal(play.length, 8, "必须跟满 8 张");
+  assert.equal(validatePlay(room, ai, play, lead).ok, true, "兜底也必须是合法跟牌");
 });
