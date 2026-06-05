@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, buryKitty, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, decideAiBid, evaluateBid, makeBid, passBid, playCards, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, buryKitty, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, decideAiBid, determineTrickWinner, evaluateBid, makeBid, passBid, playCards, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -320,6 +320,23 @@ test("6 人房间：配置正确、发牌 26 张底 6 张、扣底跳过叫朋�
   buryKitty(room, "p0", bury);
   assert.equal(room.phase, "playing", "6 人扣底后跳过叫朋友直接开打");
   assert.equal(room.friendSeat, null);
+});
+
+test("甩牌主牌杀：三条+相邻对子不被误当拖拉机（结构匹配正确）", () => {
+  const room = createRoom("THROW");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  // 闲家甩 梅花 AAA+QQ（三条+对子，A/Q 不相邻 → triple+pair）
+  const lead = [...cardsOf("A", "clubs", 3), ...cardsOf("Q", "clubs", 2)];
+  // 下家用主牌 红桃 333+44 杀（三条+对子，3/4 在主牌里相邻，但张数不等不构成拖拉机）
+  const cut = [...cardsOf("3", "hearts", 3), ...cardsOf("4", "hearts", 2)];
+  room.currentTrick = [
+    { seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 },
+    { seat: 1, cards: cut, shape: analyzeShape(cut, room), points: 0 }
+  ];
+  // 双方都是“三条+对子”，结构匹配，主牌杀应成功（赢家=seat1）
+  assert.equal(determineTrickWinner(room, room.currentTrick), 1);
 });
 
 test("5 人房间默认配置不变（回归）", () => {

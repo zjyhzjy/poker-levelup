@@ -153,7 +153,7 @@ export function startRound(room, random = Math.random, options = {}) {
   // once so unit tests and any non-animated callers keep working.
   const dealImmediately = options.deal !== false;
   assertPhase(room, PHASES.LOBBY);
-  if (room.seats.some((seat) => !seat.playerId)) throw new Error("需要 5 名玩家全部坐下");
+  if (room.seats.some((seat) => !seat.playerId)) throw new Error(`需要 ${room.seatCount} 名玩家全部坐下`);
   room.round += 1;
   const firstRound = room.round === 1;
   const level = firstRound ? LEVEL_RANKS[Math.floor(random() * LEVEL_RANKS.length)] : null;
@@ -376,7 +376,7 @@ function giveKittyToDealer(room) {
   // Re-sort all hands now that trump suit is confirmed
   for (const seat of room.seats) sortHand(seat.hand, room);
   room.phase = PHASES.BURYING;
-  room.tableLog.push(`${dealer.nickname} 拿起底牌，请扣 7 张。`);
+  room.tableLog.push(`${dealer.nickname} 拿起底牌，请扣 ${room.kittySize} 张。`);
 }
 
 export function buryKitty(room, playerId, cardIds) {
@@ -1665,7 +1665,7 @@ function compareByHighestTier(challengerCards, bestCards, room) {
     if (pairs.length >= 2) {
       for (let i = 0; i < pairs.length - 1; i++) {
         const suit = playSuit(pairs[i][0], room);
-        if (isConsecutiveInRules(pairs[i][0], pairs[i+1][0], suit, room)) {
+        if (pairs[i].length === pairs[i+1].length && isConsecutiveInRules(pairs[i][0], pairs[i+1][0], suit, room)) {
           return { tier: 4, value: cardOrderValue(pairs[i][0], room) };
         }
       }
@@ -1698,7 +1698,10 @@ function throwStructureMatch(trumpCards, leaderCards, room) {
     const pairGroups = groups.filter(g => g.length >= 2);
     let usedAsTractor = new Set();
     for (let i = 0; i < pairGroups.length - 1; i++) {
-      if (isConsecutiveInRules(pairGroups[i][0], pairGroups[i+1][0], playSuit(pairGroups[i][0], room), room)) {
+      // 必须相邻两组张数相等才构成拖拉机（对连对、三连三）；否则“三条+相邻对子”
+      // 会被误熔成拖拉机，导致合法主牌杀被错判无效。与 decomposeThrowComponents 对齐。
+      if (pairGroups[i].length === pairGroups[i+1].length &&
+          isConsecutiveInRules(pairGroups[i][0], pairGroups[i+1][0], playSuit(pairGroups[i][0], room), room)) {
         counts.tractor++;
         usedAsTractor.add(i);
         usedAsTractor.add(i+1);
@@ -2401,6 +2404,14 @@ function assertPhase(room, phase) {
 
 
 
+// 下发抢庄信息时剥离敏感字段：playerId 是身份令牌（泄露可被 reconnect 夺座、偷手牌），
+// cards 的内部 id 也不外泄；亮出的牌只保留 rank/suit/label 供显示。
+function sanitizeBid(bid) {
+  if (!bid) return null;
+  const { playerId, cards, ...rest } = bid;
+  return { ...rest, cards: (cards || []).map((c) => ({ rank: c.rank, suit: c.suit, label: c.label })) };
+}
+
 export function publicState(room, viewerId = null) {
   const viewerSeat = findSeatByPlayer(room, viewerId);
   return {
@@ -2412,8 +2423,8 @@ export function publicState(room, viewerId = null) {
     trumpSuit: room.trumpSuit,
     noTrump: room.noTrump,
     dealerSeat: room.dealerSeat,
-    currentBid: room.currentBid,
-    seatBids: room.seatBids,
+    currentBid: sanitizeBid(room.currentBid),
+    seatBids: Object.fromEntries(Object.entries(room.seatBids || {}).map(([k, v]) => [k, sanitizeBid(v)])),
     bidResponses: room.bidResponses,
     dealing: room.dealing,
     revealedKitty: room.revealedKitty,

@@ -68,6 +68,7 @@ server.on("upgrade", (req, socket) => {
   socket.on("data", (buffer) => handleFrame(client, buffer));
   socket.on("close", () => disconnect(client));
   socket.on("error", () => disconnect(client));
+  socket.on("end", () => disconnect(client)); // 半开 FIN（手机锁屏/切后台/弱网）也要下线，否则自动托管不触发、整桌卡死
   send(client, "hello", { playerId: client.playerId });
 });
 
@@ -186,7 +187,7 @@ function handleMessage(client, message) {
     if (type === "emote") {
       const room = currentRoom(client);
       const target = Number(payload.target);
-      if (!Number.isInteger(target) || target < 0 || target >= 5) return;
+      if (!Number.isInteger(target) || target < 0 || target >= room.seatCount) return;
       const kind = payload.kind === "flower" ? "flower" : "tomato";
       const fromSeat = room.seats.find((s) => s.playerId === client.playerId)?.index ?? null;
       for (const c of sockets.values()) {

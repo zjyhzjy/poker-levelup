@@ -222,7 +222,7 @@ function closeEmoteMenu() {
 
 function seatTokenEl(seatIndex) {
   const viewer = state.room?.viewerSeat ?? 0;
-  const pos = seatToScreenPos(seatIndex, viewer);
+  const pos = seatToScreenPos(seatIndex, viewer, state.room?.seatCount || 5);
   return document.querySelector(`.seat.screen-pos-${pos} .seat-token`);
 }
 
