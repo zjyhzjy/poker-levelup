@@ -168,6 +168,7 @@ function render() {
   try { renderLog(room); }      catch(e) { console.error("renderLog:", e); }
   try { maybeAnimateTrickPoints(room); } catch(e) { console.error("trickPoints:", e); }
   try { maybeAnimateFriendReveal(room); } catch(e) { console.error("friendReveal:", e); }
+  if ($("#historyPanel")?.classList.contains("open")) { try { renderHistory(room); } catch(e) { console.error("history:", e); } }
 }
 
 // Spectators (joined but not seated) — listed small in the table's top-left.
@@ -943,10 +944,32 @@ function renderLog(room) {
     .map((line) => `<div>${escapeHtml(line)}</div>`).join("");
 }
 
-// Log drawer toggle
+// Log drawer toggle（日志与牌局回看互斥展开）
 $("#logToggle").addEventListener("click", () => {
+  $("#historyPanel").classList.remove("open");
   $("#logPanel").classList.toggle("open");
 });
+$("#historyToggle").addEventListener("click", () => {
+  $("#logPanel").classList.remove("open");
+  const panel = $("#historyPanel");
+  panel.classList.toggle("open");
+  if (panel.classList.contains("open")) renderHistory(state.room);
+});
+
+// 本局牌局回看：逐墩展示谁出了什么、谁赢、几分（数据来自 publicState.tricks）。
+function renderHistory(room) {
+  const el = $("#history");
+  if (!el) return;
+  const tricks = room?.tricks || [];
+  if (!tricks.length) { el.innerHTML = `<div class="history-empty">本局还没有完成的墩</div>`; return; }
+  el.innerHTML = tricks.map((t, i) => {
+    const plays = t.plays.map((p) => {
+      const cards = p.cards.map((c) => `<span class="hcard ${isRed(c) ? "red" : "black"}">${escapeHtml(c.label)}</span>`).join(" ");
+      return `<div class="history-play${p.seat === t.winner ? " win" : ""}"><span class="hseat">${seatName(room, p.seat)}</span><span>${cards}</span></div>`;
+    }).join("");
+    return `<div class="history-trick"><div class="history-head">第 ${i + 1} 墩 · ${seatName(room, t.winner)} +${t.points}</div>${plays}</div>`;
+  }).join("");
+}
 
 // Re-render on orientation change so layout updates immediately
 window.addEventListener("orientationchange", () => {

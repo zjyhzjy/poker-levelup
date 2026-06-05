@@ -931,6 +931,20 @@ body.desktop .friend-pop { font-size: 30px; }
 
 .log-panel.open { max-height: 220px; overflow-y: auto; }
 
+#historyToggle { right: 66px; }
+body.desktop #historyToggle { right: 82px; }
+.history-list { padding: 6px 8px; font-size: 11px; color: #ddd; }
+.history-empty { padding: 12px; color: var(--muted-felt); text-align: center; }
+.history-trick { padding: 5px 2px; border-bottom: 1px solid rgba(200,144,45,.15); }
+.history-head { color: var(--gold); font-weight: 600; margin-bottom: 2px; }
+.history-play { display: flex; gap: 6px; align-items: baseline; padding: 1px 3px; border-radius: 4px; }
+.history-play.win { background: rgba(255,216,77,.12); }
+.history-play .hseat { min-width: 4.5em; color: #aaa; flex-shrink: 0; }
+.history-play.win .hseat::after { content: " 👑"; }
+.hcard { font-weight: 700; }
+.hcard.red { color: #ff7a7a; }
+.hcard.black { color: #ededed; }
+
 #log {
   padding: 10px;
   display: grid;

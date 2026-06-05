@@ -2382,6 +2382,13 @@ export function publicState(room, viewerId = null) {
     friendCall: room.friendCall,
     friendSeat: room.friendSeat,
     friendReveal: room.friendReveal || null,
+    // 历史墩（供“本局牌局”回看）。card 精简为 rank/suit/label（省去 id，减小 payload）。
+    // 高频广播会带上全部历史；公开高并发部署可改为按需请求（参考 hint 的请求-响应）。
+    tricks: (room.finishedTricks || []).map((t) => ({
+      winner: t.winner,
+      points: t.points,
+      plays: t.plays.map((p) => ({ seat: p.seat, cards: p.cards.map((c) => ({ rank: c.rank, suit: c.suit, label: c.label })) }))
+    })),
     currentLeader: room.currentLeader,
     turnSeat: room.turnSeat,
     currentTrick: room.currentTrick,
