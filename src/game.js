@@ -2061,15 +2061,15 @@ export function sortHand(hand, room, overrideLevel = null) {
   if (diamondCards.length > 0) redSuits.push(diamondCards);
 
   const sideCardsSorted = [];
-  
-  // 交叉合并算法：只要红黑都有，就交替插入，彻底封杀“红红”相邻
-  while (blackSuits.length > 0 || redSuits.length > 0) {
-    if (blackSuits.length > 0) {
-      sideCardsSorted.push(...blackSuits.shift());
-    }
-    if (redSuits.length > 0) {
-      sideCardsSorted.push(...redSuits.shift());
-    }
+
+  // 交叉合并算法：从“组数较多”的颜色开始交替插入。否则当某色花色组更多时
+  // （如主花色确认后只剩 1黑2红），多出来的同色组会被挤到一起出现“红红/黑黑”相邻。
+  // 从多数色起头可保证在可避免时绝不同色相邻：1黑2红 → 红黑红，2黑1红 → 黑红黑。
+  const first  = redSuits.length > blackSuits.length ? redSuits : blackSuits;
+  const second = first === redSuits ? blackSuits : redSuits;
+  while (first.length > 0 || second.length > 0) {
+    if (first.length > 0)  sideCardsSorted.push(...first.shift());
+    if (second.length > 0) sideCardsSorted.push(...second.shift());
   }
 
   // 5. 最终合体：主牌在最左边，绝对动态红黑相间的副牌紧随其后
