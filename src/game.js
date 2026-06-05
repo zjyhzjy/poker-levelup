@@ -294,6 +294,9 @@ export function revealKittyCard(room) {
 
 export function confirmDealer(room) {
   if (!room.currentBid) throw new Error("还没有庄家");
+  // 幂等：仅抢庄阶段可确认。giveKittyToDealer 后 phase 进入 burying，重复调用
+  // 会再次把底牌并入庄家手牌、破坏牌堆完整性，故非抢庄阶段直接早退。
+  if (![PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION].includes(room.phase)) return;
   if (room.dealing) return; // cards still being dealt; kitty not ready yet
   room.dealerSeat = room.currentBid.seat;
   room.levelRank = room.currentBid.levelRank;
@@ -2390,7 +2393,11 @@ export function publicState(room, viewerId = null) {
     tableLog: room.tableLog.slice(-40),
     seats: room.seats.map((seat) => ({
       index: seat.index,
-      playerId: seat.playerId,
+      // 安全：不下发真实 playerId。它是客户端自报的身份令牌，一旦随广播泄露，任何人都能
+      // 用它 reconnect 夺座、偷看手牌。这里只给“是否有人入座”的占位串，前端各处仅做真值
+      // 判断；本人由 isYou 单独标识。完整修复见 token 鉴权 TODO：reconnect 应校验服务器
+      // 签发的不可猜 token，而非客户端自报的 id。
+      playerId: seat.playerId ? "seated" : null,
       nickname: seat.nickname,
       avatar: seat.avatar ?? null,
       level: seat.level,

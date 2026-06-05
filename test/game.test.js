@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, createRoom, decideAiBid, evaluateBid, makeBid, passBid, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, decideAiBid, evaluateBid, makeBid, passBid, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -270,4 +270,21 @@ test("昵称去空白并按字符限长", () => {
   assert.equal([...room.seats[0].nickname].length, 16, "昵称应被限制为 16 个字符");
   sit(room, "p2", 1, "   ", null);
   assert.equal(room.seats[1].nickname, "玩家2", "纯空白昵称回退到默认名");
+});
+
+test("confirmDealer 幂等：重复确认不会把底牌并入两次", () => {
+  const room = createRoom("CONF");
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; s.level = "2"; }
+  room.kitty = deck.slice(0, 7);
+  room.seats.forEach((s, i) => { s.hand = deck.slice(7 + i * 5, 12 + i * 5); });
+  room.dealerSeat = 0;
+  room.currentBid = { seat: 0, levelRank: "2", trumpSuit: "hearts", noTrump: false };
+  room.phase = "auction"; room.dealing = false;
+  const before = room.seats[0].hand.length;
+  confirmDealer(room);
+  assert.equal(room.seats[0].hand.length, before + 7, "首次确认并入 7 张底牌");
+  assert.equal(room.phase, "burying");
+  confirmDealer(room); // 重复确认应早退
+  assert.equal(room.seats[0].hand.length, before + 7, "重复确认不应再次并入底牌");
 });
