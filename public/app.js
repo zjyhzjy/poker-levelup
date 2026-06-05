@@ -142,8 +142,8 @@ function render() {
   $("#roomBadge").textContent = `房间 ${room.code}`;
   $("#phaseBadge").textContent = phaseText(room.phase);
 
-  const trump = room.noTrump ? "无主" : (room.trumpSuit ? suitSymbol(room.trumpSuit) : "-");
-  $("#roundInfo").textContent = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}`;
+  const trump = room.noTrump ? "无主" : (room.trumpSuit ? suitSymbolColored(room.trumpSuit) : "-");
+  $("#roundInfo").innerHTML = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}`;
 
   try { renderSeats(room); }    catch(e) { console.error("renderSeats:", e); }
   try { renderCenter(room); }   catch(e) { console.error("renderCenter:", e); }
@@ -473,8 +473,8 @@ function renderCenter(room) {
     const fc = room.friendCall;
     const label = (fc.rank === "bigJoker" || fc.rank === "smallJoker")
       ? rankText(fc.rank)
-      : `${suitSymbol(fc.suit)}${fc.rank}`;
-    friendBanner.textContent = `朋友是第 ${fc.ordinal} 张 ${label}`;
+      : `${suitSymbolColored(fc.suit)}${fc.rank}`;
+    friendBanner.innerHTML = `朋友是第 ${fc.ordinal} 张 ${label}`;
     friendBanner.style.display = "block";
   } else {
     friendBanner.textContent = "";
@@ -574,7 +574,7 @@ function renderBidReveal(room) {
 
   if (bid && cards.length > 0 && biddingPhases.includes(room.phase)) {
     const who = seatName(room, bid.seat);
-    const trumpLabel = bid.noTrump ? "无主" : (bid.trumpSuit ? suitSymbol(bid.trumpSuit) : "");
+    const trumpLabel = bid.noTrump ? "无主" : (bid.trumpSuit ? suitSymbolColored(bid.trumpSuit) : "");
     const cardsHTML = cards.map((c) => playedCardHTML(c)).join("");
     el.innerHTML = `
       <div class="bid-reveal-label">${who} 亮主${trumpLabel ? " · " + trumpLabel : ""}</div>
@@ -947,6 +947,14 @@ function seatName(room, index) {
 
 function suitSymbol(suit) {
   return { spades: "♠", hearts: "♥", clubs: "♣", diamonds: "♦" }[suit] || "";
+}
+
+// 带颜色的花色符号（红桃/方片红、黑桃/梅花黑）。用白底小块保证在深色背景上也清晰可见。
+function suitSymbolColored(suit) {
+  const sym = suitSymbol(suit);
+  if (!sym) return "";
+  const red = suit === "hearts" || suit === "diamonds";
+  return `<span class="suit-pip ${red ? "red" : "black"}">${sym}</span>`;
 }
 
 function isRed(card) {

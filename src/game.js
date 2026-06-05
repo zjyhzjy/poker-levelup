@@ -175,6 +175,7 @@ export function startRound(room, random = Math.random, options = {}) {
   for (const seat of room.seats) {
     seat.hand = [];
     seat.takenTrickPoints = 0;
+    seat.lockedTriples = []; // 本局内被“锁定”的三条（不可再拆成对子出）
     if (firstRound) seat.level = room.firstLevel;
   }
 
@@ -451,6 +452,7 @@ export function playCards(room, playerId, cardIds) {
   } else {
     const validation = validatePlay(room, seat, cards, leaderPlay);
     if (!validation.ok) throw new Error(validation.reason);
+    if (leaderPlay) recordTripleLockDecision(room, seat, cards, leaderPlay);
     removeCards(seat.hand, cardIds);
     const play = { seat: seat.index, cards, shape, points: cards.reduce((sum, card) => sum + cardScore(card), 0) };
     room.currentTrick.push(play);
@@ -1175,6 +1177,23 @@ function getNextImmediateTrumpValue(currentValue, room) {
 
 
 export function validatePlay(room, seat, cards, leaderCards) {
+  // 三条锁定：若本局某副三条曾在“可不拆”的选择时刻被保留（没拆），则之后
+  // 不能再把它拆成对子出。领牌永不强制，故直接拒绝；跟牌时只有“别无他法”
+  // （该门可出的牌全部属于这副被锁三条）时才放行，避免死锁。
+  const lockedKey = lockedPairViolation(seat, cards, room);
+  if (lockedKey) {
+    if (!leaderCards) {
+      return { ok: false, reason: "这副三条已锁定，不能拆成对子出（可整体出三条或拆成单张）" };
+    }
+    const ledSuitForLock = playSuit(leaderCards[0], room);
+    const availForLock = seat.hand.filter((c) => playSuit(c, room) === ledSuitForLock);
+    const [lr, ls] = lockedKey.split("|");
+    const forced = availForLock.length > 0 && availForLock.every((c) => c.rank === lr && c.suit === ls);
+    if (!forced) {
+      return { ok: false, reason: "这副三条已锁定，不能拆成对子出（请改出单张）" };
+    }
+  }
+
   if (!leaderCards) {
     // 作为首出牌者，如果选择了甩牌 (Throw)
     const shape = analyzeShape(cards, room);
@@ -1580,6 +1599,42 @@ function playSuit(card, room) {
   if (card.rank === room.levelRank) return "trump";
   if (!room.noTrump && card.suit === room.trumpSuit) return "trump";
   return card.suit;
+}
+
+// 检测一手牌里是否“把某副已锁定的三条拆成了对子”：即出现一个恰好两张、
+// 且其点数花色属于该座位锁定集合的组。返回锁定键 "rank|suit"，否则 null。
+function lockedPairViolation(seat, cards, room) {
+  if (!seat.lockedTriples || seat.lockedTriples.length === 0) return null;
+  const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  for (const g of groupCards(sorted)) {
+    if (g.length === 2) {
+      const key = `${g[0].rank}|${g[0].suit}`;
+      if (seat.lockedTriples.includes(key)) return key;
+    }
+  }
+  return null;
+}
+
+// 在“跟对子”的选择时刻记录玩家是否保留了三条：
+// 当首家出对子、跟家该门没有天然对子但有三条时，玩家可以选择不拆三条。
+// 若他这一手没有把某副三条拆成对子（出的牌里该三条点数花色不足 2 张），
+// 则把这副三条锁定，本局之后不得再拆成对子出。每位玩家分别记录。
+function recordTripleLockDecision(room, seat, cards, leaderCards) {
+  const leaderShape = analyzeShape(leaderCards, room);
+  if (leaderShape.type !== "pair") return;
+  const ledSuit = playSuit(leaderCards[0], room);
+  const available = seat.hand.filter((c) => playSuit(c, room) === ledSuit); // 出牌前的手牌
+  const groups = groupCards([...available].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)));
+  if (groups.some((g) => g.length === 2)) return; // 有天然对子 → 被强制跟对子，不存在“选择”
+  const triples = groups.filter((g) => g.length >= 3);
+  if (triples.length === 0) return;
+  if (!seat.lockedTriples) seat.lockedTriples = [];
+  for (const t of triples) {
+    const key = `${t[0].rank}|${t[0].suit}`;
+    if (seat.lockedTriples.includes(key)) continue;
+    const playedOfKey = cards.filter((c) => c.rank === t[0].rank && c.suit === t[0].suit).length;
+    if (playedOfKey !== 2) seat.lockedTriples.push(key); // 没拆成对子 → 锁定
+  }
 }
 
 function forcedRequirement(leaderShape, available, room) {

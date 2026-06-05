@@ -586,6 +586,25 @@ button, input, select { font: inherit; }
 }
 .context-controls button.primary-action:hover { opacity: .9; }
 
+/* Colored suit pip used in topbar/center text (white chip keeps black visible on dark bg) */
+.suit-pip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15em;
+  height: 1.15em;
+  padding: 0 .1em;
+  margin: 0 1px;
+  background: #fff;
+  border-radius: 4px;
+  line-height: 1;
+  font-weight: 700;
+  vertical-align: middle;
+  box-shadow: 0 1px 2px rgba(0,0,0,.45);
+}
+.suit-pip.red   { color: #d62828; }
+.suit-pip.black { color: #1a1a1a; }
+
 .context-controls button.trustee-on {
   background: linear-gradient(135deg, #2e9e5b, #57c98a);
   color: #042913;
