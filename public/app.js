@@ -74,15 +74,13 @@ $("#createRoom").addEventListener("click", () => {
   connectAndJoin("", $("#nickname").value.trim());
 });
 
-// On load, if we were in a room before, prefill the code and try to reconnect.
-// If the room is gone, the server replies with an error and we stay on the join
-// screen so the player can create/join a fresh room.
+// On load, prefill the last room code for convenience, but do NOT auto-join:
+// a refresh should land on the join screen so the player can choose to re-enter
+// or leave. (Mid-session app-switch reconnect is handled separately while a room
+// is active.)
 (() => {
   const lastRoom = localStorage.getItem("szp.roomCode");
-  if (lastRoom) {
-    $("#roomCode").value = lastRoom;
-    if (state.nickname) connectAndJoin(lastRoom, state.nickname);
-  }
+  if (lastRoom) $("#roomCode").value = lastRoom;
 })();
 
 function connectAndJoin(code, nickname) {
@@ -135,21 +133,34 @@ function render() {
   $("#phaseBadge").textContent = phaseText(room.phase);
 
   const trump = room.noTrump ? "无主" : (room.trumpSuit ? suitSymbol(room.trumpSuit) : "-");
-  let friendInfo = "";
-  if (room.friendCall) {
-    const fc = room.friendCall;
-    const label = (fc.rank === "bigJoker" || fc.rank === "smallJoker")
-      ? rankText(fc.rank)
-      : `${suitSymbol(fc.suit)}${fc.rank}`;
-    friendInfo = ` · 朋友 第${fc.ordinal}张${label}`;
-  }
-  $("#roundInfo").textContent = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}${friendInfo}`;
+  $("#roundInfo").textContent = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}`;
 
   try { renderSeats(room); }    catch(e) { console.error("renderSeats:", e); }
   try { renderCenter(room); }   catch(e) { console.error("renderCenter:", e); }
   try { renderControls(room); } catch(e) { console.error("renderControls:", e); }
   try { renderHand(room); }     catch(e) { console.error("renderHand:", e); }
+  try { renderSpectators(room); } catch(e) { console.error("renderSpectators:", e); }
   try { renderLog(room); }      catch(e) { console.error("renderLog:", e); }
+}
+
+// Spectators (joined but not seated) — listed small in the table's top-left.
+function renderSpectators(room) {
+  const el = $("#spectatorList");
+  if (!el) return;
+  const names = room.spectators || [];
+  if (names.length === 0) {
+    el.innerHTML = "";
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "block";
+  el.innerHTML = `<div class="spectator-title">观战 ${names.length}</div>` +
+    names.map((n) => `<div class="spectator-name">${escapeHtml(n)}</div>`).join("");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 /* ─── Seats + Played Cards ───────────────────────────────── */
@@ -346,6 +357,21 @@ function renderCenter(room) {
   // Current declared trump ("亮主") shown prominently in the center with a pop
   // animation whenever someone bids / counters (反主/加固).
   renderBidReveal(room);
+
+  // Friend announcement banner — shown after the dealer calls a friend and stays
+  // until the friend is revealed (the matching card is played), then disappears.
+  const friendBanner = $("#friendBanner");
+  if (room.friendCall && room.friendSeat === null) {
+    const fc = room.friendCall;
+    const label = (fc.rank === "bigJoker" || fc.rank === "smallJoker")
+      ? rankText(fc.rank)
+      : `${suitSymbol(fc.suit)}${fc.rank}`;
+    friendBanner.textContent = `朋友是第 ${fc.ordinal} 张 ${label}`;
+    friendBanner.style.display = "block";
+  } else {
+    friendBanner.textContent = "";
+    friendBanner.style.display = "none";
+  }
 
   // Revealed kitty during auction
   let kittyEl = document.getElementById("revealedKittyDisplay");

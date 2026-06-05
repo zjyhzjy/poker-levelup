@@ -2189,7 +2189,10 @@ export function publicState(room, viewerId = null) {
     hiddenKittyCount: room.hiddenKitty.length,
     kittyCount: room.kitty.length,
     viewerSeat: viewerSeat?.index ?? null,
-    isHost: room.hostId === viewerId
+    isHost: room.hostId === viewerId,
+    spectators: [...room.spectators.values()]
+      .filter((s) => s.connected)
+      .map((s) => s.nickname || "游客")
   };
 }
 

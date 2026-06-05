@@ -933,3 +933,47 @@ body.desktop .log-toggle { font-size: 15px; }
 /* Emoji avatar inside the seat token */
 .seat-token.has-avatar { font-size: 26px; }
 body.desktop .seat-token.has-avatar { font-size: 34px; }
+
+/* ─── Spectators (top-left of the felt) ────────────────────── */
+.spectator-list {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  z-index: 30;
+  max-width: 40%;
+  pointer-events: none;
+}
+.spectator-title {
+  font-size: 9px;
+  color: var(--gold-light);
+  opacity: .85;
+  letter-spacing: .5px;
+  margin-bottom: 1px;
+}
+.spectator-name {
+  font-size: 9px;
+  color: rgba(255,255,255,.6);
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body.desktop .spectator-title { font-size: 12px; }
+body.desktop .spectator-name { font-size: 12px; }
+
+/* ─── Friend announcement banner (center of table) ─────────── */
+.friend-banner {
+  display: none;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1a0a00;
+  background: linear-gradient(135deg, var(--gold), var(--gold-light));
+  border: 1px solid rgba(255,255,255,.3);
+  border-radius: 20px;
+  padding: 6px 16px;
+  margin: 4px 0;
+  box-shadow: 0 3px 12px rgba(200,144,45,.45);
+  text-shadow: 0 1px 0 rgba(255,255,255,.25);
+  animation: bidPop .45s cubic-bezier(.34,1.56,.64,1);
+}
+body.desktop .friend-banner { font-size: 20px; padding: 8px 22px; }
