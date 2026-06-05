@@ -99,7 +99,15 @@ function render() {
   $("#phaseBadge").textContent = phaseText(room.phase);
 
   const trump = room.noTrump ? "无主" : (room.trumpSuit ? suitSymbol(room.trumpSuit) : "-");
-  $("#roundInfo").textContent = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}`;
+  let friendInfo = "";
+  if (room.friendCall) {
+    const fc = room.friendCall;
+    const label = (fc.rank === "bigJoker" || fc.rank === "smallJoker")
+      ? rankText(fc.rank)
+      : `${suitSymbol(fc.suit)}${fc.rank}`;
+    friendInfo = ` · 朋友 第${fc.ordinal}张${label}`;
+  }
+  $("#roundInfo").textContent = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}${friendInfo}`;
 
   try { renderSeats(room); }    catch(e) { console.error("renderSeats:", e); }
   try { renderCenter(room); }   catch(e) { console.error("renderCenter:", e); }

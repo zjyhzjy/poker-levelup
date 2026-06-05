@@ -395,6 +395,12 @@ export function playCards(room, playerId, cardIds) {
   const isThrow = !leaderPlay && shape.type === "throw";
 
   if (isThrow) {
+    // 甩牌必须是同一门花色（或全部主牌）。混花色甩牌直接拒绝（牌留在手里），
+    // 而不是当作"失败甩牌"扣分。
+    const throwSuit = playSuit(cards[0], room);
+    if (!cards.every((card) => playSuit(card, room) === throwSuit)) {
+      throw new Error("甩牌必须是同一门花色（或全部主牌）");
+    }
     // Validate throw — may fail if another player has a bigger matching group
     const validation = validateThrow(room, seat, cards);
     // Show all thrown cards on table first regardless
@@ -938,6 +944,11 @@ export function validatePlay(room, seat, cards, leaderCards) {
     // 作为首出牌者，如果选择了甩牌 (Throw)
     const shape = analyzeShape(cards, room);
     if (shape.type === "throw") {
+      // 甩牌必须是同一门花色（或全部主牌）——不允许混花色甩牌。
+      const ledSuit = playSuit(cards[0], room);
+      if (!cards.every((card) => playSuit(card, room) === ledSuit)) {
+        return { ok: false, reason: "甩牌必须是同一门花色（或全部主牌）" };
+      }
       return validateThrow(room, seat, cards);
     }
     return { ok: true };
