@@ -265,6 +265,8 @@ button, input, select { font: inherit; }
   color: var(--muted-felt);
   letter-spacing: 1px;
 }
+#roomBadge { cursor: pointer; }
+#roomBadge:hover { color: var(--accent, #e8c477); }
 
 .phase-badge {
   font-size: 12px;

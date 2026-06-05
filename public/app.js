@@ -74,12 +74,27 @@ $("#createRoom").addEventListener("click", () => {
   connectAndJoin("", $("#nickname").value.trim());
 });
 
+// 复制邀请链接（含房间码深链），朋友打开即自动填入房间码、一键加入。
+async function copyInvite() {
+  const code = state.room?.code;
+  if (!code) return;
+  const link = `${location.origin}/?room=${code}`;
+  try { await navigator.clipboard.writeText(link); }
+  catch { prompt("复制此邀请链接发给朋友：", link); return; }
+  const btn = $("#copyInviteBtn");
+  if (btn) { const old = btn.textContent; btn.textContent = "✓"; setTimeout(() => { btn.textContent = old; }, 1200); }
+}
+$("#copyInviteBtn")?.addEventListener("click", copyInvite);
+$("#roomBadge")?.addEventListener("click", copyInvite);
+
 // On load, prefill the last room code for convenience, but do NOT auto-join:
 // a refresh should land on the join screen so the player can choose to re-enter
 // or leave. (Mid-session app-switch reconnect is handled separately while a room
 // is active.)
 (() => {
-  const lastRoom = localStorage.getItem("szp.roomCode");
+  // 邀请深链 ?room=CODE 优先于上次房间码，便于朋友点链接一键进同一房间。
+  const urlRoom = new URLSearchParams(location.search).get("room");
+  const lastRoom = (urlRoom || localStorage.getItem("szp.roomCode") || "").trim().toUpperCase();
   if (lastRoom) $("#roomCode").value = lastRoom;
 })();
 
