@@ -713,6 +713,31 @@ if (fullscreenBtn) {
   });
 }
 
+// Exit the current room and return to the join screen.
+function exitRoom() {
+  const room = state.room;
+  if (room && room.phase !== "lobby") {
+    if (!confirm("游戏正在进行中，确定要退出房间吗？")) return;
+  }
+  // Free our seat if we're still in the lobby so others can use it.
+  if (room && room.phase === "lobby" && state.ws && state.ws.readyState === WebSocket.OPEN) {
+    const you = room.seats.find((s) => s.isYou);
+    if (you) send("leaveSeat");
+  }
+  // Stop auto-reconnect from pulling us back in.
+  localStorage.removeItem("szp.roomCode");
+  state.room = null;
+  try { state.ws?.close(); } catch (_) {}
+  state.ws = null;
+  state.selected.clear();
+  document.querySelector('[data-view="game"]').classList.add("hidden");
+  document.querySelector('[data-view="join"]').classList.remove("hidden");
+  $("#roomCode").value = "";
+}
+
+const exitRoomBtn = document.getElementById("exitRoomBtn");
+if (exitRoomBtn) exitRoomBtn.addEventListener("click", exitRoom);
+
 /* ─── Error ──────────────────────────────────────────────── */
 function showError(msg) {
   const box = $("#errorBox");
