@@ -803,48 +803,121 @@ function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available)
 }
 
 // 【彻底修复 3】：精准拆解甩牌组合，防止非对应牌型发生阻挡误判
-// Returns { ok, reason, blockedGroup } — blockedGroup is the SMALLEST group that was beaten
+// Decompose a throw into its structural components: tractors (≥2 consecutive
+// same-size groups), standalone pairs/triples, and singles. This is the crux of
+// correct throw validation — a pair that is part of a tractor (e.g. the 1010 in
+// JJ1010) must be beaten by a bigger TRACTOR, not merely by a higher lone pair.
+function decomposeThrowComponents(cards, room, ledSuit) {
+  const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  const groups = groupCards(sorted);
+  const components = [];
+  let i = 0;
+  while (i < groups.length) {
+    const g = groups[i];
+    if (g.length >= 2) {
+      let j = i;
+      const run = [g];
+      while (
+        j + 1 < groups.length &&
+        groups[j + 1].length === g.length &&
+        isConsecutiveInRules(groups[j][0], groups[j + 1][0], ledSuit, room)
+      ) {
+        run.push(groups[j + 1]);
+        j++;
+      }
+      if (run.length >= 2) {
+        components.push({ kind: "tractor", unit: g.length, count: run.length, cards: run.flat() });
+        i = j + 1;
+        continue;
+      }
+      components.push({ kind: "group", unit: g.length, count: 1, cards: g });
+      i++;
+    } else {
+      components.push({ kind: "single", unit: 1, count: 1, cards: g });
+      i++;
+    }
+  }
+  return components;
+}
+
+// Does an opponent's same-suit hand hold a tractor of unit≥`unit`, length≥`count`,
+// whose head outranks `headValue`? Only such a tractor can block a thrown tractor.
+function opponentHasBetterTractor(otherSameSuit, room, unit, count, headValue, ledSuit) {
+  const oGroups = groupCards(
+    [...otherSameSuit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room))
+  );
+  let i = 0;
+  while (i < oGroups.length) {
+    if (oGroups[i].length >= unit) {
+      let j = i;
+      const run = [oGroups[i]];
+      while (
+        j + 1 < oGroups.length &&
+        oGroups[j + 1].length >= unit &&
+        isConsecutiveInRules(oGroups[j][0], oGroups[j + 1][0], ledSuit, room)
+      ) {
+        run.push(oGroups[j + 1]);
+        j++;
+      }
+      if (run.length >= count && cardOrderValue(run[0][0], room) > headValue) return true;
+      i = j + 1;
+    } else {
+      i++;
+    }
+  }
+  return false;
+}
+
+// Returns { ok, reason, blockedGroup } — blockedGroup is the SMALLEST component beaten,
+// which is exactly the set of cards the thrower must keep after a failed throw.
 function validateThrow(room, throwerSeat, cards) {
   const ledSuit = playSuit(cards[0], room);
-  const throwerSorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
-  const tGroups = groupCards(throwerSorted);
+  const components = decomposeThrowComponents(cards, room, ledSuit);
 
-  // Collect ALL blocked groups across all opponents, then pick the smallest
-  const allBlockedGroups = [];
-  let failReason = "";
+  const allBlocked = []; // { cards, headValue, reason }
 
   for (const otherSeat of room.seats) {
     if (otherSeat.index === throwerSeat.index) continue;
-    const otherSameSuit = otherSeat.hand.filter(c => playSuit(c, room) === ledSuit);
+    const otherSameSuit = otherSeat.hand.filter((c) => playSuit(c, room) === ledSuit);
     if (otherSameSuit.length === 0) continue;
-    const oGroups = groupCards(otherSameSuit);
+    const oGroups = groupCards(
+      [...otherSameSuit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room))
+    );
 
-    for (const tGroup of tGroups) {
-      const tLen = tGroup.length;
-      const tValue = cardOrderValue(tGroup[0], room);
-      const blocker = oGroups.find(oGroup => oGroup.length >= tLen && cardOrderValue(oGroup[0], room) > tValue);
+    for (const comp of components) {
+      const headValue = cardOrderValue(comp.cards[0], room);
 
-      if (blocker) {
-        const tShape = analyzeShape(tGroup, room);
-        if (tShape.type === "tractor") {
-          const betterTractors = findTractors(otherSameSuit, room, tGroup.length);
-          if (betterTractors.length > 0 && cardOrderValue(betterTractors[0][0][0], room) > tValue) {
-            allBlockedGroups.push(tGroup);
-            failReason = `甩牌失败！${otherSeat.nickname} 手中有更大的拖拉机阻挡。`;
-          }
-          continue;
+      if (comp.kind === "tractor") {
+        if (opponentHasBetterTractor(otherSameSuit, room, comp.unit, comp.count, headValue, ledSuit)) {
+          allBlocked.push({
+            cards: comp.cards,
+            headValue,
+            reason: `甩牌失败！${otherSeat.nickname} 手中有更大的拖拉机阻挡。`,
+          });
         }
-        allBlockedGroups.push(tGroup);
-        failReason = `甩牌失败！${otherSeat.nickname} 手中有更大的牌型阻挡。`;
+        continue;
+      }
+
+      // single / standalone pair / triple: beaten by a same-suit group of
+      // equal-or-greater size whose top card is higher.
+      const blocker = oGroups.find(
+        (oGroup) => oGroup.length >= comp.unit && cardOrderValue(oGroup[0], room) > headValue
+      );
+      if (blocker) {
+        allBlocked.push({
+          cards: comp.cards,
+          headValue,
+          reason: `甩牌失败！${otherSeat.nickname} 手中有更大的${comp.unit >= 2 ? "牌型" : "单张"}阻挡。`,
+        });
       }
     }
   }
 
-  if (allBlockedGroups.length === 0) return { ok: true, reason: "", blockedGroup: null };
+  if (allBlocked.length === 0) return { ok: true, reason: "", blockedGroup: null };
 
-  // Pick the smallest blocked group: sort by card value ascending, take the one with lowest top card
-  allBlockedGroups.sort((a, b) => cardOrderValue(a[0], room) - cardOrderValue(b[0], room));
-  return { ok: false, reason: failReason, blockedGroup: allBlockedGroups[0] };
+  // Keep the smallest beaten component (lowest head card).
+  allBlocked.sort((a, b) => a.headValue - b.headValue);
+  return { ok: false, reason: allBlocked[0].reason, blockedGroup: allBlocked[0].cards };
 }
 
 // Find minimum cards to keep after failed throw:
