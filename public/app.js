@@ -503,14 +503,16 @@ function renderSeats(room) {
 function renderPlayedCards(cards) {
   if (!cards || cards.length === 0) return "";
 
-  const CARD_W = Math.round(50 * UI);
-  const CARD_H = Math.round(71 * UI);
+  // 6 人座位更密，牌片与容器都收窄，避免侧位出牌横扫顶部中央座位。
+  const sixP = (state.room?.seatCount || 5) === 6;
+  const CARD_W = Math.round((sixP ? 44 : 50) * UI);
+  const CARD_H = Math.round((sixP ? 62 : 71) * UI);
   // Max container width available beside a seat (keep it compact)
-  const MAX_WIDTH = Math.round(170 * UI);
+  const MAX_WIDTH = Math.round((sixP ? 104 : 170) * UI);
   // Calculate offset per card so all fit within MAX_WIDTH
   const offset = cards.length === 1
     ? 0
-    : Math.min(Math.round(34 * UI), Math.floor((MAX_WIDTH - CARD_W) / (cards.length - 1)));
+    : Math.min(Math.round((sixP ? 18 : 34) * UI), Math.floor((MAX_WIDTH - CARD_W) / (cards.length - 1)));
   const totalWidth = CARD_W + (cards.length - 1) * offset;
 
   const inner = cards.map((card, i) =>

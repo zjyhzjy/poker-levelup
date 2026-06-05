@@ -423,12 +423,29 @@ button, input, select { font: inherit; }
 .screen-pos-4 { bottom: 30%;   left: 5%; }
 
 /* 6 人布局（六边形，viewer 在 pos 0 底部中央）。两类选择器特异性高于媒体查询里的
-   单类 .screen-pos-N，因此覆盖五边形定位并新增顶部中央 pos 3 与左下 pos 5。 */
-.players-6 .screen-pos-1 { bottom: 30%; right: 4%; top: auto; left: auto; }
-.players-6 .screen-pos-2 { top: 13%; right: 6%; bottom: auto; left: auto; }
-.players-6 .screen-pos-3 { top: 7%; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
-.players-6 .screen-pos-4 { top: 13%; left: 6%; right: auto; bottom: auto; }
-.players-6 .screen-pos-5 { bottom: 30%; left: 4%; right: auto; top: auto; }
+   单类 .screen-pos-N，因此覆盖五边形定位并新增顶部中央 pos 3 与左下 pos 5。
+   pos-3 贴顶(4%)，上位 pos-2/4 下移到 16% 且贴边(2%)与 pos-3 垂直错开，避免出牌
+   横扫中央；下位 pos-1/5 抬到 36% 避免压住底部手牌区。 */
+.players-6 .screen-pos-1 { bottom: 36%; right: 2%; top: auto; left: auto; }
+.players-6 .screen-pos-2 { top: 16%; right: 2%; bottom: auto; left: auto; }
+.players-6 .screen-pos-3 { top: 4%; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
+.players-6 .screen-pos-4 { top: 16%; left: 2%; right: auto; bottom: auto; }
+.players-6 .screen-pos-5 { bottom: 36%; left: 2%; right: auto; top: auto; }
+/* 侧位出牌容器封顶，配合 JS 的 MAX_WIDTH 收窄，双保险防横扫中央座位 */
+.players-6 .seat-played { max-width: 116px; }
+/* 矮屏（360×640、地址栏展开等）：下位座位再上抬、手牌区压低，给座位腾空间 */
+@media (orientation: portrait) and (max-height: 700px) {
+  .players-6 .screen-pos-1, .players-6 .screen-pos-5 { bottom: 40%; }
+  .hand { height: 132px !important; }
+}
+/* 横屏 6 人：利用宽度沿屏幕两侧左右铺开，避免竖向三层堆叠 */
+@media (orientation: landscape) {
+  .players-6 .screen-pos-1 { bottom: 8%;  right: 3%;  top: auto; }
+  .players-6 .screen-pos-2 { top: 8%;     right: 11%; bottom: auto; }
+  .players-6 .screen-pos-3 { top: 4%; }
+  .players-6 .screen-pos-4 { top: 8%;     left: 11%;  bottom: auto; }
+  .players-6 .screen-pos-5 { bottom: 8%;  left: 3%;   top: auto; }
+}
 
 /* Played cards: above token for bottom-side seats (pos 1 & 4) so hand doesn't cover them */
 .seat-played {
