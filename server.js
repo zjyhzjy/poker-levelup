@@ -19,9 +19,11 @@ import {
   passBid,
   playCards,
   publicState,
+  recommendPlay,
   resetToLobby,
   revealKittyCard,
   runAiStep,
+  setTrustee,
   sit,
   startAuction,
   startRound
@@ -176,6 +178,15 @@ function handleMessage(client, message) {
       return;
     }
 
+    // Recommended play — compute via AI logic and reply only to the requester.
+    if (type === "hint") {
+      const room = currentRoom(client);
+      let cardIds = [];
+      try { cardIds = recommendPlay(room, client.playerId) || []; } catch { cardIds = []; }
+      send(client, "hint", { cardIds });
+      return;
+    }
+
     const room = currentRoom(client);
     const actions = {
       sit:              () => sit(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname, payload.avatar),
@@ -198,6 +209,7 @@ function handleMessage(client, message) {
       bury:             () => buryKitty(room, client.playerId, payload.cardIds || []),
       callFriend:       () => callFriend(room, client.playerId, payload),
       play:             () => playCards(room, client.playerId, payload.cardIds || []),
+      setTrustee:       () => setTrustee(room, client.playerId, payload.on),
       nextRoundLobby:   () => resetToLobby(room)
     };
     if (!actions[type]) throw new Error("未知操作");

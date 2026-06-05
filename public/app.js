@@ -116,12 +116,21 @@ function connectAndJoin(code, nickname) {
       render();
     }
     if (msg.type === "emote") playEmote(msg.payload);
+    if (msg.type === "hint") applyHint(msg.payload);
     if (msg.type === "error") showError(msg.payload.message);
   });
 }
 
 function send(type, payload = {}) {
   state.ws?.send(JSON.stringify({ type, payload }));
+}
+
+// 推荐出牌：服务器返回建议的 cardId，自动帮玩家选中，玩家确认后再点“出牌”。
+function applyHint(payload) {
+  const ids = payload?.cardIds || [];
+  if (!ids.length) { showError("暂无推荐出牌"); return; }
+  state.selected = new Set(ids);
+  if (state.room) render();
 }
 
 /* ─── Root Render ────────────────────────────────────────── */
@@ -351,7 +360,7 @@ function renderSeats(room) {
 
     const levelText = seat.level ? `Lv.${seat.level}` : "";
     const statusText = seat.playerId
-      ? `${seat.isAi ? "AI" : (seat.connected ? "在线" : "离线")} · ${seat.handCount}张`
+      ? `${seat.isAi ? "AI" : (seat.trustee ? "托管" : (seat.connected ? "在线" : "离线"))} · ${seat.handCount}张`
       : "空座";
 
     const playedDiv = sideCardsHTML
@@ -653,6 +662,12 @@ function renderControls(room) {
 
   if (room.phase === "playing" && room.viewerSeat === room.turnSeat) {
     parts.push(`<button data-action="play" class="primary-action">出牌 (${state.selected.size}张)</button>`);
+    parts.push(`<button data-action="hint">推荐</button>`);
+  }
+
+  if (room.phase === "playing" && room.viewerSeat != null) {
+    const trustee = room.seats[room.viewerSeat]?.trustee;
+    parts.push(`<button data-action="toggleTrustee" class="${trustee ? "trustee-on" : ""}">${trustee ? "取消托管" : "托管"}</button>`);
   }
 
   if (room.phase === "roundOver") {
@@ -693,6 +708,11 @@ function bindControls() {
       else if (action === "forceDealer") send("forceDealer", {});
       else if (action === "bury")        send("bury",        { cardIds: [...state.selected] });
       else if (action === "play")  send("play", { cardIds: [...state.selected] });
+      else if (action === "hint")  send("hint", {});
+      else if (action === "toggleTrustee") {
+        const mySeat = state.room?.seats.find((s) => s.isYou);
+        send("setTrustee", { on: !(mySeat && mySeat.trustee) });
+      }
       else if (action === "callFriend") {
         send("callFriend", {
           ordinal: Number($("#friendOrdinal").value),

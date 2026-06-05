@@ -31,6 +31,7 @@ function emptySeats() {
     connected: false,
     isAi: false,
     aiLevel: null,
+    trustee: false,
     takenTrickPoints: 0
   }));
 }
@@ -101,6 +102,7 @@ export function sit(room, playerId, seatIndex, nickname, avatar) {
   if (typeof avatar === "string" && avatar.trim()) seat.avatar = avatar.trim().slice(0, 8);
   seat.connected = true;
   seat.isAi = false;
+  seat.trustee = false;
   room.spectators.delete(playerId);
 }
 
@@ -131,6 +133,7 @@ export function leaveSeat(room, playerId) {
   seat.avatar = null;
   seat.connected = false;
   seat.isAi = false;
+  seat.trustee = false;
 }
 
 export function startRound(room, random = Math.random, options = {}) {
@@ -486,23 +489,23 @@ export function runAiStep(room) {
     return false;
   }
 
-  if (room.phase === PHASES.FORCED_SUIT && isAiSeat(room, room.dealerSeat)) {
+  if (room.phase === PHASES.FORCED_SUIT && isAutoSeat(room, room.dealerSeat)) {
     const dealer = room.seats[room.dealerSeat];
     chooseForcedTrump(room, dealer.playerId, chooseAiForcedTrump(room, dealer));
     return true;
   }
-  if (room.phase === PHASES.BURYING && isAiSeat(room, room.dealerSeat)) {
+  if (room.phase === PHASES.BURYING && isAutoSeat(room, room.dealerSeat)) {
     const dealer = room.seats[room.dealerSeat];
     const cards = chooseAiBury(room, dealer).map((card) => card.id);
     buryKitty(room, dealer.playerId, cards);
     return true;
   }
-  if (room.phase === PHASES.FRIEND && isAiSeat(room, room.dealerSeat)) {
+  if (room.phase === PHASES.FRIEND && isAutoSeat(room, room.dealerSeat)) {
     const dealer = room.seats[room.dealerSeat];
     callFriend(room, dealer.playerId, chooseAiFriendCard(room, dealer));
     return true;
   }
-  if (room.phase === PHASES.PLAYING && isAiSeat(room, room.turnSeat)) {
+  if (room.phase === PHASES.PLAYING && isAutoSeat(room, room.turnSeat)) {
     const seat = room.seats[room.turnSeat];
     const leaderCards = room.currentTrick[0]?.cards ?? null;
     const cards = chooseAiPlay(room, seat, leaderCards);
@@ -510,6 +513,28 @@ export function runAiStep(room) {
     return true;
   }
   return false;
+}
+
+// 托管：把某个真人座位标记为自动行动（由 runAiStep 接管），或取消。
+export function setTrustee(room, playerId, on) {
+  const seat = room.seats.find((s) => s.playerId === playerId);
+  if (!seat) throw new Error("请先入座");
+  seat.trustee = !!on;
+  if (seat.trustee && seat.aiRngState == null) {
+    seat.aiRngState = (Math.random() * 2 ** 31) | 0;
+    seat.aiBias = Math.random() - 0.5;
+  }
+  return seat.trustee;
+}
+
+// 推荐出牌：用 AI 逻辑算出当前应出的牌，返回 cardId 数组（仅在轮到该玩家出牌时）。
+export function recommendPlay(room, playerId) {
+  if (room.phase !== PHASES.PLAYING) return null;
+  const seat = room.seats.find((s) => s.playerId === playerId);
+  if (!seat || seat.index !== room.turnSeat) return null;
+  const leaderCards = room.currentTrick[0]?.cards ?? null;
+  const cards = chooseAiPlay(room, seat, leaderCards) || [];
+  return cards.map((card) => card.id);
 }
 
 // ─── AI difficulty profiles ─────────────────────────────────
@@ -1734,6 +1759,12 @@ function isAiSeat(room, seatIndex) {
   return room.seats[seatIndex]?.isAi === true;
 }
 
+// A seat acts automatically if it's an AI bot OR a human who turned on 托管.
+function isAutoSeat(room, seatIndex) {
+  const s = room.seats[seatIndex];
+  return !!s && (s.isAi === true || s.trustee === true);
+}
+
 function chooseAiBury(room, dealer) {
   const profile = aiProfile(dealer);
   const hand = dealer.hand;
@@ -2181,6 +2212,7 @@ export function publicState(room, viewerId = null) {
       connected: seat.connected,
       isAi: seat.isAi === true,
       aiLevel: seat.aiLevel ?? null,
+      trustee: seat.trustee === true,
       handCount: seat.hand.length,
       takenTrickPoints: seat.takenTrickPoints,
       isYou: seat.playerId === viewerId,

@@ -586,6 +586,14 @@ button, input, select { font: inherit; }
 }
 .context-controls button.primary-action:hover { opacity: .9; }
 
+.context-controls button.trustee-on {
+  background: linear-gradient(135deg, #2e9e5b, #57c98a);
+  color: #042913;
+  font-weight: 700;
+  border-color: transparent;
+}
+.context-controls button.trustee-on:hover { opacity: .9; }
+
 .context-controls select {
   color: var(--text-on-felt);
 }
