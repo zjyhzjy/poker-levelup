@@ -279,12 +279,11 @@ export function confirmDealer(room) {
 }
 
 export function forceDealer(room, lastKittyCard) {
-  // Counter-clockwise seat counting from starterSeat.
-  // Card rank maps to position: A=1(starterSeat itself), 2=2nd CCW, ... K=13th, jokers=1(starterSeat).
-  // CCW from starterSeat: prevSeat() repeatedly.
+  // 从第一个摸牌玩家(starterSeat)开始，按逆时针(nextSeat，与摸牌/出牌方向一致)数人。
+  // 点数映射位置：A=1(starterSeat 自己)、2=第2个、… K=13、王=14/15。
   const count = forceCount(lastKittyCard); // 1 for A/jokers, number for 2-K
   let seatIndex = room.starterSeat;
-  for (let i = 1; i < count; i += 1) seatIndex = prevSeat(seatIndex);
+  for (let i = 1; i < count; i += 1) seatIndex = nextSeat(seatIndex);
   const dealer = room.seats[seatIndex];
   room.dealerSeat = seatIndex;
   room.levelRank = dealer.level;
@@ -450,29 +449,16 @@ export function playCards(room, playerId, cardIds) {
 // Priority: if single lost → keep smallest single; if pair lost → keep smallest pair;
 // if both lost → keep smallest single (cheaper penalty)
 
-// Apply -10 penalty for failed throw
+// Record a -10 penalty for a failed throw against the thrower. The penalty is
+// attached to the seat and resolved by team in recomputeScores(), so it works
+// correctly whether or not the friend has been revealed yet.
 function _applyThrowPenalty(room, throwerSeatIndex) {
-  const friendRevealed = room.friendSeat !== null;
-  if (!friendRevealed) {
-    // Pre-friend: personal score penalty
-    if (room.seatPersonalScores[throwerSeatIndex] === undefined) {
-      room.seatPersonalScores[throwerSeatIndex] = 0;
-    }
-    room.seatPersonalScores[throwerSeatIndex] -= 10;
-    room.tableLog.push(`${room.seats[throwerSeatIndex].nickname} 甩牌失败，个人扣 10 分。`);
-  } else {
-    // Post-friend: team score adjustment
-    const isDealer = isDealerTeam(room, throwerSeatIndex);
-    if (isDealer) {
-      // Dealer team failed throw → attackers gain 10
-      room.scores.attackers += 10;
-      room.tableLog.push(`${room.seats[throwerSeatIndex].nickname} 甩牌失败，闲家加 10 分。`);
-    } else {
-      // Attacker failed throw → attackers lose 10
-      room.scores.attackers = Math.max(0, room.scores.attackers - 10);
-      room.tableLog.push(`${room.seats[throwerSeatIndex].nickname} 甩牌失败，闲家扣 10 分。`);
-    }
+  if (room.seatPersonalScores[throwerSeatIndex] === undefined) {
+    room.seatPersonalScores[throwerSeatIndex] = 0;
   }
+  room.seatPersonalScores[throwerSeatIndex] -= 10;
+  room.tableLog.push(`${room.seats[throwerSeatIndex].nickname} 甩牌失败，扣 10 分。`);
+  recomputeScores(room);
 }
 
 export function runAiStep(room) {
@@ -524,12 +510,33 @@ export function chooseAiPlay(room, seat, leaderCards = null) {
   return seat.hand.slice(0, length);
 }
 
+// Derive team scores from each seat's captured trick points plus failed-throw
+// penalties, using the CURRENT team assignment. This implements rule 96: points
+// follow the individual until teams are known, so when the friend is revealed,
+// the points they captured before reveal move to the dealer team automatically.
+export function recomputeScores(room) {
+  let attackers = 0;
+  let dealerTeam = 0;
+  for (const seat of room.seats) {
+    if (isDealerTeam(room, seat.index)) dealerTeam += seat.takenTrickPoints;
+    else attackers += seat.takenTrickPoints;
+  }
+  // Failed-throw penalties: the thrower's team loses 10. Expressed as an attacker
+  // delta (dealer-team penalty benefits the attackers, attacker penalty reduces them).
+  for (const [idxStr, penalty] of Object.entries(room.seatPersonalScores || {})) {
+    if (penalty >= 0) continue;
+    const idx = Number(idxStr);
+    if (isDealerTeam(room, idx)) attackers += Math.abs(penalty);
+    else attackers += penalty;
+  }
+  room.scores = { attackers: Math.max(0, attackers), dealerTeam };
+}
+
 function finishTrick(room) {
   const winner = determineTrickWinner(room, room.currentTrick);
   const points = room.currentTrick.reduce((sum, play) => sum + play.points, 0);
   room.seats[winner].takenTrickPoints += points;
-  if (!isDealerTeam(room, winner)) room.scores.attackers += points;
-  else room.scores.dealerTeam += points;
+  recomputeScores(room);
   room.finishedTricks.push({ plays: room.currentTrick, winner, points });
   room.tableLog.push(`${seatName(room, winner)} 赢得本墩，${points} 分。`);
   room.lastTrick = room.currentTrick;
@@ -543,23 +550,9 @@ function finishTrick(room) {
 }
 
 function finishRound(room, lastWinner) {
-  // Merge pre-friend personal penalty scores into team totals
-  // Any negative personal scores (from failed throws) are already reflected,
-  // but we need to ensure they're accounted for in the final attackers total.
-  // seatPersonalScores only tracks penalties; normal trick points go through scores.attackers.
-  // Apply any remaining personal score adjustments:
-  for (const [seatIndexStr, personalScore] of Object.entries(room.seatPersonalScores || {})) {
-    const seatIndex = Number(seatIndexStr);
-    if (personalScore < 0) {
-      // Negative personal score = penalty that happened before friend was revealed
-      // Attacker penalty → reduce attackers; dealer penalty → increase attackers
-      if (isDealerTeam(room, seatIndex)) {
-        room.scores.attackers += Math.abs(personalScore); // dealer penalty benefits attackers
-      } else {
-        room.scores.attackers += personalScore; // negative = reduce attackers
-      }
-    }
-  }
+  // Final settlement: recompute team scores from each seat's captured points
+  // using the final team assignment (rule 96), then add the doubled kitty bonus.
+  recomputeScores(room);
 
   const kittyPoints = room.hiddenKitty.reduce((sum, card) => sum + cardScore(card), 0);
   let buriedBonus = 0;
@@ -913,7 +906,8 @@ function comparePlay(room, challenger, currentBest, leadPlay) {
   let challengerIsTrumpCut = false;
 
   // 挑战者的组合结构必须和首出完全一致（例如：首出是两对，挑战者也必须出两对）
-  if (challengerShape.type === leadShape.type && challengerShape.unit === leadShape.unit) {
+  // 注意：甩牌(throw)单独在下方分支处理，这里只处理单张/对子/三条/拖拉机。
+  if (leadShape.type !== "throw" && challengerShape.type === leadShape.type && challengerShape.unit === leadShape.unit) {
     if (challengerSuit === ledSuit) {
       challengerValid = true; // 同花色同牌型正常跟牌
     } else if (ledSuit !== "trump" && challengerSuit === "trump" && isAllTrumpCards(challengerCards, room)) {
@@ -923,13 +917,14 @@ function comparePlay(room, challenger, currentBest, leadPlay) {
   }
 
   // 特殊处理首出是"甩牌(throw)"的情况
-  // 特殊处理首出是"甩牌(throw)"的情况
   if (leadShape.type === "throw") {
-    if (challengerSuit === ledSuit) {
-      // Same suit — valid. Structure compliance enforced by validatePlay/validateThrowFollow
+    // 必须【整手】都是首出花色，才有资格按同花色比大小。
+    // 只要混入别的花色（哪怕含主牌但不是全主牌），都只能算垫牌，压不过甩牌。
+    const challengerAllLedSuit = challengerCards.every((c) => playSuit(c, room) === ledSuit);
+    if (challengerAllLedSuit) {
       challengerValid = true;
     } else if (ledSuit !== "trump" && isAllTrumpCards(challengerCards, room)) {
-      // Trump cut — must match the structural composition of the throw
+      // 主牌杀：必须【整手】都是主牌，且结构与甩牌完全一致
       // (same count of tractors/triples/pairs/singles as the leader's throw)
       if (throwStructureMatch(challengerCards, leadPlayCards, room)) {
         challengerValid = true;
@@ -1078,7 +1073,10 @@ function forcedRequirement(leaderShape, available, room) {
   }
 
   if (leaderShape.type === "pair") {
-    if (hasGroup(available, 2)) return { type: "pair", count: 1 };
+    // 只有存在“天然对子”（恰好成对）时才强制跟对子；
+    // 若只有三条而无对子，可选择不拆三张（规则允许）。
+    const hasNaturalPair = groupCards(available).some((g) => g.length === 2);
+    if (hasNaturalPair) return { type: "pair", count: 1 };
     return { type: "any" };
   }
 
@@ -1277,6 +1275,8 @@ function updateFriend(room, play) {
       if (room.friendCall.seen === room.friendCall.ordinal) {
         room.friendSeat = play.seat;
         room.tableLog.push(`${seatName(room, play.seat)} 成为朋友。`);
+        // Teams are now known — reassign captured points per rule 96.
+        recomputeScores(room);
       }
     }
   }
@@ -1314,9 +1314,10 @@ function isDealerTeam(room, seatIndex) {
 
 function buryMultiplier(shape) {
   if (!shape) return 2;
+  // 规则：扣底倍率 = 2^(本墩获胜牌的张数)。单张2、对子4、三条8、四张拖拉机16…
   if (shape.type === "pair") return 4;
   if (shape.type === "triple") return 8;
-  if (shape.type === "tractor") return 2 ** shape.length;
+  if (shape.type === "tractor") return 2 ** (shape.unit * shape.count);
   return 2;
 }
 
