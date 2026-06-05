@@ -75,6 +75,23 @@ server.listen(port, () => {
   console.log(`升级找朋友 running at http://localhost:${port}`);
 });
 
+// ── 房间回收：无任何活跃连接持续一段时间的房间从内存清除（并清掉其待触发的
+// 托管计时器），防止废弃房间和 POST /api/rooms 刷量造成内存泄漏。
+const ROOM_EMPTY_TTL_MS = 10 * 60 * 1000;
+const ROOM_SWEEP_MS = 2 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of rooms) {
+    const hasLiveClient = [...sockets.values()].some((c) => c.roomCode === code);
+    if (hasLiveClient) { room.emptySince = null; continue; }
+    if (room.emptySince == null) { room.emptySince = now; continue; }
+    if (now - room.emptySince > ROOM_EMPTY_TTL_MS) {
+      if (room.trusteeTimers) for (const t of Object.values(room.trusteeTimers)) clearTimeout(t);
+      rooms.delete(code);
+    }
+  }
+}, ROOM_SWEEP_MS).unref?.();
+
 function serveStatic(urlPath, res) {
   const safePath = urlPath === "/" ? "/index.html" : urlPath;
   const filePath = path.normalize(path.join(publicDir, safePath));
@@ -213,6 +230,14 @@ function handleMessage(client, message) {
       nextRoundLobby:   () => resetToLobby(room)
     };
     if (!actions[type]) throw new Error("未知操作");
+    // 推进/重置整桌牌局或改动座位的动作（开局、塞 AI、翻底、强制定庄、踹回大厅），
+    // 必须由已入座玩家发起，防止观战者或伪造连接搅局。带 playerId 的出牌/抢庄等
+    // 动作已在引擎层按座位归属校验，此处只补这批不带身份的房间管理动作。
+    // 公开部署时可进一步收紧为仅房主（room.hostId === client.playerId）。
+    const seatedOnly = ["startRound", "addAi", "startAuction", "revealKitty", "forceDealer", "nextRoundLobby"];
+    if (seatedOnly.includes(type) && !room.seats.some((s) => s.playerId === client.playerId)) {
+      throw new Error("只有入座玩家可以操作");
+    }
     actions[type]();
     broadcast(room);
 
@@ -330,6 +355,7 @@ function scheduleBidTimeout(room) {
 }
 
 function scheduleAi(room) {
+  scheduleAutoTrustee(room); // 轮到掉线真人时宽限后自动托管，避免整桌卡死
   setTimeout(() => {
     let moved = false;
     try {
@@ -347,6 +373,33 @@ function scheduleAi(room) {
   }, 350);
 }
 
+// ── 掉线自动托管：轮到当前该行动的座位却是掉线真人时，宽限若干秒后自动托管，
+// 交给 runAiStep 接管，避免整桌无限等待。玩家重连后可手动取消托管。
+const DISCONNECT_TRUSTEE_MS = 20000;
+function actorSeat(room) {
+  if (room.phase === "playing") return room.turnSeat;
+  if (["forcedSuit", "burying", "friend"].includes(room.phase)) return room.dealerSeat;
+  return null; // 抢庄阶段由 scheduleBidTimeout 的 10s 兜底
+}
+function scheduleAutoTrustee(room) {
+  const idx = actorSeat(room);
+  if (idx == null) return;
+  const seat = room.seats[idx];
+  if (!seat || !seat.playerId || seat.isAi || seat.trustee || seat.connected) return;
+  room.trusteeTimers = room.trusteeTimers || {};
+  if (room.trusteeTimers[idx]) return; // 已在计时
+  room.trusteeTimers[idx] = setTimeout(() => {
+    delete room.trusteeTimers[idx];
+    const s = room.seats[idx];
+    if (s && s.playerId && !s.isAi && !s.connected && actorSeat(room) === idx) {
+      try { setTrustee(room, s.playerId, true); } catch (_) { return; }
+      room.tableLog.push(`${s.nickname} 掉线，已自动托管。`);
+      broadcast(room);
+      scheduleAi(room);
+    }
+  }, DISCONNECT_TRUSTEE_MS);
+}
+
 function disconnect(client) {
   sockets.delete(client.socket);
   const room = client.roomCode ? rooms.get(client.roomCode) : null;
@@ -356,6 +409,7 @@ function disconnect(client) {
   }
   if (room.spectators.has(client.playerId)) room.spectators.get(client.playerId).connected = false;
   broadcast(room);
+  scheduleAutoTrustee(room); // 掉线的正是当前该行动的人时，启动自动托管计时
 }
 
 function send(client, type, payload) {
