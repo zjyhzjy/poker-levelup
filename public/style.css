@@ -586,6 +586,33 @@ button, input, select { font: inherit; }
 }
 .context-controls button.primary-action:hover { opacity: .9; }
 
+/* Highlight the currently-winning play in the ongoing trick */
+.seat-played.winning {
+  position: relative;
+  border-radius: 9px;
+  padding: 3px;
+  box-shadow: 0 0 0 2px rgba(255,216,77,.95), 0 0 14px 3px rgba(255,180,0,.55);
+  animation: winningPulse 1.4s ease-in-out infinite;
+}
+.seat-played.winning::after {
+  content: "最大";
+  position: absolute;
+  top: -9px;
+  right: -7px;
+  background: linear-gradient(135deg, #e8b84b, #ffd84d);
+  color: #3a2400;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.55);
+}
+@keyframes winningPulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255,216,77,.85), 0 0 12px 2px rgba(255,180,0,.45); }
+  50%      { box-shadow: 0 0 0 2px rgba(255,216,77,1),   0 0 18px 5px rgba(255,180,0,.7); }
+}
+
 /* Trick points flying to the winner */
 .points-fly {
   position: fixed;

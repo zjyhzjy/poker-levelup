@@ -361,17 +361,21 @@ function renderSeats(room) {
     // Cards beside seat — bottom seats (pos 1,4) show cards ABOVE the token
     const playedAbove = screenPos === 1 || screenPos === 4;
     let sideCardsHTML = "";
+    let currentPlayShown = false;
     if (showBids && seatBids[seat.index]) {
       sideCardsHTML = renderPlayedCards(seatBids[seat.index].cards);
     } else {
       let playedCards = null;
       if (currentPlayed[seat.index]) {
         playedCards = currentPlayed[seat.index];
+        currentPlayShown = true;
       } else if (room.currentTrick.length === 0 && lastPlayed[seat.index]) {
         playedCards = lastPlayed[seat.index];
       }
       if (playedCards) sideCardsHTML = renderPlayedCards(playedCards);
     }
+    // 高亮当前这墩已出牌中“最大的一手”
+    const winningPlay = currentPlayShown && room.currentWinnerSeat === seat.index;
 
     // Personal score
     let personalScore = "";
@@ -408,7 +412,7 @@ function renderSeats(room) {
       : "空座";
 
     const playedDiv = sideCardsHTML
-      ? `<div class="seat-played">${sideCardsHTML}</div>`
+      ? `<div class="seat-played${winningPlay ? " winning" : ""}">${sideCardsHTML}</div>`
       : "";
 
     return `<div class="seat screen-pos-${screenPos} ${youClass} ${activeClass}">

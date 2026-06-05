@@ -2299,6 +2299,10 @@ export function publicState(room, viewerId = null) {
     currentTrick: room.currentTrick,
     lastTrick: room.lastTrick,
     lastTrickWin: room.lastTrickWin || null,
+    // 当前这墩已出牌中“最大的一手”所属座位（用于前端实时高亮领先者）。
+    currentWinnerSeat: (room.phase === PHASES.PLAYING && room.currentTrick.length > 0)
+      ? (() => { try { return determineTrickWinner(room, room.currentTrick); } catch { return null; } })()
+      : null,
     throwResult: room.throwResult,
     scores: room.scores,
     seatPersonalScores: room.seatPersonalScores || {},
