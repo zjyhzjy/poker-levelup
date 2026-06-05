@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, createRoom, decideAiBid, evaluateBid, makeBid, passBid, revealKittyCard, runAiStep, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, createRoom, decideAiBid, evaluateBid, makeBid, passBid, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -262,4 +262,12 @@ test("跟超长副牌拖拉机时同门牌极多也不返回非法牌", () => {
   const play = chooseAiPlay(room, ai, lead);
   assert.equal(play.length, 8, "必须跟满 8 张");
   assert.equal(validatePlay(room, ai, play, lead).ok, true, "兜底也必须是合法跟牌");
+});
+
+test("昵称去空白并按字符限长", () => {
+  const room = createRoom("NICK");
+  sit(room, "p1", 0, "  " + "字".repeat(100) + "  ", null);
+  assert.equal([...room.seats[0].nickname].length, 16, "昵称应被限制为 16 个字符");
+  sit(room, "p2", 1, "   ", null);
+  assert.equal(room.seats[1].nickname, "玩家2", "纯空白昵称回退到默认名");
 });

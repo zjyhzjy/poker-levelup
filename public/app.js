@@ -338,7 +338,7 @@ function renderSeats(room) {
 
   seatsEl.innerHTML = room.seats.map((seat) => {
     const screenPos = seatToScreenPos(seat.index, viewerSeatIndex);
-    const initial = (seat.nickname || "?")[0].toUpperCase();
+    const initial = escapeHtml((seat.nickname || "?")[0].toUpperCase());
     const isActive = room.phase === "playing" && room.turnSeat === seat.index;
     const youClass = seat.isYou ? "you" : "";
     const activeClass = isActive ? "active" : "";
@@ -419,10 +419,10 @@ function renderSeats(room) {
       ${playedAbove ? playedDiv : ""}
       <div class="seat-token-wrap">
         ${roleBadge}
-        <div class="seat-token ${seat.avatar ? "has-avatar" : ""} ${seat.playerId && !seat.isYou ? "emote-target" : ""}"${seat.playerId && !seat.isYou ? ` data-emote="${seat.index}"` : ""}>${seat.avatar || initial}</div>
+        <div class="seat-token ${seat.avatar ? "has-avatar" : ""} ${seat.playerId && !seat.isYou ? "emote-target" : ""}"${seat.playerId && !seat.isYou ? ` data-emote="${seat.index}"` : ""}>${seat.avatar ? escapeHtml(seat.avatar) : initial}</div>
         ${personalScore}
       </div>
-      <div class="seat-name">${seat.nickname || `座位${seat.index + 1}`}</div>
+      <div class="seat-name">${escapeHtml(seat.nickname || `座位${seat.index + 1}`)}</div>
       <div class="seat-info">${statusText}${levelText ? " · " + levelText : ""}</div>
       ${bidIndicator}
       ${actionsHTML}
@@ -890,7 +890,7 @@ function cardFaceHTML(card) {
 /* ─── Log ────────────────────────────────────────────────── */
 function renderLog(room) {
   $("#log").innerHTML = room.tableLog.slice().reverse()
-    .map((line) => `<div>${line}</div>`).join("");
+    .map((line) => `<div>${escapeHtml(line)}</div>`).join("");
 }
 
 // Log drawer toggle
@@ -989,8 +989,10 @@ function phaseText(phase) {
   }[phase] || phase;
 }
 
+// 返回值会直接插入 innerHTML（轮次提示/结算/亮庄日志等），故在此统一 HTML 转义，
+// 防止玩家用 <img onerror=...> 之类的昵称注入脚本（存储型 XSS）。
 function seatName(room, index) {
-  return room.seats[index]?.nickname || `座位${index + 1}`;
+  return escapeHtml(room.seats[index]?.nickname || `座位${index + 1}`);
 }
 
 function suitSymbol(suit) {

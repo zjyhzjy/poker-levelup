@@ -78,9 +78,15 @@ export function randomRoomCode() {
   return crypto.randomBytes(3).toString("hex").toUpperCase();
 }
 
+// 昵称清洗：去空白并按字符限长 16，防止超长昵称撑爆状态/UI。
+// HTML 转义在前端渲染时统一处理（见 app.js 的 seatName/escapeHtml）。
+function sanitizeNickname(s) {
+  return typeof s === "string" ? [...s.trim()].slice(0, 16).join("") : "";
+}
+
 export function joinRoom(room, playerId, nickname) {
   if (!room.hostId) room.hostId = playerId;
-  room.spectators.set(playerId, { playerId, nickname: nickname?.trim() || "游客", connected: true });
+  room.spectators.set(playerId, { playerId, nickname: sanitizeNickname(nickname) || "游客", connected: true });
   return publicState(room, playerId);
 }
 
@@ -98,7 +104,7 @@ export function sit(room, playerId, seatIndex, nickname, avatar) {
     }
   }
   seat.playerId = playerId;
-  seat.nickname = nickname?.trim() || room.spectators.get(playerId)?.nickname || `玩家${seatIndex + 1}`;
+  seat.nickname = sanitizeNickname(nickname) || room.spectators.get(playerId)?.nickname || `玩家${seatIndex + 1}`;
   if (typeof avatar === "string" && avatar.trim()) seat.avatar = avatar.trim().slice(0, 8);
   seat.connected = true;
   seat.isAi = false;
