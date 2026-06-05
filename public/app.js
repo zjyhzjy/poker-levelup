@@ -167,6 +167,7 @@ function render() {
   try { renderSpectators(room); } catch(e) { console.error("renderSpectators:", e); }
   try { renderLog(room); }      catch(e) { console.error("renderLog:", e); }
   try { maybeAnimateTrickPoints(room); } catch(e) { console.error("trickPoints:", e); }
+  try { maybeAnimateFriendReveal(room); } catch(e) { console.error("friendReveal:", e); }
 }
 
 // Spectators (joined but not seated) — listed small in the table's top-left.
@@ -282,6 +283,40 @@ function emoteBurst(x, y, kind) {
     { transform: "translate(-50%,-50%) scale(.2)", opacity: .85 },
     { transform: "translate(-50%,-50%) scale(1.35)", opacity: 0 }
   ], { duration: 600, easing: "ease-out" }).onfinish = () => splat.remove();
+}
+
+/* ─── Friend reveal flash ────────────────────────────────── */
+// 找朋友玩法最高潮的“敌我翻转”瞬间。靠 friendReveal.seq 检测这一次现身（每局一次）。
+let lastFriendSeq = null;
+function maybeAnimateFriendReveal(room) {
+  const info = room.friendReveal;
+  const seq = info?.seq ?? 0;
+  if (lastFriendSeq === null) { lastFriendSeq = seq; return; } // 首帧同步，不补播历史
+  if (seq === lastFriendSeq) return;
+  lastFriendSeq = seq;
+  if (info) animateFriendReveal(info.seat);
+}
+function animateFriendReveal(seatIndex) {
+  const el = seatTokenEl(seatIndex);
+  if (!el) return;
+  el.animate([
+    { boxShadow: "0 0 0 0 rgba(255,216,77,.9)", transform: "scale(1)" },
+    { boxShadow: "0 0 0 16px rgba(255,216,77,0)", transform: "scale(1.22)", offset: .45 },
+    { boxShadow: "0 0 0 0 rgba(255,216,77,0)", transform: "scale(1)" }
+  ], { duration: 1000, easing: "ease-out" });
+  const r = el.getBoundingClientRect();
+  const tag = document.createElement("div");
+  tag.className = "friend-pop";
+  tag.textContent = "🤝 朋友现身！";
+  tag.style.left = `${r.left + r.width / 2}px`;
+  tag.style.top = `${r.top}px`;
+  document.body.appendChild(tag);
+  tag.animate([
+    { transform: "translate(-50%,-50%) scale(.6)", opacity: 0 },
+    { transform: "translate(-50%,-150%) scale(1.15)", opacity: 1, offset: .3 },
+    { transform: "translate(-50%,-190%) scale(1)", opacity: 1, offset: .8 },
+    { transform: "translate(-50%,-230%) scale(.9)", opacity: 0 }
+  ], { duration: 1700, easing: "cubic-bezier(.2,.7,.3,1)" }).onfinish = () => tag.remove();
 }
 
 /* ─── Trick points fly-to-winner animation ──────────────── */

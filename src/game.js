@@ -167,6 +167,7 @@ export function startRound(room, random = Math.random, options = {}) {
   room.currentTrick = [];
   room.lastTrick = [];
   room.lastTrickWin = null;
+  room.friendReveal = null;
   room.throwResult = null;
   room.finishedTricks = [];
   room.scores = { attackers: 0, dealerTeam: 0 };
@@ -2121,6 +2122,9 @@ function updateFriend(room, play) {
       room.friendCall.seen += 1;
       if (room.friendCall.seen === room.friendCall.ordinal) {
         room.friendSeat = play.seat;
+        // 供前端播放“朋友现身”戏剧化动画：seq 单调递增以便检测这一次现身。
+        room.friendReveal = { seat: play.seat, seq: (room.friendRevealSeq || 0) + 1 };
+        room.friendRevealSeq = room.friendReveal.seq;
         room.tableLog.push(`${seatName(room, play.seat)} 成为朋友。`);
         // Teams are now known — reassign captured points per rule 96.
         recomputeScores(room);
@@ -2377,6 +2381,7 @@ export function publicState(room, viewerId = null) {
     revealedKitty: room.revealedKitty,
     friendCall: room.friendCall,
     friendSeat: room.friendSeat,
+    friendReveal: room.friendReveal || null,
     currentLeader: room.currentLeader,
     turnSeat: room.turnSeat,
     currentTrick: room.currentTrick,

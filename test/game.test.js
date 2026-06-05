@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, decideAiBid, evaluateBid, makeBid, passBid, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, decideAiBid, evaluateBid, makeBid, passBid, playCards, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -287,4 +287,19 @@ test("confirmDealer 幂等：重复确认不会把底牌并入两次", () => {
   assert.equal(room.phase, "burying");
   confirmDealer(room); // 重复确认应早退
   assert.equal(room.seats[0].hand.length, before + 7, "重复确认不应再次并入底牌");
+});
+
+test("朋友现身时设置 friendReveal 供前端动画", () => {
+  const room = createRoom("FRV");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  room.phase = "playing"; room.dealerSeat = 0; room.friendSeat = null;
+  room.friendCall = { rank: "A", suit: "spades", ordinal: 1, seen: 0 };
+  const deck = createDeck();
+  const spadeA = deck.find((c) => c.rank === "A" && c.suit === "spades");
+  for (let i = 0; i < 5; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  room.seats[1].hand = [spadeA, deck.find((c) => c.rank === "3" && c.suit === "spades")];
+  room.turnSeat = 1;
+  playCards(room, "p1", [spadeA.id]); // 领出黑桃A → 匹配朋友牌 → 现身
+  assert.equal(room.friendSeat, 1);
+  assert.ok(room.friendReveal && room.friendReveal.seat === 1 && room.friendReveal.seq >= 1);
 });
