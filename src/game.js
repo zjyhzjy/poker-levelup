@@ -50,6 +50,8 @@ export function createRoom(code = randomRoomCode()) {
     currentBid: null,
     seatBids: {},       // seatIndex -> bid object (for display beside seats)
     bidResponses: {},   // seatIndex -> "bid" | "pass" (tracking who responded)
+    dealing: false,     // true while cards are being dealt round-by-round
+    dealCursor: null,   // next seat to receive a card during gradual dealing
     deck: [],
     kitty: [],
     revealedKitty: [],
@@ -120,7 +122,11 @@ export function leaveSeat(room, playerId) {
   seat.isAi = false;
 }
 
-export function startRound(room, random = Math.random) {
+export function startRound(room, random = Math.random, options = {}) {
+  // options.deal === false → set up the round but deal cards gradually via
+  // dealRound() (driven by a timer in server.js). Default deals everything at
+  // once so unit tests and any non-animated callers keep working.
+  const dealImmediately = options.deal !== false;
   assertPhase(room, PHASES.LOBBY);
   if (room.seats.some((seat) => !seat.playerId)) throw new Error("需要 5 名玩家全部坐下");
   room.round += 1;
@@ -157,26 +163,47 @@ export function startRound(room, random = Math.random) {
     seat.takenTrickPoints = 0;
     if (firstRound) seat.level = room.firstLevel;
   }
-  dealAll(room);
-  
+
   room.tableLog.push(`本轮从 ${seatName(room, room.starterSeat)} 开始逆时针摸牌。`);
-  // 在 startRound 函数发牌逻辑结束后加入：
-  room.tableLog.push(`【系统】本局游戏开始！所有玩家的当前级牌为: ${room.levelRank}`);
-  if (!room.currentBid) {
-    room.phase = PHASES.AUCTION_READY;
-    room.tableLog.push("摸牌结束无人亮主，等待手动开始翻底拍卖。");
+  room.tableLog.push(`【系统】本局游戏开始！请在摸牌期间亮主抢庄。`);
+
+  room.dealing = true;
+  room.dealCursor = room.starterSeat;
+  if (dealImmediately) {
+    while (dealRound(room)) { /* deal all rounds at once */ }
   }
 }
 
-function dealAll(room) {
-  let seatIndex = room.starterSeat;
-  while (room.deck.length > KITTY_SIZE) {
+// Deal one "圈" (one card to each seated position, counter-clockwise from the
+// starter). Returns true if more cards remain to be dealt, false when finished.
+export function dealRound(room) {
+  if (room.phase !== PHASES.DEALING || !room.dealing) return false;
+  for (let i = 0; i < SEATS && room.deck.length > KITTY_SIZE; i += 1) {
     const card = room.deck.shift();
-    room.seats[seatIndex].hand.push(card);
-    seatIndex = nextSeat(seatIndex);
+    room.seats[room.dealCursor].hand.push(card);
+    room.dealCursor = nextSeat(room.dealCursor);
   }
-  room.kitty = room.deck.splice(0);
   for (const seat of room.seats) sortHand(seat.hand, room, seat.level);
+  if (room.deck.length <= KITTY_SIZE) {
+    room.kitty = room.deck.splice(0);
+    finishDealing(room);
+    return false;
+  }
+  return true;
+}
+
+function finishDealing(room) {
+  room.dealing = false;
+  room.dealCursor = null;
+  if (room.currentBid) {
+    // Someone bid during the deal — now that the kitty exists we can resolve it.
+    _checkAllBidResponded(room);
+    return;
+  }
+  if (room.phase === PHASES.DEALING) {
+    room.phase = PHASES.AUCTION_READY;
+    room.tableLog.push("摸牌结束无人亮主，等待手动开始翻底拍卖。");
+  }
 }
 
 export function makeBid(room, playerId, cardIds) {
@@ -214,6 +241,7 @@ export function passBid(room, playerId) {
 
 function _checkAllBidResponded(room) {
   if (!room.currentBid) return;
+  if (room.dealing) return; // wait until all cards are dealt before confirming
   const totalSeats = room.seats.filter((s) => s.playerId).length;
   const responded = Object.keys(room.bidResponses).length;
   if (responded >= totalSeats) {
@@ -242,6 +270,7 @@ export function revealKittyCard(room) {
 
 export function confirmDealer(room) {
   if (!room.currentBid) throw new Error("还没有庄家");
+  if (room.dealing) return; // cards still being dealt; kitty not ready yet
   room.dealerSeat = room.currentBid.seat;
   room.levelRank = room.currentBid.levelRank;
   room.trumpSuit = room.currentBid.trumpSuit;
@@ -1496,6 +1525,7 @@ export function publicState(room, viewerId = null) {
     currentBid: room.currentBid,
     seatBids: room.seatBids,
     bidResponses: room.bidResponses,
+    dealing: room.dealing,
     revealedKitty: room.revealedKitty,
     friendCall: room.friendCall,
     friendSeat: room.friendSeat,

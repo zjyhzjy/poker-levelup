@@ -9,6 +9,9 @@ const state = {
 
 const $ = (sel) => document.querySelector(sel);
 
+// Tracks the currently shown bid so the center reveal only re-animates on change
+let lastBidSig = "";
+
 /* ─── Join Screen ────────────────────────────────────────── */
 $("#nickname").value = state.nickname;
 
@@ -266,6 +269,10 @@ function renderCenter(room) {
     ? `轮到：${seatName(room, room.turnSeat)}`
     : "";
 
+  // Current declared trump ("亮主") shown prominently in the center with a pop
+  // animation whenever someone bids / counters (反主/加固).
+  renderBidReveal(room);
+
   // Revealed kitty during auction
   let kittyEl = document.getElementById("revealedKittyDisplay");
   if (!kittyEl) {
@@ -349,13 +356,47 @@ function renderCenter(room) {
   }
 }
 
+/* ─── Center "亮主" reveal ───────────────────────────────── */
+function renderBidReveal(room) {
+  const el = $("#bidReveal");
+  if (!el) return;
+  const biddingPhases = ["dealing", "auctionReady", "auction", "forcedSuit"];
+  const bid = room.currentBid;
+  const cards = bid?.cards || [];
+
+  if (bid && cards.length > 0 && biddingPhases.includes(room.phase)) {
+    const who = seatName(room, bid.seat);
+    const trumpLabel = bid.noTrump ? "无主" : (bid.trumpSuit ? suitSymbol(bid.trumpSuit) : "");
+    const cardsHTML = cards.map((c) => playedCardHTML(c)).join("");
+    el.innerHTML = `
+      <div class="bid-reveal-label">${who} 亮主${trumpLabel ? " · " + trumpLabel : ""}</div>
+      <div class="bid-reveal-cards">${cardsHTML}</div>`;
+    el.style.display = "flex";
+
+    const sig = `${bid.seat}|${cards.map((c) => c.id).join(",")}`;
+    if (sig !== lastBidSig) {
+      el.classList.remove("reveal-pop");
+      void el.offsetWidth; // force reflow so the animation restarts
+      el.classList.add("reveal-pop");
+      lastBidSig = sig;
+    }
+  } else {
+    el.innerHTML = "";
+    el.style.display = "none";
+    lastBidSig = "";
+  }
+}
+
 /* ─── Controls ───────────────────────────────────────────── */
 function renderControls(room) {
   const parts = [];
 
+  const centerAction = $("#centerAction");
   if (room.phase === "lobby") {
     const allSeated = room.seats.every((s) => s.playerId);
-    parts.push(`<button data-action="startRound" ${allSeated ? "" : "disabled"} class="primary-action">开始本局</button>`);
+    centerAction.innerHTML = `<button data-action="startRound" ${allSeated ? "" : "disabled"} class="primary-action">开始本局</button>`;
+  } else {
+    centerAction.innerHTML = "";
   }
 
   if (["dealing", "auctionReady", "auction"].includes(room.phase)) {
@@ -478,13 +519,18 @@ function renderHand(room) {
   const you = room.seats.find((s) => s.isYou);
   const hand = you?.hand || [];
 
-  $("#selectionInfo").textContent = state.selected.size > 0
-    ? `已选 ${state.selected.size} 张`
-    : `手牌 ${hand.length} 张`;
+  $("#selectionInfo").textContent = hand.length === 0
+    ? ""
+    : (state.selected.size > 0 ? `已选 ${state.selected.size} 张` : `手牌 ${hand.length} 张`);
 
   const container = $("#hand");
   container.innerHTML = "";
-  if (hand.length === 0) return;
+  if (hand.length === 0) {
+    // No hand (e.g. lobby): collapse the area so action buttons sit at the
+    // bottom instead of being pushed up over a seat.
+    container.style.height = "0";
+    return;
+  }
 
   const isPortrait = window.innerHeight > window.innerWidth;
   const containerWidth = container.clientWidth || (window.innerWidth - 20);
@@ -509,9 +555,10 @@ function renderHandRow(container, hand, containerWidth, cardW, bottomOffset) {
   const totalWidth = cardW + (hand.length - 1) * maxOffset;
   const startX = Math.max(0, (containerWidth - totalWidth) / 2);
 
+  const dealing = state.room?.phase === "dealing";
   hand.forEach((card, i) => {
     const el = document.createElement("button");
-    el.className = `card ${isRed(card) ? "red" : (card.suit === "joker" ? "joker" : "black")} ${card.rank === "bigJoker" ? "big-joker" : ""}`;
+    el.className = `card ${isRed(card) ? "red" : (card.suit === "joker" ? "joker" : "black")} ${card.rank === "bigJoker" ? "big-joker" : ""} ${dealing ? "dealing-in" : ""}`;
     el.dataset.card = card.id;
     el.title = card.label;
 

@@ -10,6 +10,7 @@ import {
   chooseForcedTrump,
   confirmDealer,
   createRoom,
+  dealRound,
   forceDealer,
   joinRoom,
   leaveSeat,
@@ -159,7 +160,7 @@ function handleMessage(client, message) {
       sit:              () => sit(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname),
       addAi:            () => addAiPlayer(room, Number(payload.seatIndex)),
       leaveSeat:        () => leaveSeat(room, client.playerId),
-      startRound:       () => startRound(room),
+      startRound:       () => startRound(room, Math.random, { deal: false }),
       bid:              () => makeBid(room, client.playerId, payload.cardIds || []),
       passBid:          () => passBid(room, client.playerId),
       // Manual auction start — just transitions to auction phase, no auto-flip
@@ -181,6 +182,11 @@ function handleMessage(client, message) {
     if (!actions[type]) throw new Error("未知操作");
     actions[type]();
     broadcast(room);
+
+    // Kick off the round-by-round dealing animation (~0.7s per round)
+    if (type === "startRound" && room.dealing) {
+      scheduleDealing(room);
+    }
 
     // After a bid is placed, schedule 10s timeout for others to respond
     if (type === "bid" && room.currentBid && room.phase !== "burying") {
@@ -212,6 +218,29 @@ function broadcast(room) {
   }
 }
 
+// Deal one round (~0.7s apart) until all cards are out, broadcasting after each
+// so every client sees the hand grow.
+const DEAL_ROUND_MS = 700;
+function scheduleDealing(room) {
+  setTimeout(() => {
+    if (room.phase !== "dealing" || !room.dealing) return;
+    let more;
+    try {
+      more = dealRound(room);
+    } catch (_) {
+      more = false;
+    }
+    broadcast(room);
+    if (more) {
+      scheduleDealing(room);
+    } else {
+      // Dealing finished. If a bid is pending, make sure it still gets resolved.
+      if (room.phase === "dealing" && room.currentBid) scheduleBidTimeout(room);
+      scheduleAi(room);
+    }
+  }, DEAL_ROUND_MS);
+}
+
 // After a bid is placed, give other players 10s to respond before auto-confirming
 function scheduleBidTimeout(room) {
   const bidAtSchedule = room.currentBid;
@@ -224,6 +253,9 @@ function scheduleBidTimeout(room) {
         room.bidResponses[seat.index] = "pass";
       }
     }
+    // Still dealing: record passes but defer confirming until the deal finishes
+    // (the kitty isn't assigned yet). finishDealing() will resolve it.
+    if (room.dealing) { broadcast(room); return; }
     try { confirmDealer(room); broadcast(room); scheduleAi(room); } catch (_) {}
   }, 10000);
 }

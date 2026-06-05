@@ -434,6 +434,67 @@ button, input, select { font: inherit; }
   text-shadow: 0 1px 4px rgba(0,0,0,.8);
 }
 
+/* ─── Center "亮主" reveal ───────────────────────────────── */
+.bid-reveal {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  pointer-events: none;
+}
+
+.bid-reveal-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold-light);
+  text-shadow: 0 1px 4px rgba(0,0,0,.85);
+  letter-spacing: 1px;
+}
+
+.bid-reveal-cards {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+  filter: drop-shadow(0 4px 10px rgba(0,0,0,.5));
+}
+
+.bid-reveal.reveal-pop { animation: bidPop .45s cubic-bezier(.34,1.56,.64,1); }
+
+@keyframes bidPop {
+  0%   { transform: scale(.4); opacity: 0; }
+  60%  { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* Card entrance while dealing round-by-round */
+@keyframes dealIn {
+  from { opacity: 0; transform: translateY(-26px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.card.dealing-in { animation: dealIn .3s ease-out; }
+
+/* Centered action (e.g. "开始本局" in lobby) */
+.center-action { pointer-events: none; }
+.center-action:not(:empty) { margin-top: 10px; }
+
+.center-action button {
+  pointer-events: auto;
+  padding: 14px 28px;
+  font-size: 16px;
+  font-weight: 700;
+  border-radius: 24px;
+  border: none;
+  color: #1a0a00;
+  background: linear-gradient(135deg, var(--gold), var(--gold-light));
+  box-shadow: 0 4px 18px rgba(0,0,0,.45), 0 0 0 1px rgba(200,144,45,.4);
+  cursor: pointer;
+  transition: opacity .2s, transform .1s;
+}
+.center-action button:hover { opacity: .92; }
+.center-action button:active { transform: scale(.96); }
+.center-action button:disabled { opacity: .45; cursor: not-allowed; }
+
 /* ─── Control Zone (bottom of table) ────────────────────── */
 .control-zone {
   position: absolute;
