@@ -11,6 +11,9 @@ const $ = (sel) => document.querySelector(sel);
 
 // Tracks the currently shown bid so the center reveal only re-animates on change
 let lastBidSig = "";
+// Card ids that have already played their deal-in animation, so re-renders during
+// dealing don't make the whole hand flicker (only newly dealt cards animate).
+const dealtCardIds = new Set();
 
 /* ─── Join Screen ────────────────────────────────────────── */
 $("#nickname").value = state.nickname;
@@ -28,18 +31,25 @@ function connectAndJoin(code, nickname) {
   state.nickname = nickname || "玩家";
   localStorage.setItem("szp.nickname", state.nickname);
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  state.ws = new WebSocket(`${proto}://${location.host}`);
-  state.ws.addEventListener("message", (e) => {
+  const ws = new WebSocket(`${proto}://${location.host}`);
+  state.ws = ws;
+  // Only join once per socket. The server may send another "hello" after a
+  // reconnect join; without this guard we'd loop hello→join→hello forever.
+  let joined = false;
+  ws.addEventListener("message", (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === "hello") {
       state.playerId = msg.payload.playerId;
       localStorage.setItem("szp.playerId", state.playerId);
-      // If we have a stored playerId different from server's, try reconnect
-      const storedId = localStorage.getItem("szp.playerId.prev") || "";
-      if (code && storedId && storedId !== state.playerId) {
-        send("joinRoom", { code, nickname: state.nickname, playerId: storedId });
-      } else {
-        send(code ? "joinRoom" : "createRoom", { code, nickname: state.nickname, playerId: state.playerId });
+      if (!joined) {
+        joined = true;
+        // If we have a stored playerId different from server's, try reconnect
+        const storedId = localStorage.getItem("szp.playerId.prev") || "";
+        if (code && storedId && storedId !== state.playerId) {
+          send("joinRoom", { code, nickname: state.nickname, playerId: storedId });
+        } else {
+          send(code ? "joinRoom" : "createRoom", { code, nickname: state.nickname, playerId: state.playerId });
+        }
       }
     }
     if (msg.type === "state") {
@@ -54,7 +64,7 @@ function connectAndJoin(code, nickname) {
     }
     if (msg.type === "error") showError(msg.payload.message);
   });
-  state.ws.addEventListener("close", () => {
+  ws.addEventListener("close", () => {
     // Save current playerId for reconnect attempts
     if (state.playerId) localStorage.setItem("szp.playerId.prev", state.playerId);
   });
@@ -204,14 +214,14 @@ function renderSeats(room) {
 function renderPlayedCards(cards) {
   if (!cards || cards.length === 0) return "";
 
-  const CARD_W = 38;
-  const CARD_H = 54;
+  const CARD_W = 50;
+  const CARD_H = 71;
   // Max container width available beside a seat (keep it compact)
-  const MAX_WIDTH = 120;
+  const MAX_WIDTH = 170;
   // Calculate offset per card so all fit within MAX_WIDTH
   const offset = cards.length === 1
     ? 0
-    : Math.min(28, Math.floor((MAX_WIDTH - CARD_W) / (cards.length - 1)));
+    : Math.min(34, Math.floor((MAX_WIDTH - CARD_W) / (cards.length - 1)));
   const totalWidth = CARD_W + (cards.length - 1) * offset;
 
   const inner = cards.map((card, i) =>
@@ -523,6 +533,10 @@ function renderHand(room) {
     ? ""
     : (state.selected.size > 0 ? `已选 ${state.selected.size} 张` : `手牌 ${hand.length} 张`);
 
+  // Reset the deal-in tracker whenever we're not actively dealing, so the next
+  // round's deal animates fresh (and normal play never animates).
+  if (room.phase !== "dealing") dealtCardIds.clear();
+
   const container = $("#hand");
   container.innerHTML = "";
   if (hand.length === 0) {
@@ -558,7 +572,10 @@ function renderHandRow(container, hand, containerWidth, cardW, bottomOffset) {
   const dealing = state.room?.phase === "dealing";
   hand.forEach((card, i) => {
     const el = document.createElement("button");
-    el.className = `card ${isRed(card) ? "red" : (card.suit === "joker" ? "joker" : "black")} ${card.rank === "bigJoker" ? "big-joker" : ""} ${dealing ? "dealing-in" : ""}`;
+    // Only animate cards that are newly dealt this round → no whole-hand flicker.
+    const isNewDealt = dealing && !dealtCardIds.has(card.id);
+    if (dealing) dealtCardIds.add(card.id);
+    el.className = `card ${isRed(card) ? "red" : (card.suit === "joker" ? "joker" : "black")} ${card.rank === "bigJoker" ? "big-joker" : ""} ${isNewDealt ? "dealing-in" : ""}`;
     el.dataset.card = card.id;
     el.title = card.label;
 
@@ -631,6 +648,22 @@ window.addEventListener("orientationchange", () => {
 window.addEventListener("resize", () => {
   if (state.room) renderHand(state.room);
 });
+
+// ─── Auto-reconnect after the app is backgrounded / loses the socket ──────────
+// On mobile, switching away can suspend or kill the WebSocket; on return the UI
+// looks frozen. Re-open the connection (the server re-seats us via our playerId).
+function reconnectIfNeeded() {
+  if (!state.room?.code) return;
+  const ws = state.ws;
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+  connectAndJoin(state.room.code, state.nickname);
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") reconnectIfNeeded();
+});
+window.addEventListener("pageshow", reconnectIfNeeded);
+window.addEventListener("focus", reconnectIfNeeded);
+window.addEventListener("online", reconnectIfNeeded);
 
 // Fullscreen toggle (works on Android; Safari requires Add to Home Screen)
 const fullscreenBtn = document.getElementById("fullscreenBtn");

@@ -246,8 +246,9 @@ button, input, select { font: inherit; }
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  background: rgba(0,0,0,.6);
-  border-bottom: 1px solid rgba(200,144,45,.3);
+  background: linear-gradient(180deg, rgba(10,30,18,.92) 0%, rgba(0,0,0,.55) 100%);
+  border-bottom: 1px solid rgba(200,144,45,.45);
+  box-shadow: 0 2px 12px rgba(0,0,0,.4), 0 1px 0 rgba(200,144,45,.15);
   z-index: 10;
 }
 
@@ -267,12 +268,14 @@ button, input, select { font: inherit; }
 
 .phase-badge {
   font-size: 12px;
-  color: var(--gold-light);
-  background: rgba(200,144,45,.15);
-  border: 1px solid rgba(200,144,45,.3);
+  font-weight: 600;
+  color: #1a0a00;
+  background: linear-gradient(135deg, var(--gold), var(--gold-light));
+  border: 1px solid rgba(255,255,255,.25);
   border-radius: 20px;
-  padding: 2px 10px;
+  padding: 3px 12px;
   letter-spacing: 1px;
+  box-shadow: 0 2px 8px rgba(200,144,45,.4);
 }
 
 .round-info {
@@ -403,7 +406,7 @@ button, input, select { font: inherit; }
 /* Played cards: above token for bottom-side seats (pos 1 & 4) so hand doesn't cover them */
 .seat-played {
   margin-top: 4px;
-  min-height: 54px;
+  min-height: 71px;
   display: flex;
   justify-content: center;
 }
@@ -605,9 +608,9 @@ button, input, select { font: inherit; }
   width: 52px;
   height: 74px;
   border-radius: var(--radius-card);
-  background: var(--card-bg);
-  border: 1px solid #ccc;
-  box-shadow: var(--shadow-card);
+  background: linear-gradient(160deg, #fffef9 0%, #f6edd8 100%);
+  border: 1px solid rgba(200,144,45,.4);
+  box-shadow: var(--shadow-card), inset 0 1px 0 rgba(255,255,255,.8);
   cursor: pointer;
   transition: transform .18s cubic-bezier(.34,1.56,.64,1), box-shadow .18s;
   overflow: hidden;
@@ -679,18 +682,18 @@ button, input, select { font: inherit; }
 }
 .card.joker .card-center { font-size: 14px; font-weight: 900; letter-spacing: -1px; }
 
-/* ─── Played Card (in seat area, slightly smaller) ───────── */
+/* ─── Played Card (in seat area / trick) ─────────────────── */
 .played-card {
-  width: 38px;
-  height: 54px;
-  border-radius: 5px;
-  background: var(--card-bg);
-  border: 1px solid #ccc;
-  box-shadow: 0 2px 6px rgba(0,0,0,.5);
+  width: 50px;
+  height: 71px;
+  border-radius: 7px;
+  background: linear-gradient(160deg, #fffef9 0%, #f4ead2 100%);
+  border: 1px solid rgba(200,144,45,.45);
+  box-shadow: 0 4px 12px rgba(0,0,0,.5), 0 0 0 1px rgba(0,0,0,.15), inset 0 1px 0 rgba(255,255,255,.7);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 2px 3px;
+  padding: 3px 4px;
   overflow: hidden;
   position: relative;
   flex-shrink: 0;
@@ -699,8 +702,8 @@ button, input, select { font: inherit; }
 .played-card::before {
   content: '';
   position: absolute; inset: 0;
-  border-radius: 5px;
-  background: linear-gradient(145deg, rgba(255,255,255,.5) 0%, transparent 50%);
+  border-radius: 7px;
+  background: linear-gradient(145deg, rgba(255,255,255,.65) 0%, transparent 55%);
   pointer-events: none;
 }
 
@@ -708,16 +711,16 @@ button, input, select { font: inherit; }
 .played-card.black { color: var(--black); }
 .played-card.joker { background: linear-gradient(135deg, #fff8e1, #ffe082); color: #5c3a00; }
 
-.played-card .card-rank  { font-size: 10px; font-weight: 800; }
-.played-card .card-suit-sm { font-size: 8px; }
-.played-card .card-center { font-size: 18px; }
-.played-card .card-center.joker-text { font-size: 10px; font-weight: 900; }
+.played-card .card-rank  { font-size: 14px; font-weight: 800; }
+.played-card .card-suit-sm { font-size: 11px; }
+.played-card .card-center { font-size: 25px; }
+.played-card .card-center.joker-text { font-size: 13px; font-weight: 900; }
 
 /* Stacked played cards: pile view */
 .played-stack {
   position: relative;
-  width: 38px;
-  height: 54px;
+  width: 50px;
+  height: 71px;
 }
 .played-stack .played-card {
   position: absolute;
