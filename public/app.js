@@ -171,7 +171,12 @@ function renderSeats(room) {
       if (!seat.playerId) {
         actionsHTML = `<div class="seat-actions">
           <button class="seat-btn" data-sit="${seat.index}">坐下</button>
-          <button class="seat-btn" data-ai="${seat.index}">加AI</button>
+          <div class="ai-add">
+            <span class="ai-add-label">加AI</span>
+            <button class="seat-btn ai-lv" data-ai="${seat.index}" data-level="easy" title="弱：被动跟最小牌">弱</button>
+            <button class="seat-btn ai-lv" data-ai="${seat.index}" data-level="medium" title="中：稳健抢墩、喂分、会抢庄">中</button>
+            <button class="seat-btn ai-lv" data-ai="${seat.index}" data-level="hard" title="强：会算牌、拔主、积极抢庄">强</button>
+          </div>
         </div>`;
       } else if (seat.isYou) {
         actionsHTML = `<div class="seat-actions"><button class="seat-btn" data-leave>离座</button></div>`;
@@ -205,7 +210,7 @@ function renderSeats(room) {
   seatsEl.querySelectorAll("[data-sit]").forEach(btn =>
     btn.addEventListener("click", () => send("sit", { seatIndex: Number(btn.dataset.sit), nickname: state.nickname })));
   seatsEl.querySelectorAll("[data-ai]").forEach(btn =>
-    btn.addEventListener("click", () => send("addAi", { seatIndex: Number(btn.dataset.ai) })));
+    btn.addEventListener("click", () => send("addAi", { seatIndex: Number(btn.dataset.ai), level: btn.dataset.level || "medium" })));
   seatsEl.querySelectorAll("[data-leave]").forEach(btn =>
     btn.addEventListener("click", () => send("leaveSeat")));
 }

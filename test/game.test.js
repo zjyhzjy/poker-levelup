@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, createRoom, evaluateBid, runAiStep, startAuction, startRound, upgradeResult } from "../src/game.js";
+import { addAiPlayer, analyzeShape, chooseAiFriendCard, chooseAiPlay, createRoom, decideAiBid, evaluateBid, revealKittyCard, runAiStep, startAuction, startRound, upgradeResult } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -49,13 +49,74 @@ test("升级分档", () => {
 
 test("AI 可以补座并自动推进无人叫庄流程", () => {
   const room = createRoom("AI");
-  room.seats[0].playerId = "human";
-  room.seats[0].nickname = "真人";
-  room.seats[0].connected = true;
-  for (let i = 1; i < 5; i += 1) addAiPlayer(room, i);
+  for (let i = 0; i < 5; i += 1) addAiPlayer(room, i, "medium");
   startRound(room, () => 0.2);
   startAuction(room);
+  // No one bid → the server reveals the 7 kitty cards to force a dealer.
+  let safety = 0;
+  while (room.phase === "auction" && safety++ < 10) revealKittyCard(room);
+  // From here AI advances forcedSuit → burying → friend → playing on its own.
   let guard = 0;
-  while (runAiStep(room) && guard < 20) guard += 1;
-  assert.ok(["forcedSuit", "burying", "friend", "playing"].includes(room.phase));
+  while (runAiStep(room) && guard < 80) guard += 1;
+  assert.ok(["burying", "friend", "playing", "roundOver"].includes(room.phase));
+});
+
+test("AI 叫朋友不会把自己当成朋友", () => {
+  const room = createRoom("FR");
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const dealer = room.seats[0];
+  dealer.playerId = "d"; dealer.isAi = true; dealer.aiLevel = "medium"; dealer.level = "2";
+  // Dealer already holds all 3 ♠A and one ♣K — the called card must be one the
+  // dealer cannot complete alone (held copies < ordinal).
+  dealer.hand = [
+    ...deck.filter((c) => c.rank === "A" && c.suit === "spades").slice(0, 3),
+    ...deck.filter((c) => c.rank === "K" && c.suit === "clubs").slice(0, 1)
+  ];
+  const call = chooseAiFriendCard(room, dealer);
+  const held = dealer.hand.filter((c) =>
+    c.rank === call.rank && (call.suit === "joker" ? true : c.suit === call.suit)).length;
+  assert.ok(held < call.ordinal, "庄家自己持有的数量必须少于朋友牌序号，否则会 4 打 1");
+  assert.ok(call.ordinal >= 1 && call.ordinal <= 3);
+});
+
+test("AI 跟牌不会把分牌送给对家", () => {
+  const room = createRoom("PT");
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  room.dealerSeat = 0;        // seat 0 leads and is an enemy of the AI
+  room.friendSeat = null;
+  const deck = createDeck();
+  const spadeK = deck.find((c) => c.rank === "K" && c.suit === "spades");
+  const spade5 = deck.find((c) => c.rank === "5" && c.suit === "spades");
+  const spade3 = deck.find((c) => c.rank === "3" && c.suit === "spades");
+  room.seats[0].playerId = "e0";
+  const ai = room.seats[1];
+  ai.playerId = "ai1"; ai.isAi = true; ai.aiLevel = "medium";
+  ai.hand = [spade5, spade3];
+  room.currentTrick = [{ seat: 0, cards: [spadeK], shape: analyzeShape([spadeK], room), points: 10 }];
+  room.turnSeat = 1;
+  const play = chooseAiPlay(room, ai, [spadeK]);
+  assert.equal(play.length, 1);
+  assert.equal(play[0].rank, "3"); // dump the 3, never feed the 5 to an enemy
+});
+
+test("AI 抢庄只用手里真实的常主牌", () => {
+  const room = createRoom("BID");
+  const deck = createDeck();
+  const seat = room.seats[0];
+  seat.playerId = "a"; seat.isAi = true; seat.aiLevel = "hard"; seat.level = "K";
+  seat.hand = [
+    ...deck.filter((c) => c.rank === "K" && c.suit === "spades").slice(0, 2),       // 2 级牌(同花)
+    ...deck.filter((c) => c.suit === "spades" && c.rank !== "K").slice(0, 18),       // 一堆黑桃
+    ...deck.filter((c) => c.suit === "joker").slice(0, 2)                            // 2 王
+  ];
+  const decision = decideAiBid(room, seat);
+  assert.ok(decision, "强主牌手应当抢庄");
+  assert.equal(decision.cardIds.length, decision.strength);
+  for (const id of decision.cardIds) {
+    const c = seat.hand.find((x) => x.id === id);
+    assert.ok(c && c.rank === "K" && c.suit === "spades"); // 只用手里的同花级牌
+  }
 });

@@ -396,6 +396,23 @@ button, input, select { font: inherit; }
 }
 .seat-btn:active { background: rgba(200,144,45,.45); }
 
+.ai-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.ai-add-label {
+  font-size: 10px;
+  color: rgba(255,255,255,.6);
+}
+.seat-btn.ai-lv {
+  padding: 4px 6px;
+  min-width: 20px;
+  text-align: center;
+}
+
 /* Seat positions by screen position (viewer always at pos 0) */
 .screen-pos-0 { bottom: 185px; left: 50%; transform: translateX(-50%); }
 .screen-pos-1 { bottom: 30%;   right: 5%; }

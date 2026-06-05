@@ -11,6 +11,7 @@ import {
   confirmDealer,
   createRoom,
   dealRound,
+  decideAiBid,
   forceDealer,
   joinRoom,
   leaveSeat,
@@ -158,7 +159,7 @@ function handleMessage(client, message) {
     const room = currentRoom(client);
     const actions = {
       sit:              () => sit(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname),
-      addAi:            () => addAiPlayer(room, Number(payload.seatIndex)),
+      addAi:            () => addAiPlayer(room, Number(payload.seatIndex), payload.level),
       leaveSeat:        () => leaveSeat(room, client.playerId),
       startRound:       () => startRound(room, Math.random, { deal: false }),
       bid:              () => makeBid(room, client.playerId, payload.cardIds || []),
@@ -191,6 +192,11 @@ function handleMessage(client, message) {
     // After a bid is placed, schedule 10s timeout for others to respond
     if (type === "bid" && room.currentBid && room.phase !== "burying") {
       scheduleBidTimeout(room);
+    }
+
+    // Let AI seats open/contest the bidding once a human acts in the auction.
+    if (["bid", "passBid", "startAuction", "revealKitty"].includes(type)) {
+      scheduleAiBids(room);
     }
 
     scheduleAi(room);
@@ -236,9 +242,40 @@ function scheduleDealing(room) {
     } else {
       // Dealing finished. If a bid is pending, make sure it still gets resolved.
       if (room.phase === "dealing" && room.currentBid) scheduleBidTimeout(room);
+      scheduleAiBids(room); // AI seats may now open the bidding
       scheduleAi(room);
     }
   }, DEAL_ROUND_MS);
+}
+
+// Let each AI seat consider bidding/responding, staggered, once per call. Driven
+// by auction events (deal finished, a bid placed, a card revealed) so it respects
+// the reveal/10s pacing instead of firing through the fast 350ms AI loop.
+function scheduleAiBids(room) {
+  const aiSeats = room.seats.filter((s) => s.isAi && s.playerId);
+  aiSeats.forEach((seat, i) => {
+    setTimeout(() => {
+      if (room.dealing) return;
+      if (!["auctionReady", "auction"].includes(room.phase)) return;
+      if (room.bidResponses[seat.index]) return;                       // already acted
+      if (room.currentBid && room.currentBid.seat === seat.index) return;
+      try {
+        const decision = decideAiBid(room, seat);
+        if (decision && (!room.currentBid || decision.strength > room.currentBid.strength)) {
+          makeBid(room, seat.playerId, decision.cardIds);
+          broadcast(room);
+          scheduleBidTimeout(room); // 10s window for this new bid
+          scheduleAiBids(room);     // let the others respond to it
+          scheduleAi(room);         // in case it confirmed the dealer immediately
+        } else if (room.currentBid) {
+          passBid(room, seat.playerId);
+          broadcast(room);
+          scheduleAi(room);
+        }
+        // else: nothing on the table and AI doesn't want it → wait for the human/翻底
+      } catch (_) { /* state moved on; ignore */ }
+    }, 500 + i * 650);
+  });
 }
 
 // After a bid is placed, give other players 10s to respond before auto-confirming
