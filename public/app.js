@@ -151,6 +151,7 @@ function render() {
   try { renderHand(room); }     catch(e) { console.error("renderHand:", e); }
   try { renderSpectators(room); } catch(e) { console.error("renderSpectators:", e); }
   try { renderLog(room); }      catch(e) { console.error("renderLog:", e); }
+  try { maybeAnimateTrickPoints(room); } catch(e) { console.error("trickPoints:", e); }
 }
 
 // Spectators (joined but not seated) — listed small in the table's top-left.
@@ -266,6 +267,49 @@ function emoteBurst(x, y, kind) {
     { transform: "translate(-50%,-50%) scale(.2)", opacity: .85 },
     { transform: "translate(-50%,-50%) scale(1.35)", opacity: 0 }
   ], { duration: 600, easing: "ease-out" }).onfinish = () => splat.remove();
+}
+
+/* ─── Trick points fly-to-winner animation ──────────────── */
+let lastTrickSeq = null;
+function maybeAnimateTrickPoints(room) {
+  const info = room.lastTrickWin;
+  const seq = info?.seq ?? 0;
+  if (lastTrickSeq === null) { lastTrickSeq = seq; return; } // first state: sync, no animation
+  if (seq === lastTrickSeq) return;
+  lastTrickSeq = seq;
+  if (info && info.points > 0) animateTrickPoints(info.winner, info.points);
+}
+
+function animateTrickPoints(winnerSeat, points) {
+  const targetEl = seatTokenEl(winnerSeat);
+  if (!targetEl) return;
+  const tr = targetEl.getBoundingClientRect();
+  const endX = tr.left + tr.width / 2;
+  const endY = tr.top + tr.height / 2;
+  const center = document.querySelector(".table-center");
+  let startX = window.innerWidth / 2;
+  let startY = window.innerHeight / 2;
+  if (center) { const cr = center.getBoundingClientRect(); startX = cr.left + cr.width / 2; startY = cr.top + cr.height / 2; }
+
+  const el = document.createElement("div");
+  el.className = "points-fly";
+  el.textContent = `+${points} 分`;
+  el.style.left = `${startX}px`;
+  el.style.top = `${startY}px`;
+  document.body.appendChild(el);
+  const dx = endX - startX, dy = endY - startY;
+  el.animate([
+    { transform: "translate(-50%,-50%) scale(.5)", opacity: 0, offset: 0 },
+    { transform: "translate(-50%,-50%) scale(1.3)", opacity: 1, offset: .16 },
+    { transform: `translate(-50%,-50%) translate(${dx * 0.5}px, ${dy * 0.5}px) scale(1.05)`, opacity: 1, offset: .6 },
+    { transform: `translate(-50%,-50%) translate(${dx}px, ${dy}px) scale(.85)`, opacity: 1, offset: .92 },
+    { transform: `translate(-50%,-50%) translate(${dx}px, ${dy}px) scale(.4)`, opacity: 0, offset: 1 }
+  ], { duration: 1150, easing: "cubic-bezier(.35,.1,.25,1)" }).onfinish = () => {
+    el.remove();
+    targetEl.animate(
+      [{ transform: "scale(1)" }, { transform: "scale(1.18)" }, { transform: "scale(1)" }],
+      { duration: 420, easing: "ease-out" });
+  };
 }
 
 /* ─── Seats + Played Cards ───────────────────────────────── */

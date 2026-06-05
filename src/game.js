@@ -160,6 +160,7 @@ export function startRound(room, random = Math.random, options = {}) {
   room.hiddenKitty = [];
   room.currentTrick = [];
   room.lastTrick = [];
+  room.lastTrickWin = null;
   room.throwResult = null;
   room.finishedTricks = [];
   room.scores = { attackers: 0, dealerTeam: 0 };
@@ -1033,6 +1034,8 @@ function finishTrick(room) {
   recomputeScores(room);
   room.finishedTricks.push({ plays: room.currentTrick, winner, points });
   room.tableLog.push(`${seatName(room, winner)} 赢得本墩，${points} 分。`);
+  // 供前端播放“本墩得分飞向赢家”的动画：seq 单调递增（每局从 1 开始）用于检测新墩。
+  room.lastTrickWin = { winner, points, seq: room.finishedTricks.length };
   room.lastTrick = room.currentTrick;
   room.currentTrick = [];
   if (room.seats.every((seat) => seat.hand.length === 0)) {
@@ -2295,6 +2298,7 @@ export function publicState(room, viewerId = null) {
     turnSeat: room.turnSeat,
     currentTrick: room.currentTrick,
     lastTrick: room.lastTrick,
+    lastTrickWin: room.lastTrickWin || null,
     throwResult: room.throwResult,
     scores: room.scores,
     seatPersonalScores: room.seatPersonalScores || {},

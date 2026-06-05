@@ -586,6 +586,20 @@ button, input, select { font: inherit; }
 }
 .context-controls button.primary-action:hover { opacity: .9; }
 
+/* Trick points flying to the winner */
+.points-fly {
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  font-weight: 800;
+  font-size: 28px;
+  color: #ffd84d;
+  text-shadow: 0 2px 6px rgba(0,0,0,.75), 0 0 14px rgba(255,180,0,.65);
+  white-space: nowrap;
+  will-change: transform, opacity;
+}
+body.desktop .points-fly { font-size: 38px; }
+
 /* Colored suit pip used in topbar/center text (white chip keeps black visible on dark bg) */
 .suit-pip {
   display: inline-flex;
