@@ -10,10 +10,13 @@ function getMyId() {
   return id;
 }
 
+const AVATARS = ["😀","😎","🤠","😺","🦊","🐼","🦁","🐯","🐸","🐵","🦄","🐲","👑","🎩","👻","🐰"];
+
 const state = {
   ws: null,
   playerId: getMyId(),
   nickname: localStorage.getItem("szp.nickname") || "",
+  avatar: localStorage.getItem("szp.avatar") || AVATARS[0],
   room: null,
   selected: new Set()
 };
@@ -26,8 +29,41 @@ let lastBidSig = "";
 // dealing don't make the whole hand flicker (only newly dealt cards animate).
 const dealtCardIds = new Set();
 
+// ─── Desktop UI scaling ──────────────────────────────────────
+// On desktop (wide screens) enlarge the whole GUI; mobile stays pixel-identical.
+// A single breakpoint decision here drives both the JS pixel math below and the
+// CSS (via the body.desktop class), so the two never disagree.
+const DESKTOP_MQ = window.matchMedia("(min-width: 1024px)");
+let UI = DESKTOP_MQ.matches ? 1.35 : 1;
+function applyUiScale() {
+  UI = DESKTOP_MQ.matches ? 1.35 : 1;
+  document.body.classList.toggle("desktop", UI > 1);
+}
+applyUiScale();
+DESKTOP_MQ.addEventListener?.("change", () => {
+  applyUiScale();
+  if (state.room) render();
+});
+
 /* ─── Join Screen ────────────────────────────────────────── */
 $("#nickname").value = state.nickname;
+
+// Avatar picker on the join screen.
+function buildAvatarPicker() {
+  const picker = $("#avatarPicker");
+  if (!picker) return;
+  picker.innerHTML = AVATARS.map((a) =>
+    `<button type="button" class="avatar-option ${a === state.avatar ? "selected" : ""}" data-avatar="${a}">${a}</button>`
+  ).join("");
+  picker.querySelectorAll("[data-avatar]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      state.avatar = btn.dataset.avatar;
+      localStorage.setItem("szp.avatar", state.avatar);
+      buildAvatarPicker();
+    })
+  );
+}
+buildAvatarPicker();
 
 $("#joinForm").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -219,7 +255,7 @@ function renderSeats(room) {
       ${playedAbove ? playedDiv : ""}
       <div class="seat-token-wrap">
         ${roleBadge}
-        <div class="seat-token">${initial}</div>
+        <div class="seat-token ${seat.avatar ? "has-avatar" : ""}">${seat.avatar || initial}</div>
         ${personalScore}
       </div>
       <div class="seat-name">${seat.nickname || `座位${seat.index + 1}`}</div>
@@ -231,7 +267,7 @@ function renderSeats(room) {
   }).join("");
 
   seatsEl.querySelectorAll("[data-sit]").forEach(btn =>
-    btn.addEventListener("click", () => send("sit", { seatIndex: Number(btn.dataset.sit), nickname: state.nickname })));
+    btn.addEventListener("click", () => send("sit", { seatIndex: Number(btn.dataset.sit), nickname: state.nickname, avatar: state.avatar })));
   seatsEl.querySelectorAll("[data-ai]").forEach(btn =>
     btn.addEventListener("click", () => send("addAi", { seatIndex: Number(btn.dataset.ai), level: btn.dataset.level || "medium" })));
   seatsEl.querySelectorAll("[data-leave]").forEach(btn =>
@@ -242,14 +278,14 @@ function renderSeats(room) {
 function renderPlayedCards(cards) {
   if (!cards || cards.length === 0) return "";
 
-  const CARD_W = 50;
-  const CARD_H = 71;
+  const CARD_W = Math.round(50 * UI);
+  const CARD_H = Math.round(71 * UI);
   // Max container width available beside a seat (keep it compact)
-  const MAX_WIDTH = 170;
+  const MAX_WIDTH = Math.round(170 * UI);
   // Calculate offset per card so all fit within MAX_WIDTH
   const offset = cards.length === 1
     ? 0
-    : Math.min(34, Math.floor((MAX_WIDTH - CARD_W) / (cards.length - 1)));
+    : Math.min(Math.round(34 * UI), Math.floor((MAX_WIDTH - CARD_W) / (cards.length - 1)));
   const totalWidth = CARD_W + (cards.length - 1) * offset;
 
   const inner = cards.map((card, i) =>
@@ -576,24 +612,24 @@ function renderHand(room) {
 
   const isPortrait = window.innerHeight > window.innerWidth;
   const containerWidth = container.clientWidth || (window.innerWidth - 20);
-  const cardW = 52;
+  const cardW = Math.round(52 * UI);
 
   // Portrait narrow screens: split into 2 rows
   if (isPortrait && window.innerWidth < 500 && hand.length > 8) {
     const half = Math.ceil(hand.length / 2);
     const row1 = hand.slice(0, half);
     const row2 = hand.slice(half);
-    container.style.height = "160px";
+    container.style.height = `${Math.round(160 * UI)}px`;
     renderHandRow(container, row1, containerWidth, cardW, 78);  // bottom row
     renderHandRow(container, row2, containerWidth, cardW, 2);   // top row
   } else {
-    container.style.height = "86px";
+    container.style.height = `${Math.round(86 * UI)}px`;
     renderHandRow(container, hand, containerWidth, cardW, 2);
   }
 }
 
 function renderHandRow(container, hand, containerWidth, cardW, bottomOffset) {
-  const maxOffset = Math.min(38, Math.floor((containerWidth - cardW) / Math.max(hand.length - 1, 1)));
+  const maxOffset = Math.min(Math.round(38 * UI), Math.floor((containerWidth - cardW) / Math.max(hand.length - 1, 1)));
   const totalWidth = cardW + (hand.length - 1) * maxOffset;
   const startX = Math.max(0, (containerWidth - totalWidth) / 2);
 

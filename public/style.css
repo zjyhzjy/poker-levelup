@@ -856,3 +856,80 @@ button, input, select { font: inherit; }
   color: rgba(255,255,255,.65);
   line-height: 1.5;
 }
+
+/* ─── Desktop scaling (wide screens only; mobile is untouched) ──────────────
+   The body.desktop class is toggled from app.js using the same breakpoint that
+   drives the JS pixel math, so card layout stays consistent. */
+body.desktop .card { width: 70px; height: 100px; }
+body.desktop .card-rank    { font-size: 17px; }
+body.desktop .card-suit-sm { font-size: 13px; }
+body.desktop .card-center  { font-size: 34px; }
+body.desktop .card.joker .card-center { font-size: 19px; }
+body.desktop .card-corner { top: 4px; left: 5px; }
+body.desktop .card-corner.bottom { bottom: 4px; right: 5px; top: auto; left: auto; }
+body.desktop .card.selected { transform: translateY(-24px) !important; }
+
+body.desktop .played-card { width: 68px; height: 96px; border-radius: 9px; }
+body.desktop .played-card .card-rank   { font-size: 19px; }
+body.desktop .played-card .card-suit-sm { font-size: 15px; }
+body.desktop .played-card .card-center { font-size: 34px; }
+body.desktop .played-card .card-center.joker-text { font-size: 18px; }
+
+body.desktop .seat-token { width: 64px; height: 64px; font-size: 19px; }
+body.desktop .seat-name { font-size: 15px; }
+body.desktop .seat-info { font-size: 13px; }
+body.desktop .role-badge { width: 24px; height: 24px; font-size: 12px; top: -8px; right: -8px; }
+body.desktop .personal-score { font-size: 13px; padding: 2px 6px; }
+body.desktop .bid-indicator { font-size: 13px; }
+
+body.desktop .game-title { font-size: 18px; }
+body.desktop .badge { font-size: 15px; }
+body.desktop .phase-badge { font-size: 16px; padding: 4px 16px; }
+body.desktop .round-info { font-size: 15px; }
+body.desktop .topbar { height: 48px; }
+body.desktop .topbar-btn { font-size: 19px; padding: 3px 9px; }
+
+body.desktop .score-info { font-size: 18px; }
+body.desktop .turn-info  { font-size: 16px; }
+body.desktop .bid-reveal-label { font-size: 18px; }
+
+body.desktop .seat-btn { font-size: 14px; padding: 6px 12px; }
+body.desktop .context-controls button,
+body.desktop .context-controls select { font-size: 16px; padding: 10px 18px; }
+body.desktop .center-action button { font-size: 20px; padding: 18px 36px; }
+body.desktop .selection-info { font-size: 15px; }
+body.desktop .error-box { font-size: 15px; }
+body.desktop .log-toggle { font-size: 15px; }
+
+/* ─── Avatars ──────────────────────────────────────────────── */
+.avatar-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.avatar-option {
+  width: 40px;
+  height: 40px;
+  font-size: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(200,144,45,.3);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform .1s, border-color .1s, background .1s;
+}
+.avatar-option:hover { transform: translateY(-1px); }
+.avatar-option.selected {
+  border-color: var(--gold);
+  background: rgba(200,144,45,.28);
+  box-shadow: 0 0 0 2px var(--gold-dim);
+}
+
+/* Emoji avatar inside the seat token */
+.seat-token.has-avatar { font-size: 26px; }
+body.desktop .seat-token.has-avatar { font-size: 34px; }

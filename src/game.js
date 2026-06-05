@@ -25,6 +25,7 @@ function emptySeats() {
     index,
     playerId: null,
     nickname: "",
+    avatar: null,
     level: null,
     hand: [],
     connected: false,
@@ -82,7 +83,7 @@ export function joinRoom(room, playerId, nickname) {
   return publicState(room, playerId);
 }
 
-export function sit(room, playerId, seatIndex, nickname) {
+export function sit(room, playerId, seatIndex, nickname, avatar) {
   assertPhase(room, PHASES.LOBBY);
   const seat = room.seats[seatIndex];
   if (!seat) throw new Error("座位不存在");
@@ -91,11 +92,13 @@ export function sit(room, playerId, seatIndex, nickname) {
     if (other.playerId === playerId) {
       other.playerId = null;
       other.nickname = "";
+      other.avatar = null;
       other.connected = false;
     }
   }
   seat.playerId = playerId;
   seat.nickname = nickname?.trim() || room.spectators.get(playerId)?.nickname || `玩家${seatIndex + 1}`;
+  if (typeof avatar === "string" && avatar.trim()) seat.avatar = avatar.trim().slice(0, 8);
   seat.connected = true;
   seat.isAi = false;
   room.spectators.delete(playerId);
@@ -110,6 +113,7 @@ export function addAiPlayer(room, seatIndex, aiLevel = "medium") {
   const tag = { easy: "弱", medium: "中", hard: "强" }[level];
   seat.playerId = uid("ai");
   seat.nickname = `AI${seatIndex + 1}·${tag}`;
+  seat.avatar = "🤖";
   seat.connected = true;
   seat.isAi = true;
   seat.aiLevel = level;
@@ -124,6 +128,7 @@ export function leaveSeat(room, playerId) {
   room.spectators.set(playerId, { playerId, nickname: seat.nickname, connected: true });
   seat.playerId = null;
   seat.nickname = "";
+  seat.avatar = null;
   seat.connected = false;
   seat.isAi = false;
 }
@@ -1590,24 +1595,27 @@ function forcedRequirement(leaderShape, available, room) {
 function shapeSatisfies(actual, wanted, cards, available, room) {
   if (wanted.type === "any") return true;
 
+  // Sort before grouping so detection never depends on the order cards were picked.
+  const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+
   if (wanted.type === "tractor") {
     return actual.type === "tractor" && actual.unit === wanted.unit && actual.count >= wanted.count;
   }
 
   if (wanted.type === "pairs") {
     // Must contain at least `wanted.count` pairs/triples of the correct unit size
-    const groups = groupCards(cards).filter((g) => g.length >= wanted.unit);
+    const groups = groupCards(sorted).filter((g) => g.length >= wanted.unit);
     return groups.length >= wanted.count;
   }
 
   if (wanted.type === "triple") {
     // Must contain at least one group of 3
-    return groupCards(cards).some((g) => g.length >= 3);
+    return groupCards(sorted).some((g) => g.length >= 3);
   }
 
   if (wanted.type === "pair") {
     // Must contain at least one group of 2
-    return groupCards(cards).some((g) => g.length >= 2);
+    return groupCards(sorted).some((g) => g.length >= 2);
   }
 
   return true;
@@ -1685,9 +1693,37 @@ function isConsecutiveGroups(groups, room) {
   return true;
 }
 
+// Find the best (longest) real tractor among `cards` whose total length ≥ `length`.
+// Crucially this uses the SAME consecutiveness rule as analyzeShape
+// (isConsecutiveInRules), so forcedRequirement and shapeSatisfies always agree.
+// Previously a separate, looser check (isConsecutiveGroups) treated level/joker
+// trump pairs as "consecutive" and could force a follower to play a tractor that
+// analyzeShape didn't recognize — leaving them with no legal play.
 function findTractors(cards, room, length) {
-  const groups = groupCards(cards).filter((group) => group.length >= 2);
-  return isConsecutiveGroups(groups, room) && groups.reduce((sum, group) => sum + Math.min(group.length, 3), 0) >= length ? [groups] : [];
+  const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  const groups = groupCards(sorted).filter((group) => group.length >= 2);
+  if (groups.length < 2) return [];
+  const ledSuit = playSuit(groups[0][0], room);
+  let best = null;
+  let i = 0;
+  while (i < groups.length) {
+    let j = i;
+    const run = [groups[i]];
+    while (
+      j + 1 < groups.length &&
+      groups[j + 1].length === groups[i].length &&
+      isConsecutiveInRules(groups[j][0], groups[j + 1][0], ledSuit, room)
+    ) {
+      run.push(groups[j + 1]);
+      j++;
+    }
+    if (run.length >= 2) {
+      const total = run.reduce((sum, g) => sum + g.length, 0);
+      if (total >= length && (!best || total > best.total)) best = { run, total };
+    }
+    i = j + 1;
+  }
+  return best ? [best.run] : [];
 }
 
 function hasGroup(cards, size) {
@@ -2140,6 +2176,7 @@ export function publicState(room, viewerId = null) {
       index: seat.index,
       playerId: seat.playerId,
       nickname: seat.nickname,
+      avatar: seat.avatar ?? null,
       level: seat.level,
       connected: seat.connected,
       isAi: seat.isAi === true,

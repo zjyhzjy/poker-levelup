@@ -164,7 +164,7 @@ function handleMessage(client, message) {
 
     const room = currentRoom(client);
     const actions = {
-      sit:              () => sit(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname),
+      sit:              () => sit(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname, payload.avatar),
       addAi:            () => addAiPlayer(room, Number(payload.seatIndex), payload.level),
       leaveSeat:        () => leaveSeat(room, client.playerId),
       startRound:       () => startRound(room, Math.random, { deal: false }),
