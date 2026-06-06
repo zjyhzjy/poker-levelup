@@ -11,6 +11,7 @@ const PHASES = {
   AUCTION_READY: "auctionReady",
   AUCTION: "auction",
   FORCED_SUIT: "forcedSuit",
+  SIX_TRUMP: "sixTrump",
   BURYING: "burying",
   FRIEND: "friend",
   PLAYING: "playing",
@@ -58,6 +59,9 @@ export function createRoom(code = randomRoomCode(), options = {}) {
     currentBid: null,
     seatBids: {},       // seatIndex -> bid object (for display beside seats)
     bidResponses: {},   // seatIndex -> "bid" | "pass" (tracking who responded)
+    sixTrumpAttempt: 0, // 6 人叫主：0=原庄家队，1=另一队上台后再叫
+    sixOriginalDealerSeat: null,
+    sixFirstAuction: false,
     dealing: false,     // true while cards are being dealt round-by-round
     dealCursor: null,   // next seat to receive a card during gradual dealing
     deck: [],
@@ -159,10 +163,13 @@ export function startRound(room, random = Math.random, options = {}) {
   room.trumpSuit = null;
   room.noTrump = false;
   if (room.fixedTeams) {
-    // 6 人轮庄：两队各共享一个等级（按隔座奇偶），赢队轮流坐庄、打坐庄队的等级。
-    if (firstRound) { room.teamLevels = { 0: "2", 1: "2" }; room.nextDealerSeat = Math.floor(random() * room.seatCount); }
-    room.dealerSeat = room.nextDealerSeat ?? 0;
-    room.levelRank = room.teamLevels[room.dealerSeat % 2];
+    // 6 人固定队：首轮先抢庄；之后按上局结果确定本轮庄家。
+    if (firstRound) { room.teamLevels = { 0: "2", 1: "2" }; room.nextDealerSeat = null; }
+    room.dealerSeat = room.nextDealerSeat ?? null;
+    room.levelRank = room.dealerSeat === null ? "2" : room.teamLevels[room.dealerSeat % 2];
+    room.sixOriginalDealerSeat = room.dealerSeat;
+    room.sixTrumpAttempt = 0;
+    room.sixFirstAuction = firstRound;
   } else {
     // 5 人：抢庄定庄，个人等级。
     const level = firstRound ? LEVEL_RANKS[Math.floor(random() * LEVEL_RANKS.length)] : null;
@@ -191,7 +198,7 @@ export function startRound(room, random = Math.random, options = {}) {
   room.deck = shuffle(createDeck(), random);
   room.phase = PHASES.DEALING;
   room.starterSeat = room.fixedTeams
-    ? room.dealerSeat // 6 人轮庄：庄家先摸先出
+    ? (room.dealerSeat ?? Math.floor(random() * room.seatCount))
     : (firstRound ? Math.floor(random() * room.seatCount) : nextSeat(room.starterSeat, room.seatCount));
   room.currentLeader = room.starterSeat;
   room.turnSeat = room.starterSeat;
@@ -204,7 +211,9 @@ export function startRound(room, random = Math.random, options = {}) {
   }
 
   room.tableLog.push(`本轮从 ${seatName(room, room.starterSeat)} 开始逆时针摸牌。`);
-  room.tableLog.push(`【系统】本局游戏开始！请在摸牌期间亮主抢庄。`);
+  room.tableLog.push(room.fixedTeams
+    ? `【系统】本局游戏开始！6 人局发完牌后叫主${room.dealerSeat === null ? "抢庄" : "，庄家不变"}。`
+    : `【系统】本局游戏开始！请在摸牌期间亮主抢庄。`);
 
   room.dealing = true;
   room.dealCursor = room.starterSeat;
@@ -241,9 +250,7 @@ function finishDealing(room) {
   }
   if (room.phase === PHASES.DEALING) {
     if (room.fixedTeams) {
-      // 6 人轮庄：庄家已定，跳过抢庄，直接由庄家选主花色。
-      room.phase = PHASES.FORCED_SUIT;
-      room.tableLog.push(`${seatName(room, room.dealerSeat)} 坐庄（打 ${room.levelRank}），请选择主花色。`);
+      startSixTrumpCalling(room);
     } else {
       room.phase = PHASES.AUCTION_READY;
       room.tableLog.push("摸牌结束无人亮主，等待手动开始翻底拍卖。");
@@ -294,6 +301,157 @@ function _checkAllBidResponded(room) {
   if (responded >= totalSeats) {
     confirmDealer(room);
   }
+}
+
+function startSixTrumpCalling(room) {
+  room.phase = PHASES.SIX_TRUMP;
+  room.currentBid = null;
+  room.seatBids = {};
+  room.bidResponses = {};
+  room.trumpSuit = null;
+  room.noTrump = false;
+  for (const seat of room.seats) sortHand(seat.hand, room, seat.level);
+  if (room.dealerSeat === null) {
+    room.tableLog.push(`首轮抢庄：所有人可亮自己的 ${room.levelRank} 定主，亮主者坐庄。`);
+  } else {
+    room.tableLog.push(`${seatName(room, room.dealerSeat)} 坐庄（打 ${room.levelRank}），所有人可亮 ${room.levelRank} 定主，庄家不变。`);
+  }
+}
+
+function evaluateSixTrumpCall(cards, levelRank) {
+  if (!cards.length) return null;
+  if (cards.some((card) => card.suit === "joker")) return null;
+  if (!cards.every((card) => card.rank === levelRank && card.suit === cards[0].suit)) return null;
+  if (!SUITS.includes(cards[0].suit)) return null;
+  return {
+    strength: Math.min(cards.length, 3),
+    levelRank,
+    trumpSuit: cards[0].suit,
+    noTrump: false
+  };
+}
+
+export function callSixTrump(room, playerId, cardIds) {
+  assertPhase(room, PHASES.SIX_TRUMP);
+  const seat = findSeatByPlayer(room, playerId);
+  if (!seat) throw new Error("请先入座");
+  if (room.bidResponses[seat.index]) throw new Error("你已经响应过了");
+  const openingAuction = room.sixFirstAuction === true;
+  const levelRank = openingAuction ? seat.level : room.levelRank;
+  const cards = pickCards(seat.hand, cardIds);
+  const bid = evaluateSixTrumpCall(cards, levelRank);
+  if (!bid) throw new Error(`只能亮当前等级 ${levelRank} 的同花色牌`);
+  if (room.currentBid && compareBid(bid, room.currentBid) <= 0) throw new Error("必须用更多张同花色级牌盖主");
+
+  if (openingAuction || room.dealerSeat === null) {
+    room.dealerSeat = seat.index;
+    room.sixOriginalDealerSeat = seat.index;
+    room.levelRank = room.teamLevels[seat.index % 2];
+    room.starterSeat = seat.index;
+    room.currentLeader = seat.index;
+    room.turnSeat = seat.index;
+    for (const s of room.seats) s.level = room.teamLevels[s.index % 2];
+  }
+
+  room.currentBid = { ...bid, seat: seat.index, playerId, cards };
+  room.seatBids = { [seat.index]: { ...bid, cards } };
+  room.bidResponses = { [seat.index]: "bid" };
+  room.trumpSuit = bid.trumpSuit;
+  room.noTrump = false;
+  room.tableLog.push(`${seat.nickname} 亮主：${cards.map((c) => c.label).join("、")}${room.dealerSeat === seat.index ? "，坐庄" : ""}`);
+  _checkAllSixTrumpResponded(room);
+}
+
+export function passSixTrump(room, playerId) {
+  assertPhase(room, PHASES.SIX_TRUMP);
+  const seat = findSeatByPlayer(room, playerId);
+  if (!seat) throw new Error("请先入座");
+  if (room.bidResponses[seat.index]) throw new Error("你已经响应过了");
+  room.bidResponses[seat.index] = "pass";
+  room.tableLog.push(`${seat.nickname} 不亮。`);
+  _checkAllSixTrumpResponded(room);
+}
+
+function _checkAllSixTrumpResponded(room) {
+  if (room.dealing) return;
+  const totalSeats = room.seats.filter((s) => s.playerId).length;
+  const responded = Object.keys(room.bidResponses).length;
+  if (responded < totalSeats) return;
+  if (room.currentBid) {
+    room.sixFirstAuction = false;
+    giveKittyToDealer(room);
+  } else {
+    handleNoSixTrumpCall(room);
+  }
+}
+
+function handleNoSixTrumpCall(room) {
+  if (room.dealerSeat === null) {
+    room.tableLog.push("首轮无人亮主，本轮作废，重新发牌后继续抢庄。");
+    redealSixSameRound(room, null);
+    return;
+  }
+  if (room.sixTrumpAttempt === 0) {
+    const original = room.sixOriginalDealerSeat ?? room.dealerSeat;
+    const newDealer = nextSeat(original, room.seatCount);
+    room.dealerSeat = newDealer;
+    room.levelRank = room.teamLevels[newDealer % 2];
+    room.sixTrumpAttempt = 1;
+    room.currentBid = null;
+    room.seatBids = {};
+    room.bidResponses = {};
+    room.trumpSuit = null;
+    room.noTrump = false;
+    room.sixFirstAuction = false;
+    for (const seat of room.seats) {
+      seat.level = room.teamLevels[seat.index % 2];
+      sortHand(seat.hand, room, seat.level);
+    }
+    room.tableLog.push(`原庄家队无人亮主，${seatName(room, newDealer)} 所在队临时上台（打 ${room.levelRank}），重新叫主。`);
+    return;
+  }
+  const original = room.sixOriginalDealerSeat ?? room.dealerSeat;
+  room.tableLog.push("两队均无人亮主，本轮作废，庄家不变重新发牌。");
+  redealSixSameRound(room, original);
+}
+
+function redealSixSameRound(room, dealerSeat) {
+  room.dealerSeat = dealerSeat;
+  room.sixOriginalDealerSeat = dealerSeat;
+  room.sixTrumpAttempt = 0;
+  room.sixFirstAuction = dealerSeat === null;
+  room.levelRank = dealerSeat === null ? "2" : room.teamLevels[dealerSeat % 2];
+  room.currentBid = null;
+  room.seatBids = {};
+  room.bidResponses = {};
+  room.revealedKitty = [];
+  room.friendCall = null;
+  room.friendSeat = null;
+  room.hiddenKitty = [];
+  room.currentTrick = [];
+  room.lastTrick = [];
+  room.lastTrickWin = null;
+  room.friendReveal = null;
+  room.throwResult = null;
+  room.finishedTricks = [];
+  room.scores = { attackers: 0, dealerTeam: 0 };
+  room.seatPersonalScores = {};
+  room.lastResult = null;
+  room.kitty = [];
+  room.deck = shuffle(createDeck(), Math.random);
+  room.starterSeat = dealerSeat ?? Math.floor(Math.random() * room.seatCount);
+  room.currentLeader = room.starterSeat;
+  room.turnSeat = room.starterSeat;
+  for (const seat of room.seats) {
+    seat.hand = [];
+    seat.takenTrickPoints = 0;
+    seat.lockedTriples = [];
+    seat.level = room.teamLevels[seat.index % 2];
+  }
+  room.phase = PHASES.DEALING;
+  room.dealing = true;
+  room.dealCursor = room.starterSeat;
+  while (dealRound(room)) { /* redeal immediately after void round */ }
 }
 
 export function startAuction(room) {
@@ -531,7 +689,7 @@ export function runAiStep(room) {
   // Auction phases: timing is fully controlled by scheduleAuctionFlip / scheduleBidTimeout
   // in server.js. AI must NOT self-trigger card reveals or bid responses here,
   // otherwise the 2s/5s/10s timers get bypassed instantly.
-  if ([PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION].includes(room.phase)) {
+  if ([PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION, PHASES.SIX_TRUMP].includes(room.phase)) {
     return false;
   }
 
@@ -714,8 +872,17 @@ function buildForcedFollow(room, seat, leaderCards) {
   if (wanted.type === "tractor") {
     const need = wanted.count * wanted.unit;
     const pool = wanted.unit === 2 ? available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`)) : available;
-    const found = findTractors(pool, room, need); // 与 forcedRequirement 同源，必有解
-    if (found.length) take(found[0].flatMap((g) => g.slice(0, wanted.unit)).slice(-need)); // 取最小的连续段
+    const found = wanted.unit === 3 ? findBestTractorRun(pool, room, 3) : findTractors(pool, room, need)[0];
+    if (found) take(found.flatMap((g) => g.slice(0, wanted.unit)).slice(-need)); // 取最小的连续段
+  } else if (wanted.type === "tripleFallback") {
+    const groups = groupCards(desc);
+    for (const g of groups.filter((gr) => gr.length >= 3).slice(-wanted.triples)) take(g.slice(0, 3));
+    for (const g of groups.filter((gr) => gr.length >= 2 && !isLocked(gr) && !used.has(gr[0].id)).slice(-wanted.pairs)) take(g.slice(0, 2));
+  } else if (wanted.type === "pairTractorFallback") {
+    const run = findBestTractorRun(available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`)), room, 2);
+    if (run) take(run.slice(-wanted.tractorPairs).flatMap((g) => g.slice(0, 2)));
+    const groups = groupCards(desc).filter((g) => g.length >= 2 && !isLocked(g) && !g.some((c) => used.has(c.id)));
+    for (const g of groups.slice(-(wanted.pairs - wanted.tractorPairs))) take(g.slice(0, 2));
   } else if (wanted.type === "pairs") {
     const groups = groupCards(desc).filter((g) => g.length >= wanted.unit && !isLocked(g));
     for (const g of groups.slice(-wanted.count)) take(g.slice(0, wanted.unit)); // 最小的 count 组
@@ -1180,7 +1347,7 @@ function finishRound(room, lastWinner) {
     room.scores.attackers += buriedBonus;
   }
   const attackers = room.scores.attackers;
-  const result = upgradeResult(attackers);
+  const result = room.fixedTeams ? upgradeResultSix(attackers) : upgradeResult(attackers);
   const upgradedSeats = result.steps > 0
     ? (result.side === "dealer" ? dealerTeamSeats(room) : attackerSeats(room))
     : [];
@@ -1195,7 +1362,7 @@ function finishRound(room, lastWinner) {
       room.teamLevels[winParity] = levelAdvance(room.teamLevels[winParity], result.steps);
     }
     for (const seat of room.seats) seat.level = room.teamLevels[seat.index % 2]; // 同步每人显示=队等级
-    const dealerHeld = result.side !== "attackers"; // dealer 升或 push（不升不降）都算庄家队守住
+    const dealerHeld = result.side === "dealer";
     room.nextDealerSeat = dealerHeld
       ? (room.dealerSeat + 2) % room.seatCount  // 连庄：轮到隔座同队下一人
       : (room.dealerSeat + 1) % room.seatCount; // 闲家上台：下家（异队）坐庄
@@ -1655,6 +1822,16 @@ export function upgradeResult(attackers) {
   return { side: "attackers", steps: 3, label: "闲家队升 3 级" };
 }
 
+export function upgradeResultSix(attackers) {
+  if (attackers <= 45) return { side: "dealer", steps: 3, label: "庄家队升 3 级" };
+  if (attackers < 80) return { side: "dealer", steps: 2, label: "庄家队升 2 级" };
+  if (attackers < 120) return { side: "dealer", steps: 1, label: "庄家队升 1 级" };
+  if (attackers <= 160) return { side: "attackers", steps: 0, label: "闲家队上台，不升级" };
+  if (attackers <= 200) return { side: "attackers", steps: 1, label: "闲家队上台，升 1 级" };
+  if (attackers < 240) return { side: "attackers", steps: 2, label: "闲家队上台，升 2 级" };
+  return { side: "attackers", steps: 3, label: "闲家队上台，升 3 级" };
+}
+
 // 【彻底修复 2】：完善墩牌大小裁判，防止垫牌、不匹配牌型盗取胜利
 function comparePlay(room, challenger, currentBest, leadPlay) {
   const leadPlayCards = leadPlay.cards;
@@ -1872,6 +2049,31 @@ function forcedRequirement(leaderShape, available, room, lockedTriples = []) {
   const isLockedGroup = (g) => lockedSet.has(`${g[0].rank}|${g[0].suit}`);
 
   if (leaderShape.type === "tractor") {
+    if (leaderShape.unit === 3) {
+      const total = leaderShape.count * leaderShape.unit;
+      const tripleRun = findBestTractorRun(available, room, 3);
+      if (tripleRun && tripleRun.length >= leaderShape.count) return { type: "tractor", unit: 3, count: leaderShape.count };
+
+      const groups = groupCards(available);
+      const tripleCount = Math.min(leaderShape.count, groups.filter((g) => g.length >= 3).length);
+      if (tripleCount > 0) {
+        const remaining = total - tripleCount * 3;
+        const pairAvail = groups.filter((g) => g.length >= 2 && g.length < 3 && !isLockedGroup(g)).length;
+        return { type: "tripleFallback", triples: tripleCount, pairs: Math.min(Math.floor(remaining / 2), pairAvail) };
+      }
+
+      const pairSlots = Math.floor(total / 2);
+      const pairPool = available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`));
+      const pairRun = findBestTractorRun(pairPool, room, 2);
+      const pairAvail = groupCards(pairPool).filter((g) => g.length >= 2).length;
+      if (pairRun && pairRun.length >= 2) {
+        const tractorPairs = Math.min(pairRun.length, pairSlots);
+        return { type: "pairTractorFallback", tractorPairs, pairs: Math.min(pairSlots, pairAvail) };
+      }
+      if (pairAvail > 0) return { type: "pairs", unit: 2, count: Math.min(pairSlots, pairAvail) };
+      return { type: "any" };
+    }
+
     // 对子拖拉机里锁定点数恰好用 2 张（= 拆对，违规），故检测可跟的拖拉机时
     // 把锁定牌整体剔除；三张单位的拖拉机用整组三张，不触发拆对，无需剔除。
     const tractorPool = leaderShape.unit === 2
@@ -1924,6 +2126,19 @@ function shapeSatisfies(actual, wanted, cards, available, room) {
     // Must contain at least `wanted.count` pairs/triples of the correct unit size
     const groups = groupCards(sorted).filter((g) => g.length >= wanted.unit);
     return groups.length >= wanted.count;
+  }
+
+  if (wanted.type === "tripleFallback") {
+    const groups = groupCards(sorted);
+    const triples = groups.filter((g) => g.length >= 3).length;
+    const pairs = groups.filter((g) => g.length >= 2 && g.length < 3).length;
+    return triples >= wanted.triples && pairs >= wanted.pairs;
+  }
+
+  if (wanted.type === "pairTractorFallback") {
+    const run = findBestTractorRun(cards, room, 2);
+    const pairs = groupCards(sorted).filter((g) => g.length >= 2).length;
+    return !!run && run.length >= wanted.tractorPairs && pairs >= wanted.pairs;
   }
 
   if (wanted.type === "triple") {
@@ -2042,6 +2257,31 @@ function findTractors(cards, room, length) {
     i = j + 1;
   }
   return best ? [best.run] : [];
+}
+
+function findBestTractorRun(cards, room, unit = 2) {
+  const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  const groups = groupCards(sorted).filter((group) => group.length >= unit);
+  if (groups.length < 2) return null;
+  let best = null;
+  let i = 0;
+  while (i < groups.length) {
+    let j = i;
+    const run = [groups[i]];
+    const ledSuit = playSuit(groups[i][0], room);
+    while (
+      j + 1 < groups.length &&
+      groups[j + 1].length >= unit &&
+      playSuit(groups[j + 1][0], room) === ledSuit &&
+      isConsecutiveInRules(groups[j][0], groups[j + 1][0], ledSuit, room)
+    ) {
+      run.push(groups[j + 1]);
+      j++;
+    }
+    if (run.length >= 2 && (!best || run.length > best.length)) best = run;
+    i = j + 1;
+  }
+  return best;
 }
 
 function hasGroup(cards, size) {
@@ -2171,6 +2411,29 @@ export function decideAiBid(room, seat) {
   const worthy = ratio >= profile.bidRatio || (jokers >= 2 && best.trumpCount >= hand.length * 0.4);
   if (!worthy) return null;
   if (room.currentBid && best.strength <= room.currentBid.strength) return null; // can't beat
+  return { cardIds: best.cards.map((c) => c.id), strength: best.strength };
+}
+
+export function decideAiSixTrump(room, seat) {
+  const profile = aiProfile(seat);
+  const hand = seat.hand;
+  const level = room.dealerSeat === null ? seat.level : room.levelRank;
+  const levelBySuit = {};
+  for (const c of hand) if (c.rank === level && c.suit !== "joker") (levelBySuit[c.suit] ||= []).push(c);
+  let best = null;
+  for (const s of Object.keys(levelBySuit)) {
+    const strength = Math.min(levelBySuit[s].length, 3);
+    const trumpCount = hand.filter((c) => c.suit === "joker" || c.rank === level || c.suit === s).length;
+    if (!best || strength > best.strength || (strength === best.strength && trumpCount > best.trumpCount)) {
+      best = { suit: s, strength, trumpCount, cards: levelBySuit[s].slice(0, strength) };
+    }
+  }
+  if (!best) return null;
+  const ratio = best.trumpCount / Math.max(1, hand.length);
+  const eagerFirstDealer = room.dealerSeat === null && best.strength >= 1;
+  const worthy = eagerFirstDealer || best.strength >= 2 || ratio >= profile.bidRatio;
+  if (!worthy) return null;
+  if (room.currentBid && best.strength <= room.currentBid.strength) return null;
   return { cardIds: best.cards.map((c) => c.id), strength: best.strength };
 }
 
@@ -2529,6 +2792,8 @@ export function publicState(room, viewerId = null) {
     friendSeat: room.friendSeat,
     fixedTeams: room.fixedTeams === true,
     seatCount: room.seatCount,
+    kittySize: room.kittySize,
+    sixTrumpAttempt: room.sixTrumpAttempt || 0,
     friendReveal: room.friendReveal || null,
     // 历史墩（供“本局牌局”回看）。card 精简为 rank/suit/label（省去 id，减小 payload）。
     // 高频广播会带上全部历史；公开高并发部署可改为按需请求（参考 hint 的请求-响应）。

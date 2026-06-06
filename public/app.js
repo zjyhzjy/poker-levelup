@@ -390,8 +390,8 @@ function renderSeats(room) {
     ? (i !== (room.viewerSeat ?? 0) && i % 2 === myParity) // 6人固定队：与自己同奇偶（隔座）的是队友
     : (room.friendSeat !== null && room.friendSeat === i);
   const friendRevealed = room.fixedTeams || room.friendSeat !== null;
-  const inBiddingPhase = ["dealing","auctionReady","auction"].includes(room.phase);
-  const showBids = ["dealing","auctionReady","auction","forcedSuit","burying"].includes(room.phase);
+  const inBiddingPhase = ["dealing","auctionReady","auction","sixTrump"].includes(room.phase);
+  const showBids = ["dealing","auctionReady","auction","forcedSuit","sixTrump","burying"].includes(room.phase);
   const seatBids = room.seatBids || {};
   const bidResponses = room.bidResponses || {};
   const viewerSeatIndex = room.viewerSeat ?? 0;
@@ -415,7 +415,7 @@ function renderSeats(room) {
     let bidIndicator = "";
     if (inBiddingPhase) {
       const resp = bidResponses[seat.index];
-      if (resp === "pass") bidIndicator = `<div class="bid-indicator pass">不抢</div>`;
+      if (resp === "pass") bidIndicator = `<div class="bid-indicator pass">${room.phase === "sixTrump" ? "不亮" : "不抢"}</div>`;
     }
 
     // Cards beside seat — bottom seats (pos 1,4) show cards ABOVE the token
@@ -691,7 +691,7 @@ function renderCenter(room) {
 function renderBidReveal(room) {
   const el = $("#bidReveal");
   if (!el) return;
-  const biddingPhases = ["dealing", "auctionReady", "auction", "forcedSuit"];
+  const biddingPhases = ["dealing", "auctionReady", "auction", "forcedSuit", "sixTrump"];
   const bid = room.currentBid;
   const cards = bid?.cards || [];
 
@@ -757,6 +757,19 @@ function renderControls(room) {
     }
   }
 
+  if (room.phase === "sixTrump") {
+    const myIndex = room.viewerSeat;
+    const bidResponses = room.bidResponses || {};
+    const myResponse = bidResponses[myIndex];
+    const hasBid = !!room.currentBid;
+    if (!myResponse && (!hasBid || room.currentBid.seat !== myIndex)) {
+      parts.push(`<button data-action="sixCallTrump" class="primary-action">亮主</button>`);
+      parts.push(`<button data-action="sixPassTrump">不亮</button>`);
+    } else {
+      parts.push(`<span style="color:rgba(255,255,255,.6);font-size:13px">等待其他玩家叫主…</span>`);
+    }
+  }
+
   if (room.phase === "forcedSuit") {
     if (room.viewerSeat === room.dealerSeat) {
       parts.push(`
@@ -776,7 +789,7 @@ function renderControls(room) {
   }
 
   if (room.phase === "burying" && room.viewerSeat === room.dealerSeat) {
-    parts.push(`<button data-action="bury" class="primary-action">扣所选7张</button>`);
+    parts.push(`<button data-action="bury" class="primary-action">扣所选${room.kittyCount || room.kittySize || 7}张</button>`);
   }
 
   if (room.phase === "friend" && room.viewerSeat === room.dealerSeat) {
@@ -828,6 +841,8 @@ function bindControls() {
       const action = btn.dataset.action;
       if (action === "bid")         send("bid",         { cardIds: [...state.selected] });
       else if (action === "passBid")     send("passBid",     {});
+      else if (action === "sixCallTrump") send("sixCallTrump", { cardIds: [...state.selected] });
+      else if (action === "sixPassTrump") send("sixPassTrump", {});
       else if (action === "forceDealer") send("forceDealer", {});
       else if (action === "bury")        send("bury",        { cardIds: [...state.selected] });
       else if (action === "play")  send("play", { cardIds: [...state.selected] });
@@ -1117,6 +1132,7 @@ function phaseText(phase) {
     auctionReady:"等待翻底",
     auction:     "翻底拍卖",
     forcedSuit:  "强制定主",
+    sixTrump:    "6人叫主",
     burying:     "庄家扣底",
     friend:      "叫朋友",
     playing:     "出牌中",

@@ -6,17 +6,20 @@ import { fileURLToPath } from "node:url";
 import {
   addAiPlayer,
   buryKitty,
+  callSixTrump,
   callFriend,
   chooseForcedTrump,
   confirmDealer,
   createRoom,
   dealRound,
   decideAiBid,
+  decideAiSixTrump,
   forceDealer,
   joinRoom,
   leaveSeat,
   makeBid,
   passBid,
+  passSixTrump,
   playCards,
   publicState,
   recommendPlay,
@@ -213,6 +216,8 @@ function handleMessage(client, message) {
       startRound:       () => startRound(room, Math.random, { deal: false }),
       bid:              () => makeBid(room, client.playerId, payload.cardIds || []),
       passBid:          () => passBid(room, client.playerId),
+      sixCallTrump:     () => callSixTrump(room, client.playerId, payload.cardIds || []),
+      sixPassTrump:     () => passSixTrump(room, client.playerId),
       // Manual auction start — just transitions to auction phase, no auto-flip
       startAuction:     () => startAuction(room),
       // Manual reveal one card at a time
@@ -248,12 +253,12 @@ function handleMessage(client, message) {
     }
 
     // After a bid is placed, schedule 10s timeout for others to respond
-    if (type === "bid" && room.currentBid && room.phase !== "burying") {
+    if ((type === "bid" || type === "sixCallTrump") && room.currentBid && room.phase !== "burying") {
       scheduleBidTimeout(room);
     }
 
     // Let AI seats open/contest the bidding once a human acts in the auction.
-    if (["bid", "passBid", "startAuction", "revealKitty"].includes(type)) {
+    if (["bid", "passBid", "startAuction", "revealKitty", "sixCallTrump", "sixPassTrump"].includes(type)) {
       scheduleAiBids(room);
     }
 
@@ -314,19 +319,22 @@ function scheduleAiBids(room) {
   aiSeats.forEach((seat, i) => {
     setTimeout(() => {
       if (room.dealing) return;
-      if (!["auctionReady", "auction"].includes(room.phase)) return;
+      if (!["auctionReady", "auction", "sixTrump"].includes(room.phase)) return;
       if (room.bidResponses[seat.index]) return;                       // already acted
       if (room.currentBid && room.currentBid.seat === seat.index) return;
       try {
-        const decision = decideAiBid(room, seat);
+        const sixMode = room.phase === "sixTrump";
+        const decision = sixMode ? decideAiSixTrump(room, seat) : decideAiBid(room, seat);
         if (decision && (!room.currentBid || decision.strength > room.currentBid.strength)) {
-          makeBid(room, seat.playerId, decision.cardIds);
+          if (sixMode) callSixTrump(room, seat.playerId, decision.cardIds);
+          else makeBid(room, seat.playerId, decision.cardIds);
           broadcast(room);
           scheduleBidTimeout(room); // 10s window for this new bid
           scheduleAiBids(room);     // let the others respond to it
           scheduleAi(room);         // in case it confirmed the dealer immediately
-        } else if (room.currentBid) {
-          passBid(room, seat.playerId);
+        } else if (room.currentBid || sixMode) {
+          if (sixMode) passSixTrump(room, seat.playerId);
+          else passBid(room, seat.playerId);
           broadcast(room);
           scheduleAi(room);
         }
@@ -342,16 +350,30 @@ function scheduleBidTimeout(room) {
   if (!bidAtSchedule) return;
   setTimeout(() => {
     if (room.currentBid !== bidAtSchedule) return;
-    if (!["dealing", "auctionReady", "auction"].includes(room.phase)) return;
-    for (const seat of room.seats) {
-      if (seat.playerId && !room.bidResponses[seat.index]) {
-        room.bidResponses[seat.index] = "pass";
+    if (!["dealing", "auctionReady", "auction", "sixTrump"].includes(room.phase)) return;
+    try {
+      if (room.phase === "sixTrump") {
+        if (room.currentBid) {
+          for (const seat of room.seats) {
+            if (seat.playerId && !room.bidResponses[seat.index]) {
+              passSixTrump(room, seat.playerId);
+              if (room.phase !== "sixTrump") break;
+            }
+          }
+        }
+      } else {
+        for (const seat of room.seats) {
+          if (seat.playerId && !room.bidResponses[seat.index]) {
+            room.bidResponses[seat.index] = "pass";
+          }
+        }
+        // Still dealing: record passes but defer confirming until the deal finishes
+        // (the kitty isn't assigned yet). finishDealing() will resolve it.
+        if (room.dealing) { broadcast(room); return; }
+        confirmDealer(room);
       }
-    }
-    // Still dealing: record passes but defer confirming until the deal finishes
-    // (the kitty isn't assigned yet). finishDealing() will resolve it.
-    if (room.dealing) { broadcast(room); return; }
-    try { confirmDealer(room); broadcast(room); scheduleAi(room); } catch (_) {}
+      broadcast(room); scheduleAi(room);
+    } catch (_) {}
   }, 10000);
 }
 

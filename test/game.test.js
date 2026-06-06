@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, buryKitty, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, decideAiBid, determineTrickWinner, evaluateBid, makeBid, passBid, playCards, publicState, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, buryKitty, callSixTrump, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, decideAiBid, determineTrickWinner, evaluateBid, makeBid, passBid, passSixTrump, playCards, publicState, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, upgradeResultSix, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -443,6 +443,88 @@ test("跟三条时手里有三条必须优先出三条", () => {
   assert.equal(validatePlay(room, follower, legal, lead).ok, true);
 });
 
+test("跟三条拖拉机时，有三条拖拉机必须优先出三条拖拉机", () => {
+  const room = createRoom("TRITR1");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 3) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("4", "clubs"), ...cardsOf("3", "clubs")];
+  const legal = [...cardsOf("8", "clubs"), ...cardsOf("7", "clubs")];
+  const illegal = [...cardsOf("8", "clubs"), ...cardsOf("5", "clubs")];
+  const follower = room.seats[1];
+  follower.playerId = "p1"; follower.lockedTriples = [];
+  follower.hand = [...legal, ...cardsOf("5", "clubs")];
+
+  assert.equal(analyzeShape(lead, room).type, "tractor");
+  assert.equal(analyzeShape(lead, room).unit, 3);
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
+test("跟三条拖拉机时，只有一组三条则必须出三条并尽量补对子", () => {
+  const room = createRoom("TRITR2");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 3) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("4", "clubs"), ...cardsOf("3", "clubs")];
+  const legal = [...cardsOf("8", "clubs"), ...cardsOf("6", "clubs", 2), cardsOf("5", "clubs", 1)[0]];
+  const illegal = [...cardsOf("8", "clubs"), cardsOf("6", "clubs", 1)[0], cardsOf("5", "clubs", 1)[0], cardsOf("J", "clubs", 1)[0]];
+  const follower = room.seats[1];
+  follower.playerId = "p1"; follower.lockedTriples = [];
+  follower.hand = [...cardsOf("8", "clubs"), ...cardsOf("6", "clubs", 2), cardsOf("5", "clubs", 1)[0], cardsOf("J", "clubs", 1)[0]];
+
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
+test("跟三条拖拉机时，没有三条但有三连对子拖拉机必须出三连对子", () => {
+  const room = createRoom("TRITR3");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 2) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("4", "clubs", 3), ...cardsOf("3", "clubs", 3)];
+  const legal = [...cardsOf("9", "clubs"), ...cardsOf("8", "clubs"), ...cardsOf("7", "clubs")];
+  const illegal = [...cardsOf("9", "clubs"), ...cardsOf("8", "clubs"), ...cardsOf("5", "clubs")];
+  const follower = room.seats[1];
+  follower.playerId = "p1"; follower.lockedTriples = [];
+  follower.hand = [...legal, ...cardsOf("5", "clubs")];
+
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
+test("跟三条拖拉机时，只有二连对子拖拉机则必须出拖拉机并补一对", () => {
+  const room = createRoom("TRITR4");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 2) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("4", "clubs", 3), ...cardsOf("3", "clubs", 3)];
+  const legal = [...cardsOf("Q", "clubs"), ...cardsOf("J", "clubs"), ...cardsOf("6", "clubs")];
+  const illegal = [...cardsOf("Q", "clubs"), ...cardsOf("8", "clubs"), ...cardsOf("6", "clubs")];
+  const follower = room.seats[1];
+  follower.playerId = "p1"; follower.lockedTriples = [];
+  follower.hand = [...cardsOf("Q", "clubs"), ...cardsOf("J", "clubs"), ...cardsOf("8", "clubs"), ...cardsOf("6", "clubs")];
+
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
+test("跟三组三条拖拉机且只能降级到对子时，奇数总张数要求四对", () => {
+  const room = createRoom("TRITR5");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 2) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("5", "clubs", 3), ...cardsOf("4", "clubs", 3), ...cardsOf("3", "clubs", 3)];
+  const legal = [...cardsOf("A", "clubs"), ...cardsOf("K", "clubs"), ...cardsOf("Q", "clubs"), ...cardsOf("J", "clubs"), cardsOf("6", "clubs", 1)[0]];
+  const illegal = [...cardsOf("A", "clubs"), ...cardsOf("K", "clubs"), ...cardsOf("Q", "clubs"), cardsOf("J", "clubs", 1)[0], cardsOf("6", "clubs", 1)[0], cardsOf("7", "clubs", 1)[0], cardsOf("8", "clubs", 1)[0]];
+  const follower = room.seats[1];
+  follower.playerId = "p1"; follower.lockedTriples = [];
+  follower.hand = [...cardsOf("A", "clubs"), ...cardsOf("K", "clubs"), ...cardsOf("Q", "clubs"), ...cardsOf("J", "clubs"), cardsOf("6", "clubs", 1)[0], cardsOf("7", "clubs", 1)[0], cardsOf("8", "clubs", 1)[0]];
+
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
 test("跟甩牌里的拖拉机组件时，有拖拉机必须优先跟拖拉机", () => {
   const room = createRoom("THROWFOLLOW");
   room.levelRank = "2"; room.trumpSuit = "hearts";
@@ -503,16 +585,137 @@ test("多人主杀时 currentWinnerSeat 只标记最大的一家", () => {
   assert.equal(state.currentWinnerSeat, 2);
 });
 
-test("6 人轮庄：首局随机坐庄、两队从 2 起、跳过抢庄直接进选主", () => {
+test("6 人首轮：发完牌进入叫主抢庄，亮主者坐庄", () => {
   const room = createRoom("ROT", { seatCount: 6 });
   for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
   startRound(room, () => 0.3);
-  assert.equal(room.phase, "forcedSuit", "6 人发完牌直接进庄家选主，不进抢庄");
+  assert.equal(room.phase, "sixTrump", "6 人发完牌进入叫主抢庄");
   assert.deepEqual(room.teamLevels, { 0: "2", 1: "2" }, "两队都从 2 打起");
-  assert.ok(room.dealerSeat >= 0 && room.dealerSeat < 6, "首局随机一人坐庄");
+  assert.equal(room.dealerSeat, null, "首轮亮主前没有庄家");
   assert.equal(room.levelRank, "2", "首局打 2");
-  assert.equal(room.starterSeat, room.dealerSeat, "庄家先出");
   assert.deepEqual(room.seats.map((s) => s.level), [2, 2, 2, 2, 2, 2].map(String).map((_, i) => room.teamLevels[i % 2]));
+
+  const twoHeart = createDeck().find((card) => card.rank === "2" && card.suit === "hearts");
+  room.seats[3].hand.push(twoHeart);
+  callSixTrump(room, "p3", [twoHeart.id]);
+  for (const i of [0, 1, 2, 4, 5]) passSixTrump(room, `p${i}`);
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, 3);
+  assert.equal(room.trumpSuit, "hearts");
+  assert.equal(room.starterSeat, 3);
+});
+
+test("6 人首轮抢庄：更高亮主盖过前家时同步改庄家", () => {
+  const room = createRoom("COVER6", { seatCount: 6 });
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  startRound(room, () => 0.3);
+  const deck = createDeck();
+  const spade2 = deck.find((card) => card.rank === "2" && card.suit === "spades");
+  const club2s = deck.filter((card) => card.rank === "2" && card.suit === "clubs").slice(0, 2);
+  room.seats[0].hand.push(spade2);
+  room.seats[1].hand.push(...club2s);
+
+  callSixTrump(room, "p0", [spade2.id]);
+  callSixTrump(room, "p1", club2s.map((card) => card.id));
+  for (const i of [0, 2, 3, 4, 5]) passSixTrump(room, `p${i}`);
+
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, 1, "首轮抢庄应由更高亮主者坐庄");
+  assert.equal(room.trumpSuit, "clubs");
+  assert.equal(room.starterSeat, 1);
+});
+
+test("6 人叫主：原庄家队无人亮主则另一队上台，再无人亮主则原庄家重发", () => {
+  const room = createRoom("NOCALL", { seatCount: 6 });
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; s.level = "2"; }
+  room.teamLevels = { 0: "7", 1: "9" };
+  room.phase = "sixTrump";
+  room.dealerSeat = 0;
+  room.sixOriginalDealerSeat = 0;
+  room.sixTrumpAttempt = 0;
+  room.levelRank = "7";
+  for (let i = 0; i < 6; i += 1) passSixTrump(room, `p${i}`);
+  assert.equal(room.phase, "sixTrump");
+  assert.equal(room.dealerSeat, 1, "另一队由原庄家下家上台");
+  assert.equal(room.levelRank, "9", "切到另一队等级叫主");
+  assert.equal(room.sixTrumpAttempt, 1);
+
+  for (let i = 0; i < 6; i += 1) passSixTrump(room, `p${i}`);
+  assert.equal(room.phase, "sixTrump");
+  assert.equal(room.dealerSeat, 0, "第二次仍无人亮主则原庄家不变");
+  assert.equal(room.levelRank, "7");
+  assert.deepEqual(room.seats.map((s) => s.hand.length), [26, 26, 26, 26, 26, 26]);
+  assert.equal(room.kitty.length, 6);
+});
+
+test("6 人结算分线：120-160 上台不升级，守庄成功才升级", () => {
+  assert.deepEqual(upgradeResultSix(45), { side: "dealer", steps: 3, label: "庄家队升 3 级" });
+  assert.deepEqual(upgradeResultSix(80), { side: "dealer", steps: 1, label: "庄家队升 1 级" });
+  assert.deepEqual(upgradeResultSix(120), { side: "attackers", steps: 0, label: "闲家队上台，不升级" });
+  assert.deepEqual(upgradeResultSix(160), { side: "attackers", steps: 0, label: "闲家队上台，不升级" });
+  assert.deepEqual(upgradeResultSix(161), { side: "attackers", steps: 1, label: "闲家队上台，升 1 级" });
+  assert.deepEqual(upgradeResultSix(201), { side: "attackers", steps: 2, label: "闲家队上台，升 2 级" });
+  assert.deepEqual(upgradeResultSix(240), { side: "attackers", steps: 3, label: "闲家队上台，升 3 级" });
+});
+
+test("6 人结算轮庄：庄家队守住则同队下一位坐庄并升级", () => {
+  const room = createRoom("HOLD6", { seatCount: 6 });
+  const deck = createDeck();
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; s.level = i % 2 === 0 ? "7" : "9"; }
+  room.teamLevels = { 0: "7", 1: "9" };
+  room.phase = "playing";
+  room.dealerSeat = 0;
+  room.levelRank = "7";
+  room.trumpSuit = "hearts";
+  room.noTrump = false;
+  room.currentLeader = 0;
+  room.turnSeat = 0;
+  room.hiddenKitty = [];
+  const cards = [
+    deck.find((c) => c.rank === "A" && c.suit === "hearts"),
+    deck.find((c) => c.rank === "3" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "4" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "5" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "6" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "8" && c.suit === "clubs")
+  ];
+  for (let i = 0; i < 6; i += 1) room.seats[i].hand = [cards[i]];
+  for (let i = 0; i < 6; i += 1) playCards(room, `p${i}`, [cards[i].id]);
+  assert.equal(room.phase, "roundOver");
+  assert.equal(room.lastResult.result.side, "dealer");
+  assert.equal(room.nextDealerSeat, 2);
+  assert.equal(room.teamLevels[0], "10");
+});
+
+test("6 人结算轮庄：120-160 闲家上台不升级，下家坐庄", () => {
+  const room = createRoom("UP6", { seatCount: 6 });
+  const deck = createDeck();
+  const take = (rank, suit, n = 1) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; s.level = i % 2 === 0 ? "7" : "9"; }
+  room.teamLevels = { 0: "7", 1: "9" };
+  room.phase = "playing";
+  room.dealerSeat = 0;
+  room.levelRank = "7";
+  room.trumpSuit = "hearts";
+  room.noTrump = false;
+  room.currentLeader = 0;
+  room.turnSeat = 0;
+  room.hiddenKitty = [...take("10", "spades", 3), ...take("K", "clubs", 3)];
+  const cards = [
+    deck.find((c) => c.rank === "3" && c.suit === "spades"),
+    deck.find((c) => c.rank === "A" && c.suit === "hearts"),
+    deck.find((c) => c.rank === "4" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "5" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "6" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "8" && c.suit === "clubs")
+  ];
+  for (let i = 0; i < 6; i += 1) room.seats[i].hand = [cards[i]];
+  for (let i = 0; i < 6; i += 1) playCards(room, `p${i}`, [cards[i].id]);
+  assert.equal(room.phase, "roundOver");
+  assert.equal(room.lastResult.attackers, 125);
+  assert.deepEqual(room.lastResult.result, { side: "attackers", steps: 0, label: "闲家队上台，不升级" });
+  assert.equal(room.nextDealerSeat, 1);
+  assert.deepEqual(room.teamLevels, { 0: "7", 1: "9" });
 });
 
 test("5 人房间默认配置不变（回归）", () => {
