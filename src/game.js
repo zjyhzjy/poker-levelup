@@ -896,12 +896,40 @@ function allyBehind(room, seat) {
 }
 
 function chooseFollow(room, seat, leaderCards, profile) {
+  const preferredSingle = preferredSingleFollow(room, seat, leaderCards);
+  if (preferredSingle && validatePlay(room, seat, preferredSingle, leaderCards).ok) return preferredSingle;
   const cands = followCandidates(room, seat, leaderCards);
   if (!cands.length) return null;
   const stand = trickStanding(room, seat);
   const seen = seenCounts(room, seat);
   const scores = cands.map((c) => scoreFollow(room, seat, c, stand, profile, seen));
   return chooseWeighted(cands, scores, seat, profile);
+}
+
+function preferredSingleFollow(room, seat, leaderCards) {
+  if (!leaderCards || leaderCards.length !== 1) return null;
+  const ledSuit = playSuit(leaderCards[0], room);
+  const available = seat.hand
+    .filter((card) => playSuit(card, room) === ledSuit)
+    .sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room));
+  if (available.length === 0) return null; // 缺门垫牌仍交给 AI 做空门/保大牌逻辑
+
+  const groups = groupCards(available);
+  const singletonCards = groups.filter((g) => g.length === 1).map((g) => g[0]);
+  const nonPointSingleton = singletonCards.find((card) => cardScore(card) === 0);
+  if (nonPointSingleton) return [nonPointSingleton];
+
+  // 如果自然单张全是分牌，才考虑拆对子/三条里的非分牌，保住分牌和更大的单张。
+  if (singletonCards.length > 0) {
+    const splitNonPoint = groups
+      .filter((g) => g.length >= 2)
+      .map((g) => g[0])
+      .find((card) => cardScore(card) === 0);
+    if (splitNonPoint) return [splitNonPoint];
+    return [singletonCards[0]];
+  }
+
+  return null;
 }
 
 // Leading. easy dumps the lowest card. medium/hard build candidate leads — the
@@ -1431,6 +1459,21 @@ function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available)
   const isLockedGroup = (g) => lockedSet.has(`${g[0].rank}|${g[0].suit}`);
   const availPairs   = availGroups.filter(g => g.length >= 2 && !isLockedGroup(g)).length;
   const availTriples = availGroups.filter(g => g.length >= 3).length;
+  const playedSameSuit = cards.filter(c => playSuit(c, room) === ledSuit);
+
+  // 甩牌里如果包含拖拉机组件，跟家手里有对应拖拉机时必须优先跟拖拉机；
+  // 不能只用散对子凑数量（例如首家 7788，跟家有 991010 时不能出 9944）。
+  const components = decomposeThrowComponents(leaderCards, room, ledSuit);
+  for (const comp of components) {
+    if (comp.kind !== "tractor") continue;
+    const need = comp.unit * comp.count;
+    const pool = comp.unit === 2
+      ? available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`))
+      : available;
+    if (findTractors(pool, room, need).length && !findTractors(playedSameSuit, room, need).length) {
+      return { ok: false, reason: "需要优先跟拖拉机" };
+    }
+  }
 
   for (const lg of leaderGroups) {
     if (lg.length >= 3) {
@@ -1447,7 +1490,6 @@ function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available)
   }
 
   // Check follower's actual played cards satisfy the requirement
-  const playedSameSuit = cards.filter(c => playSuit(c, room) === ledSuit);
   const playedGroups = groupCards([...playedSameSuit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)));
   const playedPairs   = playedGroups.filter(g => g.length >= 2).length;
   const playedTriples = playedGroups.filter(g => g.length >= 3).length;
@@ -2253,6 +2295,21 @@ function buryMultiplier(shape) {
   return 2;
 }
 
+function trumpKillSeats(room, plays = room.currentTrick) {
+  if (!plays || plays.length < 2) return [];
+  const leadPlay = plays[0];
+  const ledSuit = playSuit(leadPlay.cards[0], room);
+  if (ledSuit === "trump") return [];
+
+  const seats = [];
+  for (let i = 1; i < plays.length; i += 1) {
+    const play = plays[i];
+    if (!play.cards.every((card) => playSuit(card, room) === "trump")) continue;
+    if (comparePlay(room, play, leadPlay, leadPlay) > 0) seats.push(play.seat);
+  }
+  return seats;
+}
+
 function forceCount(card) {
   if (card.rank === "A") return 1;
   if (card.rank === "J") return 11;
@@ -2489,6 +2546,9 @@ export function publicState(room, viewerId = null) {
     currentWinnerSeat: (room.phase === PHASES.PLAYING && room.currentTrick.length > 0)
       ? (() => { try { return determineTrickWinner(room, room.currentTrick); } catch { return null; } })()
       : null,
+    trumpKillSeats: (room.phase === PHASES.PLAYING && room.currentTrick.length > 1)
+      ? (() => { try { return trumpKillSeats(room, room.currentTrick); } catch { return []; } })()
+      : [],
     throwResult: room.throwResult,
     scores: room.scores,
     seatPersonalScores: room.seatPersonalScores || {},

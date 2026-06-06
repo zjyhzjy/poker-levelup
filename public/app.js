@@ -381,6 +381,8 @@ function renderSeats(room) {
   for (const play of room.currentTrick) currentPlayed[play.seat] = play.cards;
   const lastPlayed = {};
   for (const play of (room.lastTrick || [])) lastPlayed[play.seat] = play.cards;
+  const currentKillSeats = new Set(room.trumpKillSeats || []);
+  const completedWinner = room.currentTrick.length === 0 ? room.lastTrickWin?.winner : null;
 
   const isDealer = (i) => room.dealerSeat === i;
   const myParity = (room.viewerSeat ?? 0) % 2;
@@ -420,6 +422,7 @@ function renderSeats(room) {
     const playedAbove = screenPos === 1 || screenPos === (room.seatCount || 5) - 1;
     let sideCardsHTML = "";
     let currentPlayShown = false;
+    let completedPlayShown = false;
     if (showBids && seatBids[seat.index]) {
       sideCardsHTML = renderPlayedCards(seatBids[seat.index].cards);
     } else {
@@ -429,11 +432,14 @@ function renderSeats(room) {
         currentPlayShown = true;
       } else if (room.currentTrick.length === 0 && lastPlayed[seat.index]) {
         playedCards = lastPlayed[seat.index];
+        completedPlayShown = true;
       }
       if (playedCards) sideCardsHTML = renderPlayedCards(playedCards);
     }
-    // 高亮当前这墩已出牌中“最大的一手”
-    const winningPlay = currentPlayShown && room.currentWinnerSeat === seat.index;
+    // 进行中和一墩结束后都只高亮本墩“最大”的唯一一家。
+    const winningPlay = (currentPlayShown && room.currentWinnerSeat === seat.index)
+      || (completedPlayShown && completedWinner === seat.index);
+    const killPlay = currentPlayShown && currentKillSeats.has(seat.index);
 
     // Personal score
     let personalScore = "";
@@ -469,8 +475,13 @@ function renderSeats(room) {
       ? `${seat.isAi ? "AI" : (seat.trustee ? "托管" : (seat.connected ? "在线" : "离线"))} · ${seat.handCount}张`
       : "空座";
 
+    const playedClasses = [
+      "seat-played",
+      winningPlay ? "winning" : "",
+      killPlay ? "trump-kill" : ""
+    ].filter(Boolean).join(" ");
     const playedDiv = sideCardsHTML
-      ? `<div class="seat-played${winningPlay ? " winning" : ""}">${sideCardsHTML}</div>`
+      ? `<div class="${playedClasses}">${sideCardsHTML}</div>`
       : "";
 
     return `<div class="seat screen-pos-${screenPos} ${youClass} ${activeClass}">

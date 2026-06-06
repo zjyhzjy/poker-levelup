@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, buryKitty, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, decideAiBid, determineTrickWinner, evaluateBid, makeBid, passBid, playCards, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, buryKitty, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, decideAiBid, determineTrickWinner, evaluateBid, makeBid, passBid, playCards, publicState, revealKittyCard, runAiStep, sit, startAuction, startRound, upgradeResult, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -100,6 +100,53 @@ test("AI 跟牌不会把分牌送给对家", () => {
   const play = chooseAiPlay(room, ai, [spadeK]);
   assert.equal(play.length, 1);
   assert.equal(play[0].rank, "3"); // dump the 3, never feed the 5 to an enemy
+});
+
+test("AI 跟单张时优先出自然单张最小非分牌，不拆对子", () => {
+  const room = createRoom("SINGLE1");
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  room.dealerSeat = 0;
+  room.friendSeat = null;
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 1) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = cardsOf("A", "spades", 1)[0];
+  room.seats[0].playerId = "e0";
+  const ai = room.seats[1];
+  ai.playerId = "ai1"; ai.isAi = true; ai.aiLevel = "medium";
+  ai.hand = [
+    ...cardsOf("4", "spades", 2),
+    ...["5", "6", "7", "8"].map((rank) => cardsOf(rank, "spades", 1)[0])
+  ];
+  room.currentTrick = [{ seat: 0, cards: [lead], shape: analyzeShape([lead], room), points: 0 }];
+  room.turnSeat = 1;
+  const play = chooseAiPlay(room, ai, [lead]);
+  assert.equal(play.length, 1);
+  assert.equal(play[0].rank, "6");
+});
+
+test("AI 跟单张时自然单张只有分牌，才考虑拆对子出非分牌", () => {
+  const room = createRoom("SINGLE2");
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  room.dealerSeat = 0;
+  room.friendSeat = null;
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 1) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = cardsOf("A", "spades", 1)[0];
+  room.seats[0].playerId = "e0";
+  const ai = room.seats[1];
+  ai.playerId = "ai1"; ai.isAi = true; ai.aiLevel = "medium";
+  ai.hand = [
+    ...cardsOf("4", "spades", 2),
+    cardsOf("5", "spades", 1)[0],
+    cardsOf("10", "spades", 1)[0]
+  ];
+  room.currentTrick = [{ seat: 0, cards: [lead], shape: analyzeShape([lead], room), points: 0 }];
+  room.turnSeat = 1;
+  const play = chooseAiPlay(room, ai, [lead]);
+  assert.equal(play.length, 1);
+  assert.equal(play[0].rank, "4");
 });
 
 test("AI 抢庄只用手里真实的常主牌", () => {
@@ -337,6 +384,123 @@ test("甩牌主牌杀：三条+相邻对子不被误当拖拉机（结构匹配�
   ];
   // 双方都是“三条+对子”，结构匹配，主牌杀应成功（赢家=seat1）
   assert.equal(determineTrickWinner(room, room.currentTrick), 1);
+});
+
+test("跟拖拉机时手里有拖拉机必须优先出拖拉机，不能用散对子代替", () => {
+  const room = createRoom("TRFOLLOW");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 2) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("8", "clubs"), ...cardsOf("7", "clubs")];
+  const legal = [...cardsOf("10", "clubs"), ...cardsOf("9", "clubs")];
+  const illegal = [...cardsOf("9", "clubs"), ...cardsOf("4", "clubs")];
+  const follower = room.seats[1];
+  follower.playerId = "p1";
+  follower.lockedTriples = [];
+  follower.hand = [...legal, ...cardsOf("4", "clubs")];
+
+  assert.equal(analyzeShape(lead, room).type, "tractor");
+  assert.equal(analyzeShape(legal, room).type, "tractor");
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
+test("手里有长拖拉机时，跟短拖拉机可选择任意连续短段", () => {
+  const room = createRoom("TRSLICE");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 2) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("4", "clubs"), ...cardsOf("3", "clubs")];
+  const lowSlice = [...cardsOf("6", "clubs"), ...cardsOf("5", "clubs")];
+  const highSlice = [...cardsOf("7", "clubs"), ...cardsOf("6", "clubs")];
+  const brokenPairs = [...cardsOf("7", "clubs"), ...cardsOf("5", "clubs")];
+  const follower = room.seats[1];
+  follower.playerId = "p1";
+  follower.lockedTriples = [];
+  follower.hand = [...cardsOf("7", "clubs"), ...cardsOf("6", "clubs"), ...cardsOf("5", "clubs")];
+
+  assert.equal(analyzeShape(lowSlice, room).type, "tractor");
+  assert.equal(analyzeShape(highSlice, room).type, "tractor");
+  assert.equal(validatePlay(room, follower, lowSlice, lead).ok, true);
+  assert.equal(validatePlay(room, follower, highSlice, lead).ok, true);
+  assert.equal(validatePlay(room, follower, brokenPairs, lead).ok, false);
+});
+
+test("跟三条时手里有三条必须优先出三条", () => {
+  const room = createRoom("TRIPLEFOLLOW");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 3) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = cardsOf("4", "clubs", 3);
+  const legal = cardsOf("7", "clubs", 3);
+  const illegal = [...cardsOf("7", "clubs", 2), cardsOf("5", "clubs", 1)[0]];
+  const follower = room.seats[1];
+  follower.playerId = "p1";
+  follower.lockedTriples = [];
+  follower.hand = [...cardsOf("7", "clubs", 3), cardsOf("5", "clubs", 1)[0]];
+
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
+test("跟甩牌里的拖拉机组件时，有拖拉机必须优先跟拖拉机", () => {
+  const room = createRoom("THROWFOLLOW");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 2) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("A", "clubs"), ...cardsOf("8", "clubs"), ...cardsOf("7", "clubs")];
+  const legal = [...cardsOf("10", "clubs"), ...cardsOf("9", "clubs"), ...cardsOf("4", "clubs")];
+  const illegal = [...cardsOf("Q", "clubs"), ...cardsOf("9", "clubs"), ...cardsOf("4", "clubs")];
+  const follower = room.seats[1];
+  follower.playerId = "p1";
+  follower.lockedTriples = [];
+  follower.hand = [...cardsOf("Q", "clubs"), ...cardsOf("10", "clubs"), ...cardsOf("9", "clubs"), ...cardsOf("4", "clubs")];
+
+  assert.equal(analyzeShape(lead, room).type, "throw");
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
+test("publicState 标记主牌杀副牌，仅在首家副牌时显示杀", () => {
+  const room = createRoom("KILL");
+  room.phase = "playing";
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  const lead = deck.find((c) => c.rank === "A" && c.suit === "spades");
+  const cut = deck.find((c) => c.rank === "3" && c.suit === "hearts");
+  room.currentTrick = [
+    { seat: 0, cards: [lead], shape: analyzeShape([lead], room), points: 0 },
+    { seat: 1, cards: [cut], shape: analyzeShape([cut], room), points: 0 }
+  ];
+  assert.deepEqual(publicState(room, "p0").trumpKillSeats, [1]);
+
+  const trumpLead = deck.find((c) => c.rank === "A" && c.suit === "hearts");
+  const trumpFollow = deck.find((c) => c.rank === "K" && c.suit === "hearts");
+  room.currentTrick = [
+    { seat: 0, cards: [trumpLead], shape: analyzeShape([trumpLead], room), points: 0 },
+    { seat: 1, cards: [trumpFollow], shape: analyzeShape([trumpFollow], room), points: 0 }
+  ];
+  assert.deepEqual(publicState(room, "p0").trumpKillSeats, []);
+});
+
+test("多人主杀时 currentWinnerSeat 只标记最大的一家", () => {
+  const room = createRoom("KILL2");
+  room.phase = "playing";
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  const lead = deck.find((c) => c.rank === "A" && c.suit === "spades");
+  const lowCut = deck.find((c) => c.rank === "3" && c.suit === "hearts");
+  const highCut = deck.find((c) => c.rank === "K" && c.suit === "hearts");
+  room.currentTrick = [
+    { seat: 0, cards: [lead], shape: analyzeShape([lead], room), points: 0 },
+    { seat: 1, cards: [lowCut], shape: analyzeShape([lowCut], room), points: 0 },
+    { seat: 2, cards: [highCut], shape: analyzeShape([highCut], room), points: 0 }
+  ];
+  const state = publicState(room, "p0");
+  assert.deepEqual(state.trumpKillSeats, [1, 2]);
+  assert.equal(state.currentWinnerSeat, 2);
 });
 
 test("6 人轮庄：首局随机坐庄、两队从 2 起、跳过抢庄直接进选主", () => {
