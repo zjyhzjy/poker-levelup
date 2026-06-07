@@ -658,7 +658,7 @@ body.desktop .seats.players-6 .played-card .card-center.joker-text { font-size: 
 }
 
 .context-controls:not(:empty) {
-  margin-bottom: 4px;
+  margin-bottom: 8px;
 }
 
 .context-controls button,
@@ -1229,6 +1229,7 @@ body.desktop .bid-reveal-label { font-size: 18px; }
 body.desktop .seat-btn { font-size: 14px; padding: 6px 12px; }
 body.desktop .context-controls button,
 body.desktop .context-controls select { font-size: 16px; padding: 10px 18px; }
+body.desktop .context-controls:not(:empty) { margin-bottom: 24px; }
 body.desktop .center-action button { font-size: 20px; padding: 18px 36px; }
 body.desktop .selection-info { font-size: 15px; }
 body.desktop .error-box { font-size: 15px; }
