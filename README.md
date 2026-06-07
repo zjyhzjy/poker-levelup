@@ -35,4 +35,4 @@ PS C:\cloudflared> .\cloudflared.exe tunnel --url http://localhost:3000
 - 跟牌校验、比牌、计分、扣底、升级结算
 - AI 补座、托管和推荐出牌
 
-详细规则见 [docs/rules.md](docs/rules.md)。
+详细规则见 [docs/rules.md](docs/rules.md)，其中 5 人和 6 人规则已分开整理，方便新手按玩法阅读。
