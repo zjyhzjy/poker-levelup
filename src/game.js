@@ -234,7 +234,7 @@ export function dealRound(room) {
     room.seats[room.dealCursor].hand.push(card);
     room.dealCursor = nextSeat(room.dealCursor, room.seatCount);
   }
-  for (const seat of room.seats) sortHand(seat.hand, room, seat.level);
+  for (const seat of room.seats) sortHand(seat.hand, room);
   if (room.deck.length <= room.kittySize) {
     room.kitty = room.deck.splice(0);
     finishDealing(room);
@@ -318,7 +318,7 @@ function startSixTrumpCalling(room) {
   room.bidResponses = {};
   room.trumpSuit = null;
   room.noTrump = false;
-  for (const seat of room.seats) sortHand(seat.hand, room, seat.level);
+  for (const seat of room.seats) sortHand(seat.hand, room);
   if (room.dealerSeat === null) {
     room.tableLog.push(`首轮抢庄：所有人可亮自己的 ${room.levelRank} 定主，亮主者坐庄。`);
   } else {
@@ -414,7 +414,7 @@ function handleNoSixTrumpCall(room) {
     room.sixFirstAuction = false;
     for (const seat of room.seats) {
       seat.level = room.teamLevels[seat.index % 2];
-      sortHand(seat.hand, room, seat.level);
+      sortHand(seat.hand, room);
     }
     room.tableLog.push(`原庄家队无人亮主，${seatName(room, newDealer)} 所在队临时上台（打 ${room.levelRank}），重新叫主。`);
     return;

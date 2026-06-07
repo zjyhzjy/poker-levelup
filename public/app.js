@@ -262,6 +262,7 @@ function render() {
   try { renderSeats(room); }    catch(e) { console.error("renderSeats:", e); }
   try { renderCenter(room); }   catch(e) { console.error("renderCenter:", e); }
   try { renderControls(room); } catch(e) { console.error("renderControls:", e); }
+  try { renderTrusteeControls(room); } catch(e) { console.error("renderTrusteeControls:", e); }
   try { renderHand(room); }     catch(e) { console.error("renderHand:", e); }
   try { renderSpectators(room); } catch(e) { console.error("renderSpectators:", e); }
   try { renderLog(room); }      catch(e) { console.error("renderLog:", e); }
@@ -902,17 +903,24 @@ function renderControls(room) {
     parts.push(`<span style="color:rgba(255,255,255,.6);font-size:13px">本墩结算中…</span>`);
   }
 
-  if (room.phase === "playing" && room.viewerSeat != null) {
-    const trustee = room.seats[room.viewerSeat]?.trustee;
-    parts.push(`<button data-action="toggleTrustee" class="${trustee ? "trustee-on" : ""}">${trustee ? "取消托管" : "托管"}</button>`);
-  }
-
   if (room.phase === "roundOver") {
     parts.push(`<button data-action="nextRoundLobby" class="primary-action">回到座位准备下一局</button>`);
   }
 
   $("#contextControls").innerHTML = parts.join("");
   bindControls();
+}
+
+function renderTrusteeControls(room) {
+  const el = $("#trusteeControls");
+  if (!el) return;
+  if (room.phase !== "playing" || room.viewerSeat == null) {
+    el.innerHTML = "";
+    return;
+  }
+  const trustee = room.seats[room.viewerSeat]?.trustee;
+  el.innerHTML = `<button data-action="toggleTrustee" class="trustee-float ${trustee ? "trustee-on" : ""}" title="${trustee ? "取消托管" : "托管"}">${trustee ? "取消托管" : "托管"}</button>`;
+  bindControls(el);
 }
 
 function friendFormHTML() {
@@ -936,8 +944,8 @@ function friendFormHTML() {
     <button data-action="callFriend" class="primary-action">叫朋友</button>`;
 }
 
-function bindControls() {
-  document.querySelectorAll("[data-action]").forEach((btn) => {
+function bindControls(root = document) {
+  root.querySelectorAll("[data-action]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const action = btn.dataset.action;
       if (action === "bid")         send("bid",         { cardIds: [...state.selected] });
@@ -977,9 +985,7 @@ function renderHand(room) {
   const you = room.seats.find((s) => s.isYou);
   const hand = you?.hand || [];
 
-  $("#selectionInfo").textContent = hand.length === 0
-    ? ""
-    : (state.selected.size > 0 ? `已选 ${state.selected.size} 张` : `手牌 ${hand.length} 张`);
+  $("#selectionInfo").textContent = state.selected.size > 0 ? `已选 ${state.selected.size} 张` : "";
 
   // Reset the deal-in tracker whenever we're not actively dealing, so the next
   // round's deal animates fresh (and normal play never animates).

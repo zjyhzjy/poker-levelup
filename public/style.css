@@ -480,7 +480,32 @@ button, input, select { font: inherit; }
 .players-6 .screen-pos-4 { top: 16%; left: 2%; right: auto; bottom: auto; }
 .players-6 .screen-pos-5 { bottom: 36%; left: 2%; right: auto; top: auto; }
 /* 侧位出牌容器封顶，配合 JS 的 MAX_WIDTH 收窄，双保险防横扫中央座位 */
-.players-6 .seat-played { max-width: 116px; }
+.seats.players-6 .seat-played {
+  max-width: 116px;
+  min-height: 62px;
+}
+.seats.players-6 .played-card {
+  width: 44px;
+  height: 62px;
+  border-radius: 6px;
+}
+.seats.players-6 .played-card .card-rank { font-size: 12px; }
+.seats.players-6 .played-card .card-suit-sm { font-size: 9px; }
+.seats.players-6 .played-card .card-center { font-size: 21px; }
+.seats.players-6 .played-card .card-center.joker-text { font-size: 11px; }
+body.desktop .seats.players-6 .seat-played {
+  max-width: 157px;
+  min-height: 84px;
+}
+body.desktop .seats.players-6 .played-card {
+  width: 59px;
+  height: 84px;
+  border-radius: 8px;
+}
+body.desktop .seats.players-6 .played-card .card-rank { font-size: 17px; }
+body.desktop .seats.players-6 .played-card .card-suit-sm { font-size: 12px; }
+body.desktop .seats.players-6 .played-card .card-center { font-size: 29px; }
+body.desktop .seats.players-6 .played-card .card-center.joker-text { font-size: 15px; }
 /* 矮屏（360×640、地址栏展开等）：下位座位再上抬、手牌区压低，给座位腾空间 */
 @media (orientation: portrait) and (max-height: 700px) {
   .players-6 .screen-pos-1, .players-6 .screen-pos-5 { bottom: 40%; }
@@ -660,6 +685,47 @@ button, input, select { font: inherit; }
   border-color: transparent;
 }
 .context-controls button.primary-action:hover { opacity: .9; }
+
+.trustee-controls {
+  position: absolute;
+  bottom: calc(176px + env(safe-area-inset-bottom));
+  right: 10px;
+  z-index: 12;
+  pointer-events: none;
+}
+.trustee-float {
+  pointer-events: auto;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 999px;
+  border: 1px solid rgba(200,144,45,.45);
+  background: rgba(0,0,0,.55);
+  color: var(--gold-light);
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 8px rgba(0,0,0,.38);
+}
+.trustee-float.trustee-on {
+  background: linear-gradient(135deg, #2e9e5b, #57c98a);
+  color: #042913;
+  font-weight: 700;
+  border-color: transparent;
+}
+body.desktop .trustee-controls {
+  bottom: calc(126px + env(safe-area-inset-bottom));
+  right: 14px;
+}
+body.desktop .trustee-float {
+  font-size: 15px;
+  padding: 8px 14px;
+}
+@media (orientation: landscape) {
+  .trustee-controls {
+    bottom: calc(92px + env(safe-area-inset-bottom));
+    right: 10px;
+  }
+}
 
 /* Highlight the currently-winning play in the ongoing trick */
 .seat-played.winning {

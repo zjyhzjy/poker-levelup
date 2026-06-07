@@ -778,6 +778,55 @@ test("6 人叫主：原庄家队无人亮主则另一队上台，再无人亮主
   assert.equal(room.kitty.length, 6);
 });
 
+test("6 人连庄发牌阶段按庄家队等级理牌，换台后才按闲家队等级理牌", () => {
+  const room = createRoom("SIXSORT", { seatCount: 6 });
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  room.round = 1;
+  room.teamLevels = { 0: "4", 1: "2" };
+  room.nextDealerSeat = 0;
+  startRound(room, () => 0.3, { deal: false });
+
+  const deck = createDeck();
+  const card = (rank, suit) => deck.find((c) => c.rank === rank && c.suit === suit);
+  const spade2 = card("2", "spades");
+  const spade4 = card("4", "spades");
+  const used = new Set([spade2.id, spade4.id]);
+  const fillers = deck.filter((c) => !used.has(c.id)).slice(0, 16);
+  room.deck = [
+    fillers[0], spade2, fillers[1], fillers[2], fillers[3], fillers[4],
+    fillers[5], spade4, fillers[6], fillers[7], fillers[8], fillers[9],
+    ...fillers.slice(10, 16)
+  ];
+
+  while (dealRound(room)) { /* finish compact test deal */ }
+  assert.equal(room.phase, "sixTrump");
+  assert.equal(room.dealerSeat, 0);
+  assert.equal(room.levelRank, "4");
+  assert.deepEqual(room.seats[1].hand.map((c) => c.rank), ["4", "2"], "闲家队等级 2 不能在庄家打 4 时提前当常主");
+
+  for (let i = 0; i < 6; i += 1) passSixTrump(room, `p${i}`);
+  assert.equal(room.dealerSeat, 1);
+  assert.equal(room.levelRank, "2");
+  assert.deepEqual(room.seats[1].hand.map((c) => c.rank), ["2", "4"], "无人亮主换台后才按闲家队等级 2 重排");
+});
+
+test("6 人完整发牌连庄时闲家手牌按庄家队等级作为常主排序", () => {
+  const room = createRoom("FULLSIXSORT", { seatCount: 6 });
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  room.round = 1;
+  room.teamLevels = { 0: "4", 1: "2" };
+  room.nextDealerSeat = 0;
+  startRound(room, () => 0.42);
+
+  assert.equal(room.phase, "sixTrump");
+  assert.equal(room.dealerSeat, 0);
+  assert.equal(room.levelRank, "4");
+  for (const seatIndex of [1, 3, 5]) {
+    const firstNonJoker = room.seats[seatIndex].hand.find((card) => card.suit !== "joker");
+    assert.equal(firstNonJoker?.rank, "4", `seat ${seatIndex} 应先看到庄家队等级 4 的常主`);
+  }
+});
+
 test("6 人结算分线：120-160 上台不升级，守庄成功才升级", () => {
   assert.deepEqual(upgradeResultSix(45), { side: "dealer", steps: 3, label: "庄家队升 3 级" });
   assert.deepEqual(upgradeResultSix(80), { side: "dealer", steps: 1, label: "庄家队升 1 级" });
