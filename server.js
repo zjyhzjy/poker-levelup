@@ -185,6 +185,11 @@ function handleMessage(client, message) {
       return;
     }
 
+    if (type === "ping") {
+      send(client, "pong", { sentAt: payload.sentAt || 0, serverAt: Date.now() });
+      return;
+    }
+
     // Ephemeral emote (throw tomato / send flower at a seat) — broadcast to the
     // whole room as a transient event, not part of the persistent game state.
     if (type === "emote") {
@@ -379,6 +384,10 @@ function scheduleBidTimeout(room) {
 
 function scheduleAi(room) {
   scheduleAutoTrustee(room); // 轮到掉线真人时宽限后自动托管，避免整桌卡死
+  if (room.phase === "playing" && (room.trickPauseUntil || 0) > Date.now()) {
+    setTimeout(() => scheduleAi(room), Math.max(20, room.trickPauseUntil - Date.now() + 20));
+    return;
+  }
   setTimeout(() => {
     let moved = false;
     try {

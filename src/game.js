@@ -75,6 +75,7 @@ export function createRoom(code = randomRoomCode(), options = {}) {
     currentTrick: [],
     lastTrick: [],
     throwResult: null,   // { seat, allCards, keepCards, failed, message } — cleared after next play
+    trickPauseUntil: 0,
     finishedTricks: [],
     tableLog: [],
     scores: { attackers: 0, dealerTeam: 0 },
@@ -187,6 +188,7 @@ export function startRound(room, random = Math.random, options = {}) {
   room.currentTrick = [];
   room.lastTrick = [];
   room.lastTrickWin = null;
+  room.trickPauseUntil = 0;
   room.friendReveal = null;
   room.throwResult = null;
   room.finishedTricks = [];
@@ -596,6 +598,7 @@ export function playCards(room, playerId, cardIds) {
   assertPhase(room, PHASES.PLAYING);
   const seat = findSeatByPlayer(room, playerId);
   if (!seat) throw new Error("请先入座");
+  if ((room.trickPauseUntil || 0) > Date.now()) throw new Error("上一墩展示中，请稍候");
   if (seat.index !== room.turnSeat) throw new Error("还没轮到你");
   const cards = pickCards(seat.hand, cardIds);
   if (!cards.length) throw new Error("请选择要出的牌");
@@ -710,6 +713,7 @@ export function runAiStep(room) {
     return true;
   }
   if (room.phase === PHASES.PLAYING && isAutoSeat(room, room.turnSeat)) {
+    if ((room.trickPauseUntil || 0) > Date.now()) return false;
     const seat = room.seats[room.turnSeat];
     const leaderCards = room.currentTrick[0]?.cards ?? null;
     const cards = chooseAiPlay(room, seat, leaderCards);
@@ -1327,6 +1331,7 @@ function finishTrick(room) {
   }
   room.currentLeader = winner;
   room.turnSeat = winner;
+  room.trickPauseUntil = Date.now() + 1000;
 }
 
 // 通关判定：升级是 A→2 循环、没有封顶，故“当前已是 A 还要再升（steps≥1）”即视为
@@ -1892,42 +1897,62 @@ function comparePlay(room, challenger, currentBest, leadPlay) {
   // 4. 开始比大小
   if (challengerIsTrumpCut) {
     if (!bestIsTrumpCut) return 1;
-    if (leadShape.type === "throw") return compareByHighestTier(challengerCards, bestCards, room);
+    if (leadShape.type === "throw") return compareByHighestTier(challengerCards, bestCards, room, leadPlayCards);
     return getShapeComparativeValue(challengerCards, room) - getShapeComparativeValue(bestCards, room);
   }
 
   if (bestIsTrumpCut) return -1;
 
-  if (leadShape.type === "throw") return compareByHighestTier(challengerCards, bestCards, room);
+  if (leadShape.type === "throw") return compareByHighestTier(challengerCards, bestCards, room, leadPlayCards);
 
   return getShapeComparativeValue(challengerCards, room) - getShapeComparativeValue(bestCards, room);
 }
 
-// For throw tricks: compare two plays by highest-tier group only.
-// Tier: tractor=4 > triple=3 > pair=2 > single=1. Same tier+value → earlier play (best) wins.
-function compareByHighestTier(challengerCards, bestCards, room) {
-  const tierInfo = (cards) => {
-    const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
-    const groups = groupCards(sorted);
-    const triples = groups.filter(g => g.length >= 3);
-    if (triples.length > 0) return { tier: 3, value: cardOrderValue(triples[0][0], room) };
-    const pairs = groups.filter(g => g.length >= 2);
-    if (pairs.length >= 2) {
-      for (let i = 0; i < pairs.length - 1; i++) {
-        const suit = playSuit(pairs[i][0], room);
-        if (pairs[i].length === pairs[i+1].length && isConsecutiveInRules(pairs[i][0], pairs[i+1][0], suit, room)) {
-          return { tier: 4, value: cardOrderValue(pairs[i][0], room) };
-        }
-      }
-    }
-    if (pairs.length > 0) return { tier: 2, value: cardOrderValue(pairs[0][0], room) };
-    return { tier: 1, value: cardOrderValue(sorted[0], room) };
-  };
-  const c = tierInfo(challengerCards);
-  const b = tierInfo(bestCards);
-  if (c.tier !== b.tier) return c.tier - b.tier;
+// For throw tricks: first identify the leader's highest component tier, then
+// compare only that tier. If the leader threw only singles (e.g. A+K), a later
+// pair is just two single cards; the pair tier must not outrank the leader.
+function compareByHighestTier(challengerCards, bestCards, room, leaderCards) {
+  const leaderInfo = highestThrowTier(leaderCards, room);
+  const c = matchingThrowTierValue(challengerCards, room, leaderInfo);
+  const b = matchingThrowTierValue(bestCards, room, leaderInfo);
   if (c.value !== b.value) return c.value - b.value;
   return -1; // same tier and value → earlier play wins
+}
+
+function highestThrowTier(cards, room) {
+  const ledSuit = playSuit(cards[0], room);
+  const components = decomposeThrowComponents(cards, room, ledSuit);
+  let best = { tier: 1, unit: 1, count: 1, value: 0 };
+  for (const comp of components) {
+    const headValue = cardOrderValue(comp.cards[0], room);
+    const tier = comp.kind === "tractor" ? 4 : comp.unit === 3 ? 3 : comp.unit === 2 ? 2 : 1;
+    if (
+      tier > best.tier ||
+      (tier === best.tier && (headValue > best.value || (comp.count || 1) > best.count))
+    ) {
+      best = { tier, unit: comp.unit, count: comp.count || 1, value: headValue };
+    }
+  }
+  return best;
+}
+
+function matchingThrowTierValue(cards, room, target) {
+  if (target.tier === 1) {
+    return { value: Math.max(...cards.map((card) => cardOrderValue(card, room))) };
+  }
+  const ledSuit = playSuit(cards[0], room);
+  const components = decomposeThrowComponents(cards, room, ledSuit);
+  let value = -Infinity;
+  for (const comp of components) {
+    if (target.tier === 4) {
+      if (comp.kind === "tractor" && comp.unit === target.unit && comp.count >= target.count) {
+        value = Math.max(value, cardOrderValue(comp.cards[0], room));
+      }
+    } else if (comp.kind === "group" && comp.unit === target.unit) {
+      value = Math.max(value, cardOrderValue(comp.cards[0], room));
+    }
+  }
+  return { value };
 }
 
 
@@ -2807,6 +2832,7 @@ export function publicState(room, viewerId = null) {
     currentTrick: room.currentTrick,
     lastTrick: room.lastTrick,
     lastTrickWin: room.lastTrickWin || null,
+    trickPauseUntil: room.trickPauseUntil || 0,
     // 当前这墩已出牌中“最大的一手”所属座位（用于前端实时高亮领先者）。
     currentWinnerSeat: (room.phase === PHASES.PLAYING && room.currentTrick.length > 0)
       ? (() => { try { return determineTrickWinner(room, room.currentTrick); } catch { return null; } })()

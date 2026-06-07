@@ -840,6 +840,28 @@ body.desktop .friend-pop { font-size: 30px; }
   z-index: 0;
 }
 
+.ping-status {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 7;
+  min-width: 72px;
+  padding: 3px 8px;
+  border: 1px solid rgba(232,196,119,.28);
+  border-radius: 6px;
+  background: rgba(3,18,10,.58);
+  color: rgba(244,238,213,.78);
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  letter-spacing: 0;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,.24);
+}
+.ping-status.good { color: #d9f7df; border-color: rgba(100,220,130,.35); }
+.ping-status.warn { color: #ffe0a3; border-color: rgba(255,190,80,.45); }
+.ping-status.bad  { color: #ffb8ad; border-color: rgba(255,100,80,.5); background: rgba(48,8,6,.64); }
+
 .card.selected {
   transform: translateY(-18px) !important;
   box-shadow: var(--shadow-card-hover), 0 0 0 2px var(--gold);

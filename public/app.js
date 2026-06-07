@@ -18,7 +18,8 @@ const state = {
   nickname: localStorage.getItem("szp.nickname") || "",
   avatar: localStorage.getItem("szp.avatar") || AVATARS[0],
   room: null,
-  selected: new Set()
+  selected: new Set(),
+  ping: { value: null, pendingAt: 0, lastPongAt: 0, timer: null, status: "bad" }
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -102,9 +103,22 @@ function connectAndJoin(code, nickname, seatCount) {
   state.nickname = nickname || "玩家";
   state.createSeatCount = seatCount === 6 ? 6 : 5; // 仅创建房间时生效
   localStorage.setItem("szp.nickname", state.nickname);
+  stopPingLoop();
+  updatePingStatus("connecting");
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}`);
   state.ws = ws;
+  ws.addEventListener("open", () => {
+    updatePingStatus("connecting");
+    startPingLoop();
+  });
+  ws.addEventListener("close", () => {
+    stopPingLoop();
+    updatePingStatus("down");
+  });
+  ws.addEventListener("error", () => {
+    updatePingStatus("down");
+  });
   // Only join once per socket. The server may send another "hello" after a
   // reconnect join; without this guard we'd loop hello→join→hello forever.
   let joined = false;
@@ -118,6 +132,9 @@ function connectAndJoin(code, nickname, seatCount) {
         state.playerId = getMyId();
         send(code ? "joinRoom" : "createRoom", { code, nickname: state.nickname, playerId: state.playerId, seatCount: state.createSeatCount });
       }
+    }
+    if (msg.type === "pong") {
+      receivePong(msg.payload);
     }
     if (msg.type === "state") {
       state.room = msg.payload;
@@ -138,7 +155,67 @@ function connectAndJoin(code, nickname, seatCount) {
 }
 
 function send(type, payload = {}) {
-  state.ws?.send(JSON.stringify({ type, payload }));
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return false;
+  state.ws.send(JSON.stringify({ type, payload }));
+  return true;
+}
+
+function startPingLoop() {
+  stopPingLoop();
+  sendPing();
+  state.ping.timer = setInterval(sendPing, 3000);
+}
+
+function stopPingLoop() {
+  if (state.ping.timer) clearInterval(state.ping.timer);
+  state.ping.timer = null;
+  state.ping.pendingAt = 0;
+}
+
+function sendPing() {
+  const ws = state.ws;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    updatePingStatus("down");
+    return;
+  }
+  const now = Date.now();
+  if (state.ping.pendingAt && now - state.ping.pendingAt > 6000) {
+    updatePingStatus("stale");
+  }
+  state.ping.pendingAt = now;
+  send("ping", { sentAt: now });
+}
+
+function receivePong(payload = {}) {
+  const sentAt = Number(payload.sentAt) || state.ping.pendingAt || Date.now();
+  state.ping.value = Math.max(0, Date.now() - sentAt);
+  state.ping.pendingAt = 0;
+  state.ping.lastPongAt = Date.now();
+  updatePingStatus("ok");
+}
+
+function updatePingStatus(mode = "ok") {
+  const el = $("#pingStatus");
+  if (!el) return;
+  el.classList.remove("good", "warn", "bad");
+  if (mode === "down") {
+    el.textContent = "服务器断开";
+    el.classList.add("bad");
+    return;
+  }
+  if (mode === "stale") {
+    el.textContent = "服务器无响应";
+    el.classList.add("bad");
+    return;
+  }
+  if (mode === "connecting" || state.ping.value == null) {
+    el.textContent = "连接中…";
+    el.classList.add("warn");
+    return;
+  }
+  const ping = Math.round(state.ping.value);
+  el.textContent = `Ping ${ping}ms`;
+  el.classList.add(ping < 120 ? "good" : ping < 300 ? "warn" : "bad");
 }
 
 // 推荐出牌：服务器返回建议的 cardId，自动帮玩家选中，玩家确认后再点“出牌”。
@@ -796,9 +873,12 @@ function renderControls(room) {
     parts.push(friendFormHTML());
   }
 
-  if (room.phase === "playing" && room.viewerSeat === room.turnSeat) {
+  const trickPaused = (room.trickPauseUntil || 0) > Date.now();
+  if (room.phase === "playing" && room.viewerSeat === room.turnSeat && !trickPaused) {
     parts.push(`<button data-action="play" class="primary-action">出牌 (${state.selected.size}张)</button>`);
     parts.push(`<button data-action="hint">推荐</button>`);
+  } else if (room.phase === "playing" && trickPaused) {
+    parts.push(`<span style="color:rgba(255,255,255,.6);font-size:13px">本墩结算中…</span>`);
   }
 
   if (room.phase === "playing" && room.viewerSeat != null) {
@@ -1054,6 +1134,7 @@ window.addEventListener("orientationchange", () => {
 });
 window.addEventListener("resize", () => {
   if (state.room) renderHand(state.room);
+  updatePingStatus();
 });
 
 // ─── Auto-reconnect after the app is backgrounded / loses the socket ──────────
@@ -1066,7 +1147,10 @@ function reconnectIfNeeded() {
   connectAndJoin(state.room.code, state.nickname);
 }
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") reconnectIfNeeded();
+  if (document.visibilityState === "visible") {
+    reconnectIfNeeded();
+    updatePingStatus();
+  }
 });
 window.addEventListener("pageshow", reconnectIfNeeded);
 window.addEventListener("focus", reconnectIfNeeded);
