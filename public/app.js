@@ -26,6 +26,7 @@ const $ = (sel) => document.querySelector(sel);
 
 // Tracks the currently shown bid so the center reveal only re-animates on change
 let lastBidSig = "";
+let trickPauseRenderTimer = null;
 // Card ids that have already played their deal-in animation, so re-renders during
 // dealing don't make the whole hand flicker (only newly dealt cards animate).
 const dealtCardIds = new Set();
@@ -56,15 +57,21 @@ function buildAvatarPicker() {
   picker.innerHTML = AVATARS.map((a) =>
     `<button type="button" class="avatar-option ${a === state.avatar ? "selected" : ""}" data-avatar="${a}">${a}</button>`
   ).join("");
-  picker.querySelectorAll("[data-avatar]").forEach((btn) =>
-    btn.addEventListener("click", () => {
-      state.avatar = btn.dataset.avatar;
-      localStorage.setItem("szp.avatar", state.avatar);
-      buildAvatarPicker();
-    })
-  );
 }
 buildAvatarPicker();
+
+function chooseAvatarFromEvent(event) {
+  const btn = event.target.closest?.("[data-avatar]");
+  if (!btn) return;
+  event.preventDefault();
+  state.avatar = btn.dataset.avatar;
+  localStorage.setItem("szp.avatar", state.avatar);
+  for (const option of $("#avatarPicker").querySelectorAll("[data-avatar]")) {
+    option.classList.toggle("selected", option.dataset.avatar === state.avatar);
+  }
+}
+$("#avatarPicker")?.addEventListener("click", chooseAvatarFromEvent);
+$("#avatarPicker")?.addEventListener("touchend", chooseAvatarFromEvent, { passive: false });
 
 $("#joinForm").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -160,6 +167,19 @@ function send(type, payload = {}) {
   return true;
 }
 
+function scheduleTrickPauseRefresh(room) {
+  if (trickPauseRenderTimer) {
+    clearTimeout(trickPauseRenderTimer);
+    trickPauseRenderTimer = null;
+  }
+  const remaining = (room?.trickPauseUntil || 0) - Date.now();
+  if (room?.phase !== "playing" || remaining <= 0) return;
+  trickPauseRenderTimer = setTimeout(() => {
+    trickPauseRenderTimer = null;
+    if (state.room) render();
+  }, remaining + 30);
+}
+
 function startPingLoop() {
   stopPingLoop();
   sendPing();
@@ -232,6 +252,7 @@ function render() {
   document.querySelector('[data-view="game"]').classList.remove("hidden");
 
   const room = state.room;
+  scheduleTrickPauseRefresh(room);
   $("#roomBadge").textContent = `房间 ${room.code}`;
   $("#phaseBadge").textContent = phaseText(room.phase);
 
@@ -246,7 +267,7 @@ function render() {
   try { renderLog(room); }      catch(e) { console.error("renderLog:", e); }
   try { maybeAnimateTrickPoints(room); } catch(e) { console.error("trickPoints:", e); }
   try { maybeAnimateFriendReveal(room); } catch(e) { console.error("friendReveal:", e); }
-  if ($("#historyPanel")?.classList.contains("open")) { try { renderHistory(room); } catch(e) { console.error("history:", e); } }
+  if ($("#logPanel")?.classList.contains("open")) { try { renderLog(room); } catch(e) { console.error("renderLog:", e); } }
   if ($("#standingsPanel")?.classList.contains("open")) { try { renderStandings(room); } catch(e) { console.error("standings:", e); } }
   try { maybeAnimateChampion(room); } catch(e) { console.error("champion:", e); }
 }
@@ -1059,36 +1080,32 @@ function cardFaceHTML(card) {
 
 /* ─── Log ────────────────────────────────────────────────── */
 function renderLog(room) {
-  $("#log").innerHTML = room.tableLog.slice().reverse()
-    .map((line) => `<div>${escapeHtml(line)}</div>`).join("");
+  renderPreviousTrick(room, $("#log"));
 }
 
-// 抽屉：记录 / 牌局 / 战绩 三者互斥展开。
+// 抽屉：记录 / 战绩 互斥展开。
 function openDrawer(id, render) {
-  for (const p of ["#logPanel", "#historyPanel", "#standingsPanel"]) {
+  for (const p of ["#logPanel", "#standingsPanel"]) {
     if (p !== id) $(p).classList.remove("open");
   }
   const panel = $(id);
   panel.classList.toggle("open");
   if (panel.classList.contains("open") && render) render(state.room);
 }
-$("#logToggle").addEventListener("click", () => openDrawer("#logPanel"));
-$("#historyToggle").addEventListener("click", () => openDrawer("#historyPanel", renderHistory));
+$("#logToggle").addEventListener("click", () => openDrawer("#logPanel", renderLog));
 $("#standingsToggle").addEventListener("click", () => openDrawer("#standingsPanel", renderStandings));
 
-// 本局牌局回看：逐墩展示谁出了什么、谁赢、几分（数据来自 publicState.tricks）。
-function renderHistory(room) {
-  const el = $("#history");
+// 上一墩回看：只展示最近完成的一墩，避免右下角记录越积越长。
+function renderPreviousTrick(room, el) {
   if (!el) return;
-  const tricks = room?.tricks || [];
-  if (!tricks.length) { el.innerHTML = `<div class="history-empty">本局还没有完成的墩</div>`; return; }
-  el.innerHTML = tricks.map((t, i) => {
-    const plays = t.plays.map((p) => {
-      const cards = p.cards.map((c) => `<span class="hcard ${isRed(c) ? "red" : "black"}">${escapeHtml(c.label)}</span>`).join(" ");
-      return `<div class="history-play${p.seat === t.winner ? " win" : ""}"><span class="hseat">${seatName(room, p.seat)}</span><span>${cards}</span></div>`;
-    }).join("");
-    return `<div class="history-trick"><div class="history-head">第 ${i + 1} 墩 · ${seatName(room, t.winner)} +${t.points}</div>${plays}</div>`;
+  const info = room?.lastTrickWin;
+  const plays = room?.lastTrick || [];
+  if (!info || !plays.length) { el.innerHTML = `<div class="history-empty">还没有上一墩记录</div>`; return; }
+  const rows = plays.map((p) => {
+    const cards = p.cards.map((c) => `<span class="hcard ${isRed(c) ? "red" : "black"}">${cardShortLabel(c)}</span>`).join(" ");
+    return `<div class="history-play${p.seat === info.winner ? " win" : ""}"><span class="hseat">${seatName(room, p.seat)}</span><span>${cards}</span></div>`;
   }).join("");
+  el.innerHTML = `<div class="history-trick"><div class="history-head">第 ${info.seq} 墩 · ${seatName(room, info.winner)} +${info.points}</div>${rows}</div>`;
 }
 
 // 战绩：各家当前等级 + 历次对局结果（数据来自 publicState.matchLog）。
@@ -1234,6 +1251,10 @@ function suitSymbol(suit) {
   return { spades: "♠", hearts: "♥", clubs: "♣", diamonds: "♦" }[suit] || "";
 }
 
+function suitEmoji(suit) {
+  return { spades: "♠️", hearts: "♥️", clubs: "♣️", diamonds: "♦️" }[suit] || "";
+}
+
 // 带颜色的花色符号（红桃/方片红、黑桃/梅花黑）。用白底小块保证在深色背景上也清晰可见。
 function suitSymbolColored(suit) {
   const sym = suitSymbol(suit);
@@ -1244,6 +1265,12 @@ function suitSymbolColored(suit) {
 
 function isRed(card) {
   return card.suit === "hearts" || card.suit === "diamonds";
+}
+
+function cardShortLabel(card) {
+  if (!card) return "";
+  if (card.suit === "joker") return escapeHtml(rankText(card.rank));
+  return `${suitEmoji(card.suit)}${escapeHtml(rankText(card.rank))}`;
 }
 
 function rankText(rank) {

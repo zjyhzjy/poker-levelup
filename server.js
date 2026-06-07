@@ -14,6 +14,7 @@ import {
   dealRound,
   decideAiBid,
   decideAiSixTrump,
+  chooseAiBury,
   forceDealer,
   joinRoom,
   leaveSeat,
@@ -37,6 +38,8 @@ const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.PORT || 3000);
 const rooms = new Map();
 const sockets = new Map();
+const BID_RESPONSE_TIMEOUT_MS = 10000;
+const BURY_TIMEOUT_MS = 60000;
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -257,9 +260,13 @@ function handleMessage(client, message) {
       scheduleDealing(room);
     }
 
-    // After a bid is placed, schedule 10s timeout for others to respond
+    // After a bid is placed, schedule timeout for others to respond
     if ((type === "bid" || type === "sixCallTrump") && room.currentBid && room.phase !== "burying") {
       scheduleBidTimeout(room);
+    }
+
+    if (room.phase === "burying") {
+      scheduleBuryTimeout(room);
     }
 
     // Let AI seats open/contest the bidding once a human acts in the auction.
@@ -309,7 +316,7 @@ function scheduleDealing(room) {
       scheduleDealing(room);
     } else {
       // Dealing finished. If a bid is pending, make sure it still gets resolved.
-      if (room.phase === "dealing" && room.currentBid) scheduleBidTimeout(room);
+      if (room.currentBid && ["dealing", "auctionReady", "auction"].includes(room.phase)) scheduleBidTimeout(room);
       scheduleAiBids(room); // AI seats may now open the bidding
       scheduleAi(room);
     }
@@ -318,7 +325,7 @@ function scheduleDealing(room) {
 
 // Let each AI seat consider bidding/responding, staggered, once per call. Driven
 // by auction events (deal finished, a bid placed, a card revealed) so it respects
-// the reveal/10s pacing instead of firing through the fast 350ms AI loop.
+// the reveal/response-timeout pacing instead of firing through the fast 350ms AI loop.
 function scheduleAiBids(room) {
   const aiSeats = room.seats.filter((s) => s.isAi && s.playerId);
   aiSeats.forEach((seat, i) => {
@@ -334,7 +341,7 @@ function scheduleAiBids(room) {
           if (sixMode) callSixTrump(room, seat.playerId, decision.cardIds);
           else makeBid(room, seat.playerId, decision.cardIds);
           broadcast(room);
-          scheduleBidTimeout(room); // 10s window for this new bid
+          scheduleBidTimeout(room); // response window for this new bid
           scheduleAiBids(room);     // let the others respond to it
           scheduleAi(room);         // in case it confirmed the dealer immediately
         } else if (room.currentBid || sixMode) {
@@ -349,13 +356,23 @@ function scheduleAiBids(room) {
   });
 }
 
-// After a bid is placed, give other players 10s to respond before auto-confirming
-function scheduleBidTimeout(room) {
+// After a bid is placed, give other players a full response window before auto-confirming.
+// If someone reveals during the deal, the response window starts after dealing
+// finishes so players still get the full visible time to react.
+function scheduleBidTimeout(room, delay = BID_RESPONSE_TIMEOUT_MS) {
   const bidAtSchedule = room.currentBid;
   if (!bidAtSchedule) return;
   setTimeout(() => {
     if (room.currentBid !== bidAtSchedule) return;
     if (!["dealing", "auctionReady", "auction", "sixTrump"].includes(room.phase)) return;
+    if (room.dealing) {
+      scheduleBidTimeout(room);
+      return;
+    }
+    if ((room.bidResponseReadyAt || 0) > Date.now()) {
+      scheduleBidTimeout(room, Math.max(20, room.bidResponseReadyAt - Date.now()));
+      return;
+    }
     try {
       if (room.phase === "sixTrump") {
         if (room.currentBid) {
@@ -372,18 +389,16 @@ function scheduleBidTimeout(room) {
             room.bidResponses[seat.index] = "pass";
           }
         }
-        // Still dealing: record passes but defer confirming until the deal finishes
-        // (the kitty isn't assigned yet). finishDealing() will resolve it.
-        if (room.dealing) { broadcast(room); return; }
         confirmDealer(room);
       }
       broadcast(room); scheduleAi(room);
     } catch (_) {}
-  }, 10000);
+  }, delay);
 }
 
 function scheduleAi(room) {
   scheduleAutoTrustee(room); // 轮到掉线真人时宽限后自动托管，避免整桌卡死
+  if (room.phase === "burying") scheduleBuryTimeout(room);
   if (room.phase === "playing" && (room.trickPauseUntil || 0) > Date.now()) {
     setTimeout(() => scheduleAi(room), Math.max(20, room.trickPauseUntil - Date.now() + 20));
     return;
@@ -405,13 +420,34 @@ function scheduleAi(room) {
   }, 350);
 }
 
+function scheduleBuryTimeout(room) {
+  if (room.buryTimeoutSeat === room.dealerSeat && room.buryTimeoutAt && room.buryTimeoutAt > Date.now()) return;
+  room.buryTimeoutSeat = room.dealerSeat;
+  room.buryTimeoutAt = Date.now() + BURY_TIMEOUT_MS;
+  setTimeout(() => {
+    if (room.phase !== "burying" || room.dealerSeat !== room.buryTimeoutSeat) return;
+    const dealer = room.seats[room.dealerSeat];
+    if (!dealer?.playerId) return;
+    try {
+      const cards = chooseAiBury(room, dealer).map((card) => card.id);
+      buryKitty(room, dealer.playerId, cards);
+      room.tableLog.push(`${dealer.nickname} 扣底超时，系统自动扣底。`);
+      broadcast(room);
+      scheduleAi(room);
+    } catch (error) {
+      room.tableLog.push(`自动扣底失败：${error.message}`);
+      broadcast(room);
+    }
+  }, BURY_TIMEOUT_MS);
+}
+
 // ── 掉线自动托管：轮到当前该行动的座位却是掉线真人时，宽限若干秒后自动托管，
 // 交给 runAiStep 接管，避免整桌无限等待。玩家重连后可手动取消托管。
 const DISCONNECT_TRUSTEE_MS = 20000;
 function actorSeat(room) {
   if (room.phase === "playing") return room.turnSeat;
   if (["forcedSuit", "burying", "friend"].includes(room.phase)) return room.dealerSeat;
-  return null; // 抢庄阶段由 scheduleBidTimeout 的 10s 兜底
+  return null; // 抢庄阶段由 scheduleBidTimeout 兜底
 }
 function scheduleAutoTrustee(room) {
   const idx = actorSeat(room);

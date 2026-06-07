@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { cardScore, createDeck, levelAdvance, LEVEL_RANKS, rankNumber, RANKS, shuffle, SUITS } from "./cards.js";
 
 const DEFAULT_SEATS = 5;
+const BID_RESPONSE_TIMEOUT_MS = 10000;
 // 每人手牌数 = (162 − 底牌)/人数，底牌随人数取整除：5 人留 7 张底（每人 31），
 // 6 人留 6 张底（每人 26）。三副牌总分恒为 300，升级分线不随人数变。
 function kittyFor(seatCount) { return seatCount === 6 ? 6 : 7; }
@@ -246,8 +247,12 @@ function finishDealing(room) {
   room.dealing = false;
   room.dealCursor = null;
   if (room.currentBid) {
-    // Someone bid during the deal — now that the kitty exists we can resolve it.
-    _checkAllBidResponded(room);
+    // Someone bid during the deal. Once everyone has a complete hand, earlier
+    // pass responses no longer count; players must react again with full info.
+    room.phase = PHASES.AUCTION_READY;
+    room.bidResponses = { [room.currentBid.seat]: "bid" };
+    room.bidResponseReadyAt = Date.now() + BID_RESPONSE_TIMEOUT_MS;
+    room.tableLog.push("摸牌结束，请其他玩家确认是否继续抢庄。");
     return;
   }
   if (room.phase === PHASES.DEALING) {
@@ -273,6 +278,7 @@ export function makeBid(room, playerId, cardIds) {
   // 否则 _checkAllBidResponded 会把陈旧的 pass/bid 计入而提前定庄，跳过被盖者再抢。
   room.seatBids = { [seat.index]: { ...bid, cards } };
   room.bidResponses = { [seat.index]: "bid" };
+  if (!room.dealing) room.bidResponseReadyAt = Date.now() + BID_RESPONSE_TIMEOUT_MS;
   room.dealerSeat = seat.index;
   room.levelRank = bid.levelRank;
   room.noTrump = bid.noTrump;
@@ -280,7 +286,7 @@ export function makeBid(room, playerId, cardIds) {
   room.tableLog.push(`${seat.nickname} 亮庄：${cards.map((c) => c.label).join("、")}`);
   // Never confirm immediately — always let broadcast fire first so the bid card
   // is visible on the table. confirmDealer will be triggered by _checkAllBidResponded
-  // once everyone has responded, or by scheduleBidTimeout after 10s.
+  // once everyone has responded, or by scheduleBidTimeout after the response window.
   _checkAllBidResponded(room);
 }
 
@@ -358,6 +364,7 @@ export function callSixTrump(room, playerId, cardIds) {
   room.currentBid = { ...bid, seat: seat.index, playerId, cards };
   room.seatBids = { [seat.index]: { ...bid, cards } };
   room.bidResponses = { [seat.index]: "bid" };
+  if (!room.dealing) room.bidResponseReadyAt = Date.now() + BID_RESPONSE_TIMEOUT_MS;
   room.trumpSuit = bid.trumpSuit;
   room.noTrump = false;
   room.tableLog.push(`${seat.nickname} 亮主：${cards.map((c) => c.label).join("、")}${room.dealerSeat === seat.index ? "，坐庄" : ""}`);
@@ -562,6 +569,8 @@ export function buryKitty(room, playerId, cardIds) {
   if (cardIds.length !== room.kittySize) throw new Error(`必须扣 ${room.kittySize} 张`);
   const cards = removeCards(dealer.hand, cardIds);
   room.hiddenKitty = cards;
+  room.buryTimeoutAt = 0;
+  room.buryTimeoutSeat = null;
   sortHand(dealer.hand, room);
   if (room.fixedTeams) {
     // 6 人固定队：无需叫朋友，扣底后直接开打（隔座为友）。
@@ -691,7 +700,7 @@ function _applyThrowPenalty(room, throwerSeatIndex) {
 export function runAiStep(room) {
   // Auction phases: timing is fully controlled by scheduleAuctionFlip / scheduleBidTimeout
   // in server.js. AI must NOT self-trigger card reveals or bid responses here,
-  // otherwise the 2s/5s/10s timers get bypassed instantly.
+  // otherwise the paced timers get bypassed instantly.
   if ([PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION, PHASES.SIX_TRUMP].includes(room.phase)) {
     return false;
   }
@@ -1386,6 +1395,9 @@ function finishRound(room, lastWinner) {
     champion, levels: room.seats.map((s) => s.level)
   });
   room.phase = PHASES.ROUND_OVER;
+  for (const seat of room.seats) {
+    if (!seat.isAi) seat.trustee = false;
+  }
   const champLabel = champion === "dealer" ? "（庄家队打过 A，夺冠！🏆）"
     : champion === "attackers" ? "（闲家队打过 A，夺冠！🏆）" : "";
   room.tableLog.push(`本局结束，闲家 ${attackers} 分。${result.label}${champLabel}`);
@@ -2323,7 +2335,7 @@ function isAutoSeat(room, seatIndex) {
   return !!s && (s.isAi === true || s.trustee === true);
 }
 
-function chooseAiBury(room, dealer) {
+export function chooseAiBury(room, dealer) {
   const profile = aiProfile(dealer);
   const hand = dealer.hand;
   // easy: keep points but otherwise just bury the lowest cards (no void planning).

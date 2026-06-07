@@ -24,10 +24,10 @@
             <p>多人联机 · 三副牌</p>
           </div>
           <form id="joinForm" class="join-panel">
-            <label>
+            <div class="join-field">
               <span>头像</span>
               <div id="avatarPicker" class="avatar-picker"></div>
-            </label>
+            </div>
             <label>
               <span>昵称</span>
               <input id="nickname" maxlength="16" autocomplete="nickname" required placeholder="输入昵称">
@@ -57,9 +57,11 @@
         <!-- 顶部信息条 -->
         <div class="topbar">
           <div class="topbar-left">
-            <span class="game-title">升级找朋友</span>
+            <div class="topbar-title-row">
+              <span class="game-title">升级找朋友</span>
+              <button id="copyInviteBtn" class="topbar-btn" title="复制邀请链接发给朋友">🔗</button>
+            </div>
             <span id="roomBadge" class="badge" title="点击复制邀请链接"></span>
-            <button id="copyInviteBtn" class="topbar-btn" title="复制邀请链接发给朋友">🔗</button>
           </div>
           <div id="phaseBadge" class="phase-badge"></div>
           <div class="topbar-right">
@@ -106,16 +108,12 @@
         <!-- 收起式日志 -->
         <div id="logDrawer" class="log-drawer">
           <button class="log-toggle" id="standingsToggle">🏆 战绩</button>
-          <button class="log-toggle" id="historyToggle">🃏 牌局</button>
           <button class="log-toggle" id="logToggle">📜 记录</button>
           <div class="log-panel" id="standingsPanel">
             <div id="standings" class="standings-list"></div>
           </div>
-          <div class="log-panel" id="historyPanel">
-            <div id="history" class="history-list"></div>
-          </div>
           <div class="log-panel" id="logPanel">
-            <div id="log"></div>
+            <div id="log" class="history-list"></div>
           </div>
         </div>
 
