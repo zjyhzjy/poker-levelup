@@ -490,6 +490,23 @@ test("甩牌最高组件是对子时，只比较对子大小", () => {
   assert.equal(determineTrickWinner(room, room.currentTrick), 1);
 });
 
+test("副牌两对甩牌可被主牌拖拉机按两对结构杀", () => {
+  const room = createRoom("THROWTRUMPPAIR");
+  room.levelRank = "7"; room.trumpSuit = "clubs";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("Q", "spades", 2), ...cardsOf("10", "spades", 2)];
+  const cut = [...cardsOf("7", "clubs", 2), ...cardsOf("smallJoker", "joker", 2)];
+  room.currentTrick = [
+    { seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 },
+    { seat: 1, cards: cut, shape: analyzeShape(cut, room), points: 0 }
+  ];
+
+  assert.equal(analyzeShape(lead, room).type, "throw");
+  assert.equal(analyzeShape(cut, room).type, "tractor");
+  assert.equal(determineTrickWinner(room, room.currentTrick), 1);
+});
+
 test("跟拖拉机时手里有拖拉机必须优先出拖拉机，不能用散对子代替", () => {
   const room = createRoom("TRFOLLOW");
   room.levelRank = "2"; room.trumpSuit = "hearts";

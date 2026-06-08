@@ -2015,37 +2015,33 @@ function isAllTrumpCards(cards, room) {
 // e.g. leader throws AAA+QQ+J (triple+pair+single) → trump cut must also be triple+pair+single.
 function throwStructureMatch(trumpCards, leaderCards, room) {
   const getStructure = (cards) => {
-    const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
-    const groups = groupCards(sorted);
-    const counts = { tractor: 0, triple: 0, pair: 0, single: 0 };
-    // detect tractors first
-    const pairGroups = groups.filter(g => g.length >= 2);
-    let usedAsTractor = new Set();
-    for (let i = 0; i < pairGroups.length - 1; i++) {
-      // 必须相邻两组张数相等才构成拖拉机（对连对、三连三）；否则“三条+相邻对子”
-      // 会被误熔成拖拉机，导致合法主牌杀被错判无效。与 decomposeThrowComponents 对齐。
-      if (pairGroups[i].length === pairGroups[i+1].length &&
-          isConsecutiveInRules(pairGroups[i][0], pairGroups[i+1][0], playSuit(pairGroups[i][0], room), room)) {
+    const ledSuit = playSuit(cards[0], room);
+    const components = decomposeThrowComponents(cards, room, ledSuit);
+    const counts = { tractor: 0, triple: 0, pair: 0, single: 0, tripleUnits: 0, pairUnits: 0 };
+    for (const comp of components) {
+      if (comp.kind === "tractor") {
         counts.tractor++;
-        usedAsTractor.add(i);
-        usedAsTractor.add(i+1);
-        i++; // skip next
+        if (comp.unit === 3) counts.tripleUnits += comp.count;
+        if (comp.unit === 2) counts.pairUnits += comp.count;
+      } else if (comp.unit >= 3) {
+        counts.triple++;
+        counts.tripleUnits++;
+      } else if (comp.unit === 2) {
+        counts.pair++;
+        counts.pairUnits++;
+      } else {
+        counts.single++;
       }
-    }
-    for (let i = 0; i < groups.length; i++) {
-      const g = groups[i];
-      const inTractor = pairGroups.indexOf(g) !== -1 && usedAsTractor.has(pairGroups.indexOf(g));
-      if (inTractor) continue;
-      if (g.length >= 3) counts.triple++;
-      else if (g.length === 2) counts.pair++;
-      else counts.single++;
     }
     return counts;
   };
   const ls = getStructure(leaderCards);
   const ts = getStructure(trumpCards);
-  return ls.tractor === ts.tractor && ls.triple === ts.triple &&
-         ls.pair === ts.pair && ls.single === ts.single;
+  if (ls.tractor > 0) {
+    return ls.tractor === ts.tractor && ls.triple === ts.triple &&
+           ls.pair === ts.pair && ls.single === ts.single;
+  }
+  return ts.tripleUnits >= ls.triple && ts.pairUnits >= ls.pair && ts.single >= ls.single;
 }
 
 
