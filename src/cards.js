@@ -9,10 +9,10 @@ export const RANKS = ["A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3
 export const LEVEL_RANKS = ["A", "K", "Q", "J", "10", "9", "8", "7", "6", "5", "4", "3", "2"];
 export const JOKERS = ["smallJoker", "bigJoker"];
 
-export function createDeck() {
+export function createDeck(copies = 3) {
   const deck = [];
   let id = 1;
-  for (let copy = 1; copy <= 3; copy += 1) {
+  for (let copy = 1; copy <= copies; copy += 1) {
     for (const suit of SUITS) {
       for (const rank of RANKS) {
         deck.push({ id: `c${id}`, copy, suit, rank, label: `${SUIT_LABELS[suit]}${rank}` });

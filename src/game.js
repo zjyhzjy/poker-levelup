@@ -1,11 +1,35 @@
 import crypto from "node:crypto";
 import { cardScore, createDeck, levelAdvance, LEVEL_RANKS, rankNumber, RANKS, shuffle, SUITS } from "./cards.js";
+import { buryMultiplierClassic4, upgradeResultClassic4 } from "./rules/classic4.js";
 
 const DEFAULT_SEATS = 5;
 const BID_RESPONSE_TIMEOUT_MS = 10000;
-// 每人手牌数 = (162 − 底牌)/人数，底牌随人数取整除：5 人留 7 张底（每人 31），
-// 6 人留 6 张底（每人 26）。三副牌总分恒为 300，升级分线不随人数变。
-function kittyFor(seatCount) { return seatCount === 6 ? 6 : 7; }
+const MODES = {
+  FIND_FRIEND_5: "findFriend5",
+  FIXED_TEAM_6: "fixedTeam6",
+  CLASSIC_4: "classic4"
+};
+const MODE_CONFIG = {
+  [MODES.FIND_FRIEND_5]: { seatCount: 5, deckCopies: 3, kittySize: 7, fixedTeams: false, hasFriend: true },
+  [MODES.FIXED_TEAM_6]: { seatCount: 6, deckCopies: 3, kittySize: 6, fixedTeams: true, hasFriend: false },
+  [MODES.CLASSIC_4]: { seatCount: 4, deckCopies: 2, kittySize: 8, fixedTeams: true, hasFriend: false }
+};
+
+function modeFromOptions(options = {}) {
+  if (options.mode && MODE_CONFIG[options.mode]) return options.mode;
+  if (options.seatCount === 4) return MODES.CLASSIC_4;
+  if (options.seatCount === 6) return MODES.FIXED_TEAM_6;
+  return MODES.FIND_FRIEND_5;
+}
+
+function modeConfig(roomOrMode) {
+  const mode = typeof roomOrMode === "string" ? roomOrMode : (roomOrMode.mode || MODES.FIND_FRIEND_5);
+  return MODE_CONFIG[mode] || MODE_CONFIG[MODES.FIND_FRIEND_5];
+}
+
+function isClassic4(room) { return room.mode === MODES.CLASSIC_4; }
+function isFixedTeamMode(room) { return modeConfig(room).fixedTeams === true; }
+function hasFriendMode(room) { return modeConfig(room).hasFriend === true; }
 const PHASES = {
   LOBBY: "lobby",
   DEALING: "dealing",
@@ -40,12 +64,16 @@ function emptySeats(seatCount) {
 }
 
 export function createRoom(code = randomRoomCode(), options = {}) {
-  const seatCount = options.seatCount === 6 ? 6 : DEFAULT_SEATS;
+  const mode = modeFromOptions(options);
+  const config = modeConfig(mode);
+  const seatCount = config.seatCount || DEFAULT_SEATS;
   return {
     code,
+    mode,
     seatCount,
-    kittySize: kittyFor(seatCount),
-    fixedTeams: seatCount === 6, // 6 人隔座固定队（{0,2,4} vs {1,3,5}），不叫朋友
+    deckCopies: config.deckCopies,
+    kittySize: config.kittySize,
+    fixedTeams: config.fixedTeams, // 固定隔座队：4 人 {0,2}/{1,3}；6 人 {0,2,4}/{1,3,5}
     phase: PHASES.LOBBY,
     seats: emptySeats(seatCount),
     spectators: new Map(),
@@ -164,8 +192,8 @@ export function startRound(room, random = Math.random, options = {}) {
   const firstRound = room.round === 1;
   room.trumpSuit = null;
   room.noTrump = false;
-  if (room.fixedTeams) {
-    // 6 人固定队：首轮先抢庄；之后按上局结果确定本轮庄家。
+  if (isFixedTeamMode(room)) {
+    // 固定队：首轮先抢庄；之后按上局结果确定本轮庄家。
     if (firstRound) { room.teamLevels = { 0: "2", 1: "2" }; room.nextDealerSeat = null; }
     room.dealerSeat = room.nextDealerSeat ?? null;
     room.levelRank = room.dealerSeat === null ? "2" : room.teamLevels[room.dealerSeat % 2];
@@ -198,9 +226,9 @@ export function startRound(room, random = Math.random, options = {}) {
   room.lastResult = null;
   room.tableLog = [];
   room.kitty = [];
-  room.deck = shuffle(createDeck(), random);
+  room.deck = shuffle(createDeck(modeConfig(room).deckCopies), random);
   room.phase = PHASES.DEALING;
-  room.starterSeat = room.fixedTeams
+  room.starterSeat = isFixedTeamMode(room)
     ? (room.dealerSeat ?? Math.floor(random() * room.seatCount))
     : (firstRound ? Math.floor(random() * room.seatCount) : nextSeat(room.starterSeat, room.seatCount));
   room.currentLeader = room.starterSeat;
@@ -209,13 +237,13 @@ export function startRound(room, random = Math.random, options = {}) {
     seat.hand = [];
     seat.takenTrickPoints = 0;
     seat.lockedTriples = []; // 本局内被“锁定”的三条（不可再拆成对子出）
-    if (room.fixedTeams) seat.level = room.teamLevels[seat.index % 2]; // 6人=所属队共享等级
+    if (isFixedTeamMode(room)) seat.level = room.teamLevels[seat.index % 2]; // 固定队=所属队共享等级
     else if (firstRound) seat.level = room.firstLevel;
   }
 
   room.tableLog.push(`本轮从 ${seatName(room, room.starterSeat)} 开始逆时针摸牌。`);
-  room.tableLog.push(room.fixedTeams
-    ? `【系统】本局游戏开始！6 人局发完牌后叫主${room.dealerSeat === null ? "抢庄" : "，庄家不变"}。`
+  room.tableLog.push(isFixedTeamMode(room)
+    ? `【系统】本局游戏开始！${room.seatCount} 人固定队发完牌后叫主${room.dealerSeat === null ? "抢庄" : "，庄家不变"}。`
     : `【系统】本局游戏开始！请在摸牌期间亮主抢庄。`);
 
   room.dealing = true;
@@ -256,7 +284,7 @@ function finishDealing(room) {
     return;
   }
   if (room.phase === PHASES.DEALING) {
-    if (room.fixedTeams) {
+    if (isFixedTeamMode(room)) {
       startSixTrumpCalling(room);
     } else {
       room.phase = PHASES.AUCTION_READY;
@@ -326,8 +354,12 @@ function startSixTrumpCalling(room) {
   }
 }
 
-function evaluateSixTrumpCall(cards, levelRank) {
+function evaluateSixTrumpCall(cards, levelRank, options = {}) {
   if (!cards.length) return null;
+  if (options.allowNoTrump && cards.length >= 2 && cards.every((card) => card.suit === "joker")) {
+    const bigs = cards.filter((card) => card.rank === "bigJoker").length;
+    return { strength: cards.length + (bigs >= cards.length ? 3 : 2), levelRank, trumpSuit: null, noTrump: true };
+  }
   if (cards.some((card) => card.suit === "joker")) return null;
   if (!cards.every((card) => card.rank === levelRank && card.suit === cards[0].suit)) return null;
   if (!SUITS.includes(cards[0].suit)) return null;
@@ -347,8 +379,8 @@ export function callSixTrump(room, playerId, cardIds) {
   const openingAuction = room.sixFirstAuction === true;
   const levelRank = openingAuction ? seat.level : room.levelRank;
   const cards = pickCards(seat.hand, cardIds);
-  const bid = evaluateSixTrumpCall(cards, levelRank);
-  if (!bid) throw new Error(`只能亮当前等级 ${levelRank} 的同花色牌`);
+  const bid = evaluateSixTrumpCall(cards, levelRank, { allowNoTrump: isClassic4(room) });
+  if (!bid) throw new Error(isClassic4(room) ? `只能亮当前等级 ${levelRank} 的同花色牌，或选择至少 2 张王亮无主` : `只能亮当前等级 ${levelRank} 的同花色牌`);
   if (room.currentBid && compareBid(bid, room.currentBid) <= 0) throw new Error("必须用更多张同花色级牌盖主");
 
   if (openingAuction || room.dealerSeat === null) {
@@ -366,7 +398,7 @@ export function callSixTrump(room, playerId, cardIds) {
   room.bidResponses = { [seat.index]: "bid" };
   if (!room.dealing) room.bidResponseReadyAt = Date.now() + BID_RESPONSE_TIMEOUT_MS;
   room.trumpSuit = bid.trumpSuit;
-  room.noTrump = false;
+  room.noTrump = bid.noTrump === true;
   room.tableLog.push(`${seat.nickname} 亮主：${cards.map((c) => c.label).join("、")}${room.dealerSeat === seat.index ? "，坐庄" : ""}`);
   _checkAllSixTrumpResponded(room);
 }
@@ -447,7 +479,7 @@ function redealSixSameRound(room, dealerSeat) {
   room.seatPersonalScores = {};
   room.lastResult = null;
   room.kitty = [];
-  room.deck = shuffle(createDeck(), Math.random);
+  room.deck = shuffle(createDeck(modeConfig(room).deckCopies), Math.random);
   room.starterSeat = dealerSeat ?? Math.floor(Math.random() * room.seatCount);
   room.currentLeader = room.starterSeat;
   room.turnSeat = room.starterSeat;
@@ -540,8 +572,8 @@ export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
   if (suit && !SUITS.includes(suit)) throw new Error("花色不存在");
   if (suit) {
     const hasLevelCard = dealer.hand.some((card) => card.rank === room.levelRank && card.suit === suit);
-    // 6 人轮庄的庄家由轮转指定（非抢来），有权直接定主，不要求手里有该花色级牌。
-    if (!hasLevelCard && !room.fixedTeams) throw new Error(`你手里没有 ${suit} 的级牌，不能亮此花色`);
+    // 固定队轮庄的庄家由轮转指定（非抢来），有权直接定主，不要求手里有该花色级牌。
+    if (!hasLevelCard && !isFixedTeamMode(room)) throw new Error(`你手里没有 ${suit} 的级牌，不能亮此花色`);
     room.trumpSuit = suit;
     room.noTrump = false;
     if (room.currentBid) { room.currentBid.trumpSuit = suit; room.currentBid.noTrump = false; }
@@ -572,8 +604,8 @@ export function buryKitty(room, playerId, cardIds) {
   room.buryTimeoutAt = 0;
   room.buryTimeoutSeat = null;
   sortHand(dealer.hand, room);
-  if (room.fixedTeams) {
-    // 6 人固定队：无需叫朋友，扣底后直接开打（隔座为友）。
+  if (!hasFriendMode(room)) {
+    // 固定队模式：无需叫朋友，扣底后直接开打。
     room.phase = PHASES.PLAYING;
     room.currentLeader = room.dealerSeat;
     room.turnSeat = room.dealerSeat;
@@ -917,8 +949,8 @@ function buildForcedFollow(room, seat, leaderCards) {
 // that the dealer is a known enemy (to non-dealers) and everyone else is unknown.
 function aiRelation(room, selfIndex, otherIndex) {
   if (otherIndex === selfIndex) return "self";
-  // 固定队（6人）队伍从一开始就已知；找朋友（5人）则朋友亮明后才确定。
-  if (room.fixedTeams || room.friendSeat !== null) {
+  // 固定队队伍从一开始就已知；找朋友（5人）则朋友亮明后才确定。
+  if (isFixedTeamMode(room) || room.friendSeat !== null) {
     const team = dealerTeamSeats(room);
     return team.includes(selfIndex) === team.includes(otherIndex) ? "ally" : "enemy";
   }
@@ -1357,18 +1389,20 @@ function finishRound(room, lastWinner) {
   const kittyPoints = room.hiddenKitty.reduce((sum, card) => sum + cardScore(card), 0);
   let buriedBonus = 0;
   if (!isDealerTeam(room, lastWinner)) {
-    buriedBonus = kittyPoints * buryMultiplier(room.finishedTricks.at(-1)?.plays.find((play) => play.seat === lastWinner)?.shape);
+    buriedBonus = kittyPoints * buryMultiplier(room, room.finishedTricks.at(-1)?.plays.find((play) => play.seat === lastWinner)?.shape);
     room.scores.attackers += buriedBonus;
   }
   const attackers = room.scores.attackers;
-  const result = room.fixedTeams ? upgradeResultSix(attackers) : upgradeResult(attackers);
+  const result = isClassic4(room) ? upgradeResultClassic4(attackers)
+    : isFixedTeamMode(room) ? upgradeResultSix(attackers)
+      : upgradeResult(attackers);
   const upgradedSeats = result.steps > 0
     ? (result.side === "dealer" ? dealerTeamSeats(room) : attackerSeats(room))
     : [];
   // 通关：升级方若已在 A 上还要再升（越过 A），即夺冠。
   let champion = null;
-  if (room.fixedTeams) {
-    // 6 人轮庄：升级赢队的共享等级；并决定下局坐庄（庄家队守住→连庄、轮到隔座队友；
+  if (isFixedTeamMode(room)) {
+    // 固定队轮庄：升级赢队的共享等级；并决定下局坐庄（庄家队守住→连庄、轮到隔座队友；
     // 闲家队上台→下家坐庄、坐庄队易主）。
     if (result.steps > 0) {
       const winParity = result.side === "dealer" ? room.dealerSeat % 2 : (room.dealerSeat + 1) % 2;
@@ -1848,6 +1882,8 @@ export function upgradeResultSix(attackers) {
   if (attackers < 240) return { side: "attackers", steps: 2, label: "闲家队上台，升 2 级" };
   return { side: "attackers", steps: 3, label: "闲家队上台，升 3 级" };
 }
+
+export { upgradeResultClassic4 };
 
 // 【彻底修复 2】：完善墩牌大小裁判，防止垫牌、不匹配牌型盗取胜利
 function comparePlay(room, challenger, currentBest, leadPlay) {
@@ -2399,8 +2435,8 @@ function chooseAiForcedTrump(room, dealer) {
   const profile = aiProfile(dealer);
   const level = room.levelRank ?? dealer.level;
   const suitStrength = (s) => dealer.hand.filter((c) => c.suit === s || c.rank === level || c.suit === "joker").length;
-  // 6 人轮庄：庄家必须定主，从所有花色里选最强的（不要求手里有级牌）。
-  if (room.fixedTeams) {
+  // 固定队轮庄：庄家必须定主，从所有花色里选最强的（不要求手里有级牌）。
+  if (isFixedTeamMode(room)) {
     let best = null;
     for (const s of SUITS) {
       const strength = suitStrength(s);
@@ -2569,8 +2605,8 @@ function calledCardLabel(call) {
 }
 
 function dealerTeamSeats(room) {
-  if (room.fixedTeams) {
-    // 6 人隔座固定队：与庄家同奇偶的座位是一队（{0,2,4} 或 {1,3,5}）。
+  if (isFixedTeamMode(room)) {
+    // 固定隔座队：与庄家同奇偶的座位是一队（4 人 {0,2}/{1,3}；6 人 {0,2,4}/{1,3,5}）。
     const parity = room.dealerSeat % 2;
     return room.seats.map((s) => s.index).filter((i) => i % 2 === parity);
   }
@@ -2586,8 +2622,11 @@ function isDealerTeam(room, seatIndex) {
   return dealerTeamSeats(room).includes(seatIndex);
 }
 
-function buryMultiplier(shape) {
+function buryMultiplier(room, shape) {
   if (!shape) return 2;
+  if (isClassic4(room)) {
+    return buryMultiplierClassic4(shape);
+  }
   // 规则：扣底倍率 = 2^(本墩获胜牌的张数)。单张2、对子4、三条8、四张拖拉机16…
   if (shape.type === "pair") return 4;
   if (shape.type === "triple") return 8;
@@ -2827,6 +2866,7 @@ export function publicState(room, viewerId = null) {
     revealedKitty: room.revealedKitty,
     friendCall: room.friendCall,
     friendSeat: room.friendSeat,
+    mode: room.mode,
     fixedTeams: room.fixedTeams === true,
     seatCount: room.seatCount,
     kittySize: room.kittySize,

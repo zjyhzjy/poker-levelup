@@ -75,7 +75,9 @@ $("#avatarPicker")?.addEventListener("touchend", chooseAvatarFromEvent, { passiv
 
 $("#joinForm").addEventListener("submit", (e) => {
   e.preventDefault();
-  connectAndJoin($("#roomCode").value.trim(), $("#nickname").value.trim());
+  const code = $("#roomCode").value.trim();
+  const seatCount = code ? undefined : Number($("#seatCountSel")?.value) || 5;
+  connectAndJoin(code, $("#nickname").value.trim(), seatCount);
 });
 
 $("#createRoom").addEventListener("click", () => {
@@ -108,7 +110,7 @@ $("#roomBadge")?.addEventListener("click", copyInvite);
 
 function connectAndJoin(code, nickname, seatCount) {
   state.nickname = nickname || "玩家";
-  state.createSeatCount = seatCount === 6 ? 6 : 5; // 仅创建房间时生效
+  state.createSeatCount = [4, 5, 6].includes(seatCount) ? seatCount : 5; // 仅创建房间时生效
   localStorage.setItem("szp.nickname", state.nickname);
   stopPingLoop();
   updatePingStatus("connecting");
@@ -1239,7 +1241,7 @@ function phaseText(phase) {
     auctionReady:"等待翻底",
     auction:     "翻底拍卖",
     forcedSuit:  "强制定主",
-    sixTrump:    "6人叫主",
+    sixTrump:    "叫主",
     burying:     "庄家扣底",
     friend:      "叫朋友",
     playing:     "出牌中",

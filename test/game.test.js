@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, buryKitty, callSixTrump, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, determineTrickWinner, evaluateBid, makeBid, passBid, passSixTrump, playCards, publicState, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, upgradeResult, upgradeResultSix, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, buryKitty, callSixTrump, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, determineTrickWinner, evaluateBid, makeBid, passBid, passSixTrump, playCards, publicState, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, upgradeResult, upgradeResultClassic4, upgradeResultSix, validatePlay } from "../src/game.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
+});
+
+test("两副牌共 108 张", () => {
+  assert.equal(createDeck(2).length, 108);
 });
 
 test("首轮发牌后 5 人各 31 张，底牌 7 张", () => {
@@ -895,6 +899,89 @@ test("6 人结算轮庄：120-160 闲家上台不升级，下家坐庄", () => {
   assert.deepEqual(room.lastResult.result, { side: "attackers", steps: 0, label: "闲家队上台，不升级" });
   assert.equal(room.nextDealerSeat, 1);
   assert.deepEqual(room.teamLevels, { 0: "7", 1: "9" });
+});
+
+test("4 人 80 分房间：两副牌、每人 25 张、底牌 8 张", () => {
+  const room = createRoom("FOUR", { seatCount: 4 });
+  assert.equal(room.mode, "classic4");
+  assert.equal(room.seatCount, 4);
+  assert.equal(room.kittySize, 8);
+  assert.equal(room.fixedTeams, true);
+  for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  startRound(room, () => 0.3);
+  assert.equal(room.phase, "sixTrump");
+  assert.deepEqual(room.seats.map((seat) => seat.hand.length), [25, 25, 25, 25]);
+  assert.equal(room.kitty.length, 8);
+});
+
+test("4 人 80 分：亮主坐庄、扣 8 张后直接开打", () => {
+  const room = createRoom("FOURPLAY", { seatCount: 4 });
+  const deck = createDeck(2);
+  for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  startRound(room, () => 0.3);
+  const twoHeart = deck.find((card) => card.rank === "2" && card.suit === "hearts");
+  room.seats[1].hand.push(twoHeart);
+  callSixTrump(room, "p1", [twoHeart.id]);
+  for (const i of [0, 2, 3]) passSixTrump(room, `p${i}`);
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, 1);
+  assert.equal(room.trumpSuit, "hearts");
+  buryKitty(room, "p1", room.seats[1].hand.slice(0, 8).map((card) => card.id));
+  assert.equal(room.phase, "playing");
+  assert.equal(room.turnSeat, 1);
+});
+
+test("4 人 80 分：至少 2 张王可以亮无主", () => {
+  const room = createRoom("FOURNT", { seatCount: 4 });
+  for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  startRound(room, () => 0.3);
+  const jokers = [
+    { id: "nt-small", copy: 1, suit: "joker", rank: "smallJoker", label: "小王" },
+    { id: "nt-big", copy: 1, suit: "joker", rank: "bigJoker", label: "大王" }
+  ];
+  room.seats[0].hand.push(...jokers);
+  callSixTrump(room, "p0", jokers.map((card) => card.id));
+  for (const i of [1, 2, 3]) passSixTrump(room, `p${i}`);
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, 0);
+  assert.equal(room.trumpSuit, null);
+  assert.equal(room.noTrump, true);
+});
+
+test("4 人 80 分结算分档", () => {
+  assert.deepEqual(upgradeResultClassic4(0), { side: "dealer", steps: 3, label: "庄家队大光，升 3 级" });
+  assert.deepEqual(upgradeResultClassic4(35), { side: "dealer", steps: 2, label: "庄家队小光，升 2 级" });
+  assert.deepEqual(upgradeResultClassic4(40), { side: "dealer", steps: 1, label: "庄家队升 1 级" });
+  assert.deepEqual(upgradeResultClassic4(80), { side: "attackers", steps: 0, label: "闲家队上台，不升级" });
+  assert.deepEqual(upgradeResultClassic4(120), { side: "attackers", steps: 1, label: "闲家队上台，升 1 级" });
+  assert.deepEqual(upgradeResultClassic4(160), { side: "attackers", steps: 2, label: "闲家队上台，升 2 级" });
+  assert.deepEqual(upgradeResultClassic4(200), { side: "attackers", steps: 3, label: "闲家队上台，升 3 级" });
+});
+
+test("4 人 80 分：拖拉机扣底固定 8 倍", () => {
+  const room = createRoom("FOURKITTY", { seatCount: 4 });
+  const deck = createDeck(2);
+  for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; s.level = i % 2 === 0 ? "2" : "2"; }
+  room.teamLevels = { 0: "2", 1: "2" };
+  room.phase = "playing";
+  room.dealerSeat = 0;
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  room.noTrump = false;
+  room.currentLeader = 0;
+  room.turnSeat = 0;
+  room.hiddenKitty = deck.filter((c) => (c.rank === "10" && c.suit === "clubs") || (c.rank === "K" && c.suit === "diamonds")).slice(0, 2);
+  const pair = (rank) => deck.filter((c) => c.rank === rank && c.suit === "spades").slice(0, 2);
+  const lead = [...pair("3"), ...pair("4")];
+  const win = [...pair("6"), ...pair("7")];
+  const p2 = [...pair("8"), ...pair("9")];
+  const p3 = [...pair("J"), ...pair("Q")];
+  const plays = [lead, win, p2, p3];
+  for (let i = 0; i < 4; i += 1) room.seats[i].hand = plays[i];
+  for (let i = 0; i < 4; i += 1) playCards(room, `p${i}`, plays[i].map((card) => card.id));
+  assert.equal(room.phase, "roundOver");
+  assert.equal(room.lastResult.buriedBonus, 160);
+  assert.equal(room.lastResult.attackers, 160);
 });
 
 test("5 人房间默认配置不变（回归）", () => {

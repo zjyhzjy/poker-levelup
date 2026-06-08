@@ -470,6 +470,11 @@ button, input, select { font: inherit; }
 .screen-pos-3 { top: 10%;      left: 10%; }
 .screen-pos-4 { bottom: 30%;   left: 5%; }
 
+/* 4 人 80 分布局：对家在正上方，左右下家分居两侧。 */
+.players-4 .screen-pos-1 { bottom: 34%; right: 5%; top: auto; left: auto; }
+.players-4 .screen-pos-2 { top: 8%; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
+.players-4 .screen-pos-3 { bottom: 34%; left: 5%; right: auto; top: auto; }
+
 /* 6 人布局（六边形，viewer 在 pos 0 底部中央）。两类选择器特异性高于媒体查询里的
    单类 .screen-pos-N，因此覆盖五边形定位并新增顶部中央 pos 3 与左下 pos 5。
    pos-3 贴顶(4%)，上位 pos-2/4 下移到 16% 且贴边(2%)与 pos-3 垂直错开，避免出牌
