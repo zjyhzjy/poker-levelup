@@ -32,6 +32,39 @@ test("抢庄强度识别", () => {
   assert.equal(evaluateBid(jokers, "2").noTrump, true);
 });
 
+test("5 人抢庄前按本人等级理牌，亮庄后统一按庄家等级理牌", () => {
+  const room = createRoom("LEVELSORT");
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) {
+    const seat = room.seats[i];
+    seat.playerId = `p${i}`;
+    seat.nickname = `P${i}`;
+    seat.level = i === 0 ? "4" : "A";
+  }
+  room.phase = "dealing";
+  room.dealing = true;
+  room.dealCursor = 0;
+  room.levelRank = null;
+  room.firstLevel = "A";
+  room.kittySize = 0;
+  const card = (rank, suit, copy = 1) => deck.find((c) => c.rank === rank && c.suit === suit && c.copy === copy);
+  room.deck = [
+    card("A", "spades", 1), card("2", "hearts", 1), card("3", "clubs", 1), card("5", "diamonds", 1), card("6", "spades", 1),
+    card("4", "clubs", 1), card("7", "hearts", 1), card("8", "clubs", 1), card("9", "diamonds", 1), card("10", "spades", 1)
+  ];
+  dealRound(room);
+  dealRound(room);
+  assert.equal(room.seats[0].hand[0].rank, "4", "抢庄前本人打 4 时，自己的 4 应排进常主区");
+
+  room.phase = "dealing";
+  room.dealing = false;
+  room.seats[0].hand.push(card("4", "hearts", 1));
+  room.seats[1].hand = [card("A", "spades", 2), card("4", "clubs", 2)];
+  makeBid(room, "p0", [card("4", "hearts", 1).id]);
+  assert.equal(room.levelRank, "4");
+  assert.equal(room.seats[1].hand[0].rank, "4", "亮庄后其他玩家也应按庄家打 4 理牌，不能继续把 A 当常主");
+});
+
 test("基础牌型识别", () => {
   const room = createRoom("TEST");
   room.levelRank = "2";

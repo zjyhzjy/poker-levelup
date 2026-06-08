@@ -262,7 +262,7 @@ export function dealRound(room) {
     room.seats[room.dealCursor].hand.push(card);
     room.dealCursor = nextSeat(room.dealCursor, room.seatCount);
   }
-  for (const seat of room.seats) sortHand(seat.hand, room);
+  for (const seat of room.seats) sortSeatHandForRound(room, seat);
   if (room.deck.length <= room.kittySize) {
     room.kitty = room.deck.splice(0);
     finishDealing(room);
@@ -311,6 +311,7 @@ export function makeBid(room, playerId, cardIds) {
   room.levelRank = bid.levelRank;
   room.noTrump = bid.noTrump;
   room.trumpSuit = bid.trumpSuit;
+  for (const s of room.seats) sortHand(s.hand, room);
   room.tableLog.push(`${seat.nickname} 亮庄：${cards.map((c) => c.label).join("、")}`);
   // Never confirm immediately — always let broadcast fire first so the bid card
   // is visible on the table. confirmDealer will be triggered by _checkAllBidResponded
@@ -2747,6 +2748,14 @@ export function sortHand(hand, room, overrideLevel = null) {
 
   // Restore levelRank if we temporarily overrode it
   if (overrideLevel) room.levelRank = savedLevelRank;
+}
+
+function sortSeatHandForRound(room, seat) {
+  const preDealerFindFriend = hasFriendMode(room)
+    && room.dealerSeat === null
+    && !room.currentBid
+    && [PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION].includes(room.phase);
+  sortHand(seat.hand, room, preDealerFindFriend ? seat.level : null);
 }
 
 // 辅助函数：专门计算主牌区内部的绝对大小权重（值越小越靠左）
