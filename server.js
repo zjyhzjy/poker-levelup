@@ -39,7 +39,7 @@ const port = Number(process.env.PORT || 3000);
 const rooms = new Map();
 const sockets = new Map();
 const BID_RESPONSE_TIMEOUT_MS = 10000;
-const BURY_TIMEOUT_MS = 60000;
+const BURY_TIMEOUT_MS = 120000;
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
