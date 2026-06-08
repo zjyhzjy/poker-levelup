@@ -647,6 +647,24 @@ test("跟甩牌里的拖拉机组件时，有拖拉机必须优先跟拖拉机",
   assert.equal(validatePlay(room, follower, legal, lead).ok, true);
 });
 
+test("跟对子加单张甩牌时，只有三条不强制拆对子", () => {
+  const room = createRoom("THROWTRIPLE");
+  room.levelRank = "4"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 1) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("A", "clubs", 2), ...cardsOf("K", "clubs", 1)];
+  const triple2 = cardsOf("2", "clubs", 3);
+  const singles = ["3", "5", "6"].map((rank) => cardsOf(rank, "clubs", 1)[0]);
+  const follower = room.seats[1];
+  follower.playerId = "p1";
+  follower.lockedTriples = [];
+  follower.hand = [...triple2, ...singles];
+
+  assert.equal(analyzeShape(lead, room).type, "throw");
+  assert.equal(validatePlay(room, follower, singles, lead).ok, true);
+  assert.equal(validatePlay(room, follower, [triple2[0], ...singles.slice(0, 2)], lead).ok, true);
+});
+
 test("publicState 标记主牌杀副牌，仅在首家副牌时显示杀", () => {
   const room = createRoom("KILL");
   room.phase = "playing";

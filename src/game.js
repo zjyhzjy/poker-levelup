@@ -1676,7 +1676,7 @@ function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available)
   // 整组三张打出不算拆对，所以三条数照常统计。
   const lockedSet = new Set(seat.lockedTriples || []);
   const isLockedGroup = (g) => lockedSet.has(`${g[0].rank}|${g[0].suit}`);
-  const availPairs   = availGroups.filter(g => g.length >= 2 && !isLockedGroup(g)).length;
+  const availPairs   = availGroups.filter(g => g.length === 2 && !isLockedGroup(g)).length;
   const availTriples = availGroups.filter(g => g.length >= 3).length;
   const playedSameSuit = cards.filter(c => playSuit(c, room) === ledSuit);
 
