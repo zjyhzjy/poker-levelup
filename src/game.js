@@ -2041,7 +2041,11 @@ function throwStructureMatch(trumpCards, leaderCards, room) {
     return ls.tractor === ts.tractor && ls.triple === ts.triple &&
            ls.pair === ts.pair && ls.single === ts.single;
   }
-  return ts.tripleUnits >= ls.triple && ts.pairUnits >= ls.pair && ts.single >= ls.single;
+  // 非拖拉机甩牌：总张数已在外层校验相等。主牌只要有足够的三条/对子覆盖甩牌的
+  // 三条与对子即可——更强的牌型（三条可当对子、对子可拆成单张）能下顶更弱的需求，
+  // 多出来的牌自然覆盖甩牌里的单张。故不再单独要求“单张数 >= 甩牌单张数”。
+  return ts.tripleUnits >= ls.triple
+    && (ts.tripleUnits + ts.pairUnits) >= (ls.triple + ls.pair);
 }
 
 
