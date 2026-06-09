@@ -186,7 +186,8 @@ function handleAudioEvents(room) {
   const snap = {
     seq: room.lastTrickWin?.seq || 0,
     trickLen: room.currentTrick?.length || 0,
-    logLen: room.tableLog?.length || 0
+    logLen: room.tableLog?.length || 0,
+    phase: room.phase
   };
   const prev = audioPrev;
   audioPrev = snap;
@@ -197,16 +198,23 @@ function handleAudioEvents(room) {
   if (snap.trickLen > prev.trickLen && snap.trickLen > 0) {
     sfx("play");
     const last = trick[trick.length - 1];
-    const lead = trick[0];
-    const leadIsSide = lead && !lead.cards.every((c) => isTrumpCard(c, room));
-    const playedAllTrump = last && last.cards.length && last.cards.every((c) => isTrumpCard(c, room));
-    const isKill = leadIsSide && playedAllTrump;            // ruff / 主牌杀
-    const tookLead = snap.trickLen >= 2 && room.currentWinnerSeat === last?.seat;
-    if (isKill) { sfx("kill"); speak(pick(["杀！", "毙！", "大你！"])); }
+    const isLead = trick.length === 1;
+    const isTractor = last?.shape?.type === "tractor";
+    const allTrump = last && last.cards.length && last.cards.every((c) => isTrumpCard(c, room));
+    const isKill = Array.isArray(room.trumpKillSeats) && room.trumpKillSeats.includes(last?.seat);
+    const tookLead = !isLead && room.currentWinnerSeat === last?.seat;
+    if (isTractor) { sfx("win"); speak("拖拉机！"); }                     // 拖拉机最有排面
+    // 领出主牌＝调主(diào zhǔ)拔主。TTS 会把"调"误读成 tiáo，故用同音的"吊"逼出 diào。
+    else if (isLead && allTrump) speak(pick(["吊主！", "吊主！", "拔主咯！"]));
+    else if (isKill) { sfx("kill"); speak(pick(["杀！", "毙！", "大你！"])); }
     else if (tookLead) speak(pick(["大你！", "管上！", "压你一头！"]));
   }
   // a trick was just won
   if (snap.seq > prev.seq) sfx("win");
+  // round just ended → 夺冠播报
+  if (snap.phase === "roundOver" && prev.phase !== "roundOver" && room.lastResult?.champion) {
+    sfx("win"); speak("夺冠啦！");
+  }
   // new log lines → 甩牌 / 亮主 callouts
   if (snap.logLen > prev.logLen && Array.isArray(room.tableLog)) {
     for (const line of room.tableLog.slice(prev.logLen)) {
