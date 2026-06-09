@@ -239,11 +239,23 @@ button, input, select { font: inherit; }
   line-height: 1;
 }
 .topbar-btn:active { background: rgba(200,144,45,.2); }
-.topbar-btn.audio-off { opacity: .38; position: relative; }
-.topbar-btn.audio-off::after {
-  content: ""; position: absolute; left: 12%; right: 12%; top: 50%;
-  border-top: 2px solid currentColor; transform: rotate(-20deg);
+.topbar-btn.audio-off { opacity: .45; }
+.audio-menu { position: relative; display: inline-block; }
+.audio-panel {
+  position: absolute; top: 132%; right: 0; z-index: 60;
+  min-width: 190px; padding: 11px 13px;
+  background: rgba(20,16,10,.97); border: 1px solid rgba(200,144,45,.45);
+  border-radius: 9px; box-shadow: 0 8px 22px rgba(0,0,0,.55);
+  display: flex; flex-direction: column; gap: 11px;
 }
+.audio-panel.hidden { display: none; }
+.audio-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; color: var(--gold); font-size: 14px; cursor: pointer; user-select: none;
+}
+.audio-row.vol { flex-direction: column; align-items: stretch; gap: 7px; cursor: default; }
+.audio-row input[type="range"] { width: 100%; accent-color: var(--gold); cursor: pointer; }
+.audio-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--gold); cursor: pointer; }
 
 /* Top bar */
 .topbar {

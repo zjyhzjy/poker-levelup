@@ -13,6 +13,7 @@ let musicTimer = null;
 let started = false;
 let musicOn = localStorage.getItem("szp.music") !== "0"; // default on
 let voiceOn = localStorage.getItem("szp.voice") !== "0"; // default on
+let volume = Math.min(1, Math.max(0, parseFloat(localStorage.getItem("szp.vol") ?? "0.7"))); // 0..1
 
 function ensureCtx() {
   if (!ctx) {
@@ -20,7 +21,7 @@ function ensureCtx() {
     if (!AC) return null;
     ctx = new AC();
     master = ctx.createGain();
-    master.gain.value = 0.9;
+    master.gain.value = volume;
     master.connect(ctx.destination);
     musicGain = ctx.createGain();
     musicGain.gain.value = 0.0;
@@ -127,7 +128,7 @@ export function speak(text) {
   try {
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "zh-CN"; u.rate = 1.08; u.pitch = 1.05; u.volume = 1.0;
+    u.lang = "zh-CN"; u.rate = 1.08; u.pitch = 1.05; u.volume = Math.min(1, volume + 0.2);
     if (zhVoice) u.voice = zhVoice;
     speechSynthesis.speak(u);
   } catch (_) { /* ignore */ }
@@ -154,4 +155,10 @@ export function toggleVoice() {
   if (!voiceOn && "speechSynthesis" in window) speechSynthesis.cancel();
   return voiceOn;
 }
-export const audioState = () => ({ musicOn, voiceOn, started });
+export function setVolume(v) {
+  volume = Math.min(1, Math.max(0, v));
+  localStorage.setItem("szp.vol", String(volume));
+  if (master) master.gain.setTargetAtTime(volume, ctx.currentTime, 0.03);
+  return volume;
+}
+export const audioState = () => ({ musicOn, voiceOn, volume, started });

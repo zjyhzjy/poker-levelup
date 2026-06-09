@@ -1,4 +1,4 @@
-import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, audioState } from "./audio.js";
+import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, setVolume, audioState } from "./audio.js";
 
 /* ─── State ──────────────────────────────────────────────── */
 // Stable, client-owned player identity. Generated once and reused forever so we
@@ -1257,17 +1257,35 @@ if (fullscreenBtn) {
   });
 }
 
-/* ─── Audio: unlock on first gesture + 🎵/🔊 toggles ───────── */
+/* ─── Audio: unlock on first gesture + settings popover ────── */
 // Browser autoplay policy: the AudioContext can only start from a user gesture.
 window.addEventListener("pointerdown", () => unlock(), { once: true });
 window.addEventListener("keydown", () => unlock(), { once: true });
-function paintAudioBtn(btn, on) { if (btn) btn.classList.toggle("audio-off", !on); }
-const musicBtn = document.getElementById("musicBtn");
-const voiceBtn = document.getElementById("voiceBtn");
-paintAudioBtn(musicBtn, audioState().musicOn);
-paintAudioBtn(voiceBtn, audioState().voiceOn);
-musicBtn?.addEventListener("click", () => { unlock(); paintAudioBtn(musicBtn, toggleMusic()); });
-voiceBtn?.addEventListener("click", () => { unlock(); const on = toggleVoice(); paintAudioBtn(voiceBtn, on); if (on) speak("语音已开"); });
+const audioBtn = document.getElementById("audioBtn");
+const audioPanel = document.getElementById("audioPanel");
+const musicChk = document.getElementById("musicChk");
+const voiceChk = document.getElementById("voiceChk");
+const volRange = document.getElementById("volRange");
+function refreshAudioBtn() {
+  const s = audioState();
+  if (audioBtn) audioBtn.classList.toggle("audio-off", !s.musicOn && !s.voiceOn);
+}
+{
+  const s = audioState();
+  if (musicChk) musicChk.checked = s.musicOn;
+  if (voiceChk) voiceChk.checked = s.voiceOn;
+  if (volRange) volRange.value = String(Math.round(s.volume * 100));
+  refreshAudioBtn();
+}
+audioBtn?.addEventListener("click", (e) => { e.stopPropagation(); unlock(); audioPanel?.classList.toggle("hidden"); });
+document.addEventListener("click", (e) => {
+  if (audioPanel && !audioPanel.classList.contains("hidden") && !e.target.closest(".audio-menu")) {
+    audioPanel.classList.add("hidden");
+  }
+});
+musicChk?.addEventListener("change", () => { unlock(); musicChk.checked = toggleMusic(); refreshAudioBtn(); });
+voiceChk?.addEventListener("change", () => { unlock(); const on = toggleVoice(); voiceChk.checked = on; if (on) speak("语音已开"); refreshAudioBtn(); });
+volRange?.addEventListener("input", () => { unlock(); setVolume(Number(volRange.value) / 100); });
 
 // Exit the current room and return to the join screen.
 function exitRoom() {
