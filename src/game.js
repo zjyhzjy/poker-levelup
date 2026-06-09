@@ -2580,7 +2580,11 @@ export function decideAiSixTrump(room, seat) {
   if (!best) return null;
   const ratio = best.trumpCount / Math.max(1, hand.length);
   const eagerFirstDealer = room.dealerSeat === null && best.strength >= 1;
-  const worthy = eagerFirstDealer || best.strength >= 2 || ratio >= profile.bidRatio;
+  // 守庄队在后续局应主动定主：定主只定花色、不改坐庄，不亮反而可能被对家反主成不利
+  // 花色、或全员不亮触发换台/重发。所以只要手里有一张级牌就亮自己最强的花色。
+  const onDealerTeam = room.dealerSeat !== null && isFixedTeamMode(room) && seat.index % 2 === room.dealerSeat % 2;
+  const eagerHold = onDealerTeam && best.strength >= 1;
+  const worthy = eagerFirstDealer || eagerHold || best.strength >= 2 || ratio >= profile.bidRatio;
   if (!worthy) return null;
   if (room.currentBid && best.strength <= room.currentBid.strength) return null;
   return { cardIds: best.cards.map((c) => c.id), strength: best.strength };
