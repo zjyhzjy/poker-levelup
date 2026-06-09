@@ -51,7 +51,28 @@ function pluck(freq, when, dur = 0.5, gain = 0.18, type = "triangle") {
   o.start(when); o.stop(when + dur + 0.05);
 }
 
+// File-based BGM: if public/bgm.mp3 exists, loop it (so you can drop in any track
+// you're allowed to use); otherwise fall back to the synth loop below.
+let bgmEl = null; // HTMLAudioElement | "missing" | null
 function startMusic() {
+  if (!ensureCtx()) return;
+  if (bgmEl === "missing") { startSynthMusic(); return; }
+  if (!bgmEl) {
+    bgmEl = new Audio("/bgm.mp3");
+    bgmEl.loop = true;
+    bgmEl.volume = Math.min(1, volume);
+    bgmEl.addEventListener("error", () => { if (bgmEl !== "missing") { bgmEl = "missing"; startSynthMusic(); } });
+  }
+  bgmEl.volume = Math.min(1, volume);
+  const p = bgmEl.play();
+  if (p && p.catch) p.catch(() => { bgmEl = "missing"; startSynthMusic(); });
+}
+function stopMusic() {
+  if (bgmEl && bgmEl !== "missing") { try { bgmEl.pause(); } catch (_) {} }
+  stopSynthMusic();
+}
+
+function startSynthMusic() {
   if (!ensureCtx() || musicTimer) return;
   musicGain.gain.cancelScheduledValues(ctx.currentTime);
   musicGain.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 1.5);
@@ -77,7 +98,7 @@ function startMusic() {
   musicTimer = setInterval(tick, beat * 1000);
 }
 
-function stopMusic() {
+function stopSynthMusic() {
   if (musicTimer) { clearInterval(musicTimer); musicTimer = null; }
   if (!ctx) return;
   musicGain.gain.cancelScheduledValues(ctx.currentTime);
@@ -112,26 +133,47 @@ function pluckFx(freq, when, dur, gain, type) {
 }
 
 // ── voice (TTS) ─────────────────────────────────────────────────────────────
+// Prefer a more natural Chinese voice when the device offers one.
+const PREFERRED = [/Tingting|婷婷/i, /Meijia|美佳/i, /Sinji/i, /Huihui|慧慧/i, /Yaoyao/i,
+  /Google.*(普通话|中文|Chinese)/i, /Siri/i];
 let zhVoice = null;
 function pickVoice() {
   if (!("speechSynthesis" in window)) return;
-  const voices = speechSynthesis.getVoices();
-  zhVoice = voices.find((v) => /zh[-_]?CN/i.test(v.lang) || /Chinese|普通话|中文/i.test(v.name))
-    || voices.find((v) => /zh/i.test(v.lang)) || null;
+  const zh = speechSynthesis.getVoices().filter((v) => /zh/i.test(v.lang) || /Chinese|普通话|中文/i.test(v.name));
+  for (const re of PREFERRED) { const m = zh.find((v) => re.test(v.name)); if (m) { zhVoice = m; return; } }
+  zhVoice = zh.find((v) => /zh[-_]?CN/i.test(v.lang)) || zh[0] || null;
 }
-if ("speechSynthesis" in window) {
-  pickVoice();
-  speechSynthesis.onvoiceschanged = pickVoice;
-}
-export function speak(text) {
-  if (!voiceOn || !("speechSynthesis" in window)) return;
+if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+
+// Optional recorded clips for real intonation: drop public/voice/<词>.mp3
+// (例如 大你.mp3、吊主.mp3)。有则播片，无则退回 TTS（短词偏平）。
+const clips = {};
+const clipKey = (t) => t.replace(/[！!。．.\s，,、？?]/g, "");
+function ttsSpeak(text) {
+  if (!("speechSynthesis" in window)) return;
   try {
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "zh-CN"; u.rate = 1.08; u.pitch = 1.05; u.volume = Math.min(1, volume + 0.2);
+    u.lang = "zh-CN";
+    u.rate = 1.0 + Math.random() * 0.18;   // 轻微变化，连续播报不至于死板
+    u.pitch = 1.2 + Math.random() * 0.4;   // 抬高音高，更有"语气/精神"
+    u.volume = Math.min(1, volume + 0.2);
     if (zhVoice) u.voice = zhVoice;
     speechSynthesis.speak(u);
   } catch (_) { /* ignore */ }
+}
+export function speak(text) {
+  if (!voiceOn) return;
+  const key = clipKey(text);
+  if (clips[key] === "missing") { ttsSpeak(text); return; }
+  let c = clips[key];
+  if (!c) { c = new Audio(`/voice/${encodeURIComponent(key)}.mp3`); clips[key] = c; }
+  try {
+    c.volume = Math.min(1, volume + 0.2);
+    c.currentTime = 0;
+    const p = c.play();
+    if (p && p.catch) p.catch(() => { clips[key] = "missing"; ttsSpeak(text); }); // 无此片→TTS
+  } catch (_) { clips[key] = "missing"; ttsSpeak(text); }
 }
 export const pick = (arr) => arr[(Math.random() * arr.length) | 0];
 
@@ -159,6 +201,7 @@ export function setVolume(v) {
   volume = Math.min(1, Math.max(0, v));
   localStorage.setItem("szp.vol", String(volume));
   if (master) master.gain.setTargetAtTime(volume, ctx.currentTime, 0.03);
+  if (bgmEl && bgmEl !== "missing") bgmEl.volume = Math.min(1, volume);
   return volume;
 }
 export const audioState = () => ({ musicOn, voiceOn, volume, started });

@@ -218,8 +218,10 @@ function handleAudioEvents(room) {
   // new log lines → 甩牌 / 亮主 callouts
   if (snap.logLen > prev.logLen && Array.isArray(room.tableLog)) {
     for (const line of room.tableLog.slice(prev.logLen)) {
-      if (line.includes("甩牌") && !line.includes("失败")) speak("甩牌！");
-      else if (line.includes("亮主") || line.includes("叫主")) speak(pick(["亮主！", "我来定主！"]));
+      // 只在"真正亮主/亮庄"那一刻播报：实际宣告含全角冒号(亮主：/亮庄：)；
+      // 其余如"亮主者坐庄""无人亮主""重新叫主"都是提示语，不应触发。
+      if (line.includes("甩牌：")) speak("甩牌！");
+      else if (line.includes("亮主：") || line.includes("亮庄：")) speak(pick(["亮主！", "我来定主！", "这主我来定！"]));
     }
   }
 }
