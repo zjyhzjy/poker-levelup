@@ -567,5 +567,8 @@ function contentType(filePath) {
   if (filePath.endsWith(".html")) return "text/html; charset=utf-8";
   if (filePath.endsWith(".css")) return "text/css; charset=utf-8";
   if (filePath.endsWith(".js")) return "text/javascript; charset=utf-8";
+  if (filePath.endsWith(".mp3")) return "audio/mpeg";
+  if (filePath.endsWith(".wav")) return "audio/wav";
+  if (filePath.endsWith(".ogg")) return "audio/ogg";
   return "application/octet-stream";
 }

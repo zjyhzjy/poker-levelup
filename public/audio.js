@@ -108,7 +108,24 @@ function stopSynthMusic() {
 }
 
 // ── sound effects ───────────────────────────────────────────────────────────
+// Prefer a downloaded clip public/sfx/<name>.mp3 (real, polished); fall back to
+// the synth below if the file is absent.
+const sfxClips = {};
 export function sfx(name) {
+  if (sfxClips[name] !== "missing") {
+    let c = sfxClips[name];
+    if (!c) { c = new Audio(`/sfx/${name}.wav`); sfxClips[name] = c; }
+    try {
+      c.volume = Math.min(1, volume);
+      c.currentTime = 0;
+      const p = c.play();
+      if (p && p.catch) p.catch(() => { sfxClips[name] = "missing"; synthSfx(name); });
+      return;
+    } catch (_) { sfxClips[name] = "missing"; }
+  }
+  synthSfx(name);
+}
+function synthSfx(name) {
   if (!ensureCtx()) return;
   const t = ctx.currentTime;
   if (name === "play") {
@@ -133,9 +150,13 @@ function pluckFx(freq, when, dur, gain, type) {
 }
 
 // ── voice (TTS) ─────────────────────────────────────────────────────────────
-// Prefer a more natural Chinese voice when the device offers one.
-const PREFERRED = [/Tingting|婷婷/i, /Meijia|美佳/i, /Sinji/i, /Huihui|慧慧/i, /Yaoyao/i,
-  /Google.*(普通话|中文|Chinese)/i, /Siri/i];
+// Prefer the most natural Chinese voice the device offers: high-quality neural /
+// Siri / premium voices first, then the better named ones.
+const PREFERRED = [
+  /neural|online|premium|enhanced/i, /Siri/i,
+  /Tingting|婷婷/i, /Meijia|美佳/i, /Yaoyao/i, /Huihui|慧慧/i, /Kangkang/i,
+  /Google.*(普通话|中文|Chinese)/i
+];
 let zhVoice = null;
 function pickVoice() {
   if (!("speechSynthesis" in window)) return;
@@ -155,8 +176,8 @@ function ttsSpeak(text) {
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "zh-CN";
-    u.rate = 1.0 + Math.random() * 0.18;   // 轻微变化，连续播报不至于死板
-    u.pitch = 1.2 + Math.random() * 0.4;   // 抬高音高，更有"语气/精神"
+    u.rate = 1.05 + Math.random() * 0.15;  // 1.05–1.20，干脆利落
+    u.pitch = 1.0 + Math.random() * 0.25;  // 1.0–1.25，自然又带点精神（过高会发尖）
     u.volume = Math.min(1, volume + 0.2);
     if (zhVoice) u.voice = zhVoice;
     speechSynthesis.speak(u);
