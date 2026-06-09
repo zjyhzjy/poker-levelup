@@ -1,0 +1,30 @@
+{
+  "generatedAt": "2026-06-09T19:45:47.129Z",
+  "generation": 48,
+  "valFitness": 0.5208333333333334,
+  "seedsPerEval": 600,
+  "valSeeds": 1200,
+  "weights": {
+    "fCost": 0.6699971304594858,
+    "fAllyFeed": 1.8740641172537384,
+    "fAllyKeep": 0.20108124141202913,
+    "fAllySecure": 1.7571625473511099,
+    "fAllySecureBase": 0.18877434218036582,
+    "fEnemyWinPts": 2.4542591587797755,
+    "fEnemyWinBase": 0.6069219433587519,
+    "fRiskWin": 1.016089597170116,
+    "fRiskOwnPts": 0.0008092505944943917,
+    "fDuck": 0.7469686611419646,
+    "fGiftPts": 0.19857238560663715,
+    "lProbe": 0.28934192353907595,
+    "lProbeCard": 0.04116584228174158,
+    "lNonBoss": 5.7619928956600335,
+    "lNonBossCard": 0.02047570814376225,
+    "lBossBase": 0.7841829729740408,
+    "lBossPts": 2.7605604678937823,
+    "lBossLen": 1.2267023004465196,
+    "lTrumpPull": 5.015484050301627,
+    "lTrumpKeep": 4.340582196829309,
+    "lAceRuff": 0.30789736746546675
+  }
+}

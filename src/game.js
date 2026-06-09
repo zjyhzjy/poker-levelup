@@ -888,7 +888,11 @@ export function chooseAiPlay(room, seat, leaderCards = null) {
       if (lead && lead.length && validatePlay(room, seat, lead, null).ok) return lead;
     } else {
       const follow = chooseFollow(room, seat, leaderCards, profile);
-      if (follow) return follow;
+      // Validate the follow too (like the lead path): chooseFollow can, in rare
+      // rule-consistency edge cases, return a play validatePlay rejects. Guarding
+      // here guarantees chooseAiPlay never hands an illegal play to playCards —
+      // otherwise the server would retry it forever and hang the table.
+      if (follow && follow.length && validatePlay(room, seat, follow, leaderCards).ok) return follow;
     }
   } catch (_) { /* fall through to the safe baseline */ }
   return safeAiPlay(room, seat, leaderCards);
@@ -1111,26 +1115,27 @@ function followCandidates(room, seat, leaderCards) {
 }
 
 function scoreFollow(room, seat, cards, stand, profile, seen) {
+  const W = seat.aiWeights || AI_WEIGHTS; // per-seat override (tuning) else global
   const beats = candidateBeats(room, seat, cards);
   const cost = cards.reduce((sum, c) => sum + spendCost(c, room), 0);
   const pts = cards.reduce((sum, c) => sum + cardScore(c), 0);
-  let u = -cost * 0.5;
+  let u = -cost * W.fCost;
 
   // Partner holds the trick.
   if (stand.rel === "ally") {
     const allyBoss = stand.winnerRuffed || isComboBoss(room, seat, stand.winnerCards, seen);
     if (stand.isLast || allyBoss) {                 // securely winning → pour points in / keep low
-      if (profile.feed) u += pts * 2.5;
-      else u -= pts * 0.2;
+      if (profile.feed) u += pts * W.fAllyFeed;
+      else u -= pts * W.fAllyKeep;
       return u;
     }
     // 3rd-hand-high: ally winning but beatable and an enemy still acts behind me.
     // Secure the team's points — but ONLY with a guaranteed boss, never a card the
     // next player could beat, so I never waste a losable card on my own partner.
     if (beats && stand.points > 0 && enemyBehind(room, seat) && isComboBoss(room, seat, cards, seen)) {
-      u += stand.points * 1.5 + 1;
+      u += stand.points * W.fAllySecure + W.fAllySecureBase;
     } else {
-      u -= pts * 0.2;
+      u -= pts * W.fAllyKeep;
     }
     return u;
   }
@@ -1138,15 +1143,15 @@ function scoreFollow(room, seat, cards, stand, profile, seen) {
   // An enemy / unknown holds the trick.
   if (beats) {
     if (!profile.contest) { u -= 100; return u; } // easy never goes out of its way to win
-    let reward = (stand.points * 2 + 1) * (1 + 0.2 * (seat.aiBias ?? 0)); // +personality
+    let reward = (stand.points * W.fEnemyWinPts + W.fEnemyWinBase) * (1 + 0.2 * (seat.aiBias ?? 0)); // +personality
     if (profile.riskAware && !stand.isLast) {       // win isn't secured if others still act
-      reward *= 0.5;
-      u -= pts * 1.0;                               // and my own points could be overtaken
-      if (allyBehind(room, seat)) reward *= 0.4;    // a teammate can still take it — duck
+      reward *= W.fRiskWin;
+      u -= pts * W.fRiskOwnPts;                      // and my own points could be overtaken
+      if (allyBehind(room, seat)) reward *= W.fDuck; // a teammate can still take it — duck
     }
     u += reward;
   } else {
-    u -= pts * 3.5;                                 // never gift points to enemies/unknowns
+    u -= pts * W.fGiftPts;                           // never gift points to enemies/unknowns
     if (profile.voidDiscard) u += voidProgress(room, seat, cards); // shed toward a void
   }
   return u;
@@ -1271,6 +1276,7 @@ function developProbe(room, seat, groups) {
 }
 
 function scoreLead(room, seat, cards, profile, seen) {
+  const W = seat.aiWeights || AI_WEIGHTS; // per-seat override (tuning) else global
   const head = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room))[0];
   const isTrump = playSuit(head, room) === "trump";
   const pts = cards.reduce((s, c) => s + cardScore(c), 0);
@@ -1278,22 +1284,22 @@ function scoreLead(room, seat, cards, profile, seen) {
   const boss = isComboBoss(room, seat, cards, seen);
 
   // Non-point low single = the probe: pick it only when nothing is worth cashing.
-  if (len === 1 && !boss && cardScore(head) === 0) return 0.5 - cardOrderValue(head, room) * 0.01;
+  if (len === 1 && !boss && cardScore(head) === 0) return W.lProbe - cardOrderValue(head, room) * W.lProbeCard;
   // A non-boss high card / combo can be beaten or ruffed — don't throw it away.
-  if (!boss) return -5 - cardOrderValue(head, room) * 0.01 - len;
+  if (!boss) return -W.lNonBoss - cardOrderValue(head, room) * W.lNonBossCard - len;
 
   // Boss combo: cash a guaranteed winner — bank points, clear cards, apply pressure.
-  let u = 3 + pts * 3 + len * 1.5;
+  let u = W.lBossBase + pts * W.lBossPts + len * W.lBossLen;
   if (isTrump) {
     // Declarer pulls trump from strength (basic). easy doesn't manage trump, so it
     // doesn't get the pull bonus and leaves its trump back.
-    if (seat.index === room.dealerSeat && profile.pull) u += 4 + len;
-    else u -= 2;
+    if (seat.index === room.dealerSeat && profile.pull) u += W.lTrumpPull + len;
+    else u -= W.lTrumpKeep;
   } else if (len === 1 && pts === 0) {
     // Cashing a bare side ace is basic, but it risks a ruff once the suit dries up
     // or an opponent is known void — back off then (all levels read this much).
     const ruffable = enemyVoidIn(room, seat, head.suit) || suitPlayed(room, head.suit) > 8;
-    if (ruffable) u -= 4;
+    if (ruffable) u -= W.lAceRuff;
   }
   return u;
 }

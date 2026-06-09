@@ -30,11 +30,25 @@ import {
   setTrustee,
   sit,
   startAuction,
-  startRound
+  startRound,
+  loadAiWeights
 } from "./src/game.js";
 import { pimcChoosePlay } from "./src/ai/pimc.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// 载入自对弈调参得到的启发式权重（若存在）。实测比出厂默认更强（6000 局新种子：
+// 净级数 +0.46、庄家胜率 +15pt），且 PIMC 推演用同一启发式，故各档 AI 一并变强。
+try {
+  const wf = path.join(__dirname, "bench", "tuned-weights.json");
+  if (fs.existsSync(wf)) {
+    const tuned = JSON.parse(fs.readFileSync(wf, "utf8"));
+    loadAiWeights(tuned.weights || {});
+    console.log(`AI 权重：已载入自对弈调参权重（gen ${tuned.generation}, valFit ${tuned.valFitness}）`);
+  }
+} catch (e) {
+  console.log(`AI 权重：使用出厂默认（调参权重载入失败：${e.message}）`);
+}
 const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.PORT || 3000);
 const rooms = new Map();
