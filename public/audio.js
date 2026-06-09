@@ -66,7 +66,23 @@ let musicPhase = "lobby";          // "lobby" (intro) | "game"
 let bgmEl = null;                  // HTMLAudioElement | null
 let bgmFailed = false;             // bundled file failed → use synth
 let regionStart = 0, regionEnd = Infinity;
+let gapTimer = null;               // silence gap between loop repeats
+let loopGapSec = Math.max(0, parseFloat(localStorage.getItem("szp.loopgap") ?? "4"));
 const curTrack = () => MUSIC.find((t) => t.id === trackId) || MUSIC[0];
+
+// Loop the current region with a short silence gap between repeats (a "breath"),
+// instead of jumping back instantly.
+function scheduleLoop() {
+  if (gapTimer || !bgmEl) return;
+  try { bgmEl.pause(); } catch (_) {}
+  gapTimer = setTimeout(() => {
+    gapTimer = null;
+    if (!bgmEl || !started || !musicOn || trackId === "off") return;
+    bgmEl.currentTime = regionStart;
+    bgmEl.play().catch(() => {});
+  }, loopGapSec * 1000);
+}
+function clearLoopGap() { if (gapTimer) { clearTimeout(gapTimer); gapTimer = null; } }
 
 function applyRegion() {
   const t = curTrack();
@@ -84,8 +100,8 @@ function startMusic() {
     bgmEl.loop = false;            // we loop a sub-region manually (see timeupdate)
     bgmEl.volume = Math.min(1, volume);
     bgmEl.addEventListener("loadedmetadata", () => { applyRegion(); if (bgmEl.currentTime < regionStart) bgmEl.currentTime = regionStart; });
-    bgmEl.addEventListener("timeupdate", () => { if (regionEnd !== Infinity && bgmEl.currentTime >= regionEnd - 0.06) bgmEl.currentTime = regionStart; });
-    bgmEl.addEventListener("ended", () => { bgmEl.currentTime = regionStart; bgmEl.play().catch(() => {}); });
+    bgmEl.addEventListener("timeupdate", () => { if (!gapTimer && regionEnd !== Infinity && bgmEl.currentTime >= regionEnd - 0.06) scheduleLoop(); });
+    bgmEl.addEventListener("ended", () => { if (!gapTimer) scheduleLoop(); });
     bgmEl.addEventListener("error", () => { if (curTrack().id === "default") { bgmFailed = true; bgmEl = null; startSynthMusic(); } });
   }
   applyRegion();
@@ -95,6 +111,7 @@ function startMusic() {
   if (p && p.catch) p.catch(() => {});
 }
 function stopMusic() {
+  clearLoopGap();
   if (bgmEl) { try { bgmEl.pause(); } catch (_) {} }
   stopSynthMusic();
 }
@@ -104,6 +121,7 @@ export function setMusicPhase(phase) {
   if (p === musicPhase) return;
   musicPhase = p;
   if (!curTrack().splitAt) return;
+  clearLoopGap();
   applyRegion();
   if (started && musicOn && bgmEl) { bgmEl.currentTime = regionStart; if (bgmEl.paused) bgmEl.play().catch(() => {}); }
 }
@@ -111,6 +129,7 @@ export function selectTrack(id) {
   trackId = id;
   localStorage.setItem("szp.track", id);
   bgmFailed = false;
+  clearLoopGap();
   if (bgmEl) { try { bgmEl.pause(); } catch (_) {} bgmEl = null; }
   stopSynthMusic();
   if (started && musicOn && id !== "off") startMusic();
