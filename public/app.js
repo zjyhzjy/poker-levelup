@@ -1,4 +1,4 @@
-import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, setVolume, setMusicPhase, selectTrack, musicTracks, currentTrackId, audioState } from "./audio.js";
+import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, setMusicVol, setFxVol, setMusicPhase, selectTrack, musicTracks, currentTrackId, audioState } from "./audio.js";
 
 /* ─── State ──────────────────────────────────────────────── */
 // Stable, client-owned player identity. Generated once and reused forever so we
@@ -1268,7 +1268,8 @@ const audioBtn = document.getElementById("audioBtn");
 const audioPanel = document.getElementById("audioPanel");
 const musicChk = document.getElementById("musicChk");
 const voiceChk = document.getElementById("voiceChk");
-const volRange = document.getElementById("volRange");
+const musicVolRange = document.getElementById("musicVolRange");
+const fxVolRange = document.getElementById("fxVolRange");
 const trackSel = document.getElementById("trackSel");
 function refreshAudioBtn() {
   const s = audioState();
@@ -1278,7 +1279,8 @@ function refreshAudioBtn() {
   const s = audioState();
   if (musicChk) musicChk.checked = s.musicOn;
   if (voiceChk) voiceChk.checked = s.voiceOn;
-  if (volRange) volRange.value = String(Math.round(s.volume * 100));
+  if (musicVolRange) musicVolRange.value = String(Math.round(s.musicVol * 100));
+  if (fxVolRange) fxVolRange.value = String(Math.round(s.fxVol * 100));
   if (trackSel) {
     trackSel.innerHTML = musicTracks().map((t) => `<option value="${t.id}">${t.name}</option>`).join("");
     trackSel.value = currentTrackId();
@@ -1294,7 +1296,8 @@ document.addEventListener("click", (e) => {
 });
 musicChk?.addEventListener("change", () => { unlock(); musicChk.checked = toggleMusic(); refreshAudioBtn(); });
 voiceChk?.addEventListener("change", () => { unlock(); const on = toggleVoice(); voiceChk.checked = on; if (on) speak("语音已开"); refreshAudioBtn(); });
-volRange?.addEventListener("input", () => { unlock(); setVolume(Number(volRange.value) / 100); });
+musicVolRange?.addEventListener("input", () => { unlock(); setMusicVol(Number(musicVolRange.value) / 100); });
+fxVolRange?.addEventListener("input", () => { unlock(); setFxVol(Number(fxVolRange.value) / 100); });
 
 // Exit the current room and return to the join screen.
 function exitRoom() {
