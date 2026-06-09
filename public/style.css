@@ -239,6 +239,11 @@ button, input, select { font: inherit; }
   line-height: 1;
 }
 .topbar-btn:active { background: rgba(200,144,45,.2); }
+.topbar-btn.audio-off { opacity: .38; position: relative; }
+.topbar-btn.audio-off::after {
+  content: ""; position: absolute; left: 12%; right: 12%; top: 50%;
+  border-top: 2px solid currentColor; transform: rotate(-20deg);
+}
 
 /* Top bar */
 .topbar {

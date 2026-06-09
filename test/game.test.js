@@ -297,6 +297,65 @@ test("三条锁定剩两张时不死锁：跟三条领出同样有合法出牌",
   assert.equal(validatePlay(room, ai, play, club3s).ok, true);
 });
 
+// 三条跟对子的"拆/不拆"与锁定规则（5/6 人三副牌）：
+//  - 同门还有自然对子 → 跟那对，三条不锁，之后自由处置。
+//  - 同门无别的对子 → 可拆(出对)也可不拆(出单)；不拆则锁定，之后不能再拆成对。
+//  - "别的对子"在异门不算（必须跟同门）。
+function tripleFollowSetup(handFilter) {
+  const room = createRoom("TRIP");
+  room.levelRank = "2"; room.trumpSuit = "hearts"; room.dealerSeat = 0; room.friendSeat = null;
+  room.phase = "playing";
+  const deck = createDeck();
+  const lead = deck.filter((c) => c.rank === "5" && c.suit === "spades").slice(0, 2);
+  room.seats[0].playerId = "p0";
+  const me = room.seats[1];
+  me.playerId = "me"; me.lockedTriples = []; me.hand = handFilter(deck);
+  room.currentTrick = [{ seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 }];
+  room.currentLeader = 0; room.turnSeat = 1;
+  return { room, me, lead, deck };
+}
+const spadesOf = (deck, rank, n) => deck.filter((c) => c.rank === rank && c.suit === "spades").slice(0, n);
+
+test("三条跟对子：同门有别的对子→跟对不锁三条（之后可自由处置）", () => {
+  const { room, me, lead, deck } = tripleFollowSetup((d) => [...spadesOf(d, "J", 3), ...spadesOf(d, "9", 2), ...spadesOf(d, "8", 1)]);
+  assert.equal(validatePlay(room, me, spadesOf(deck, "9", 2), lead).ok, true, "跟自然对子 99 合法");
+  // 有自然对子时不许用两张单张垫
+  assert.equal(validatePlay(room, me, [spadesOf(deck, "J", 1)[0], spadesOf(deck, "8", 1)[0]], lead).ok, false);
+  playCards(room, "me", spadesOf(deck, "9", 2).map((c) => c.id));
+  assert.deepEqual(me.lockedTriples, [], "出 99 后三条不被锁定");
+});
+
+test("三条跟对子：同门无别的对子→不拆则锁定、拆则不锁", () => {
+  // 不拆：出 J + 单张7
+  {
+    const { room, me, lead, deck } = tripleFollowSetup((d) => [...spadesOf(d, "J", 3), ...spadesOf(d, "7", 1)]);
+    const J7 = [spadesOf(deck, "J", 1)[0], spadesOf(deck, "7", 1)[0]];
+    assert.equal(validatePlay(room, me, J7, lead).ok, true, "不拆三条出 J7 合法");
+    playCards(room, "me", J7.map((c) => c.id));
+    assert.deepEqual(me.lockedTriples, ["J|spades"], "不拆 → 锁定 J|spades");
+  }
+  // 拆：出 JJ
+  {
+    const { room, me, lead, deck } = tripleFollowSetup((d) => [...spadesOf(d, "J", 3), ...spadesOf(d, "7", 1)]);
+    const JJ = spadesOf(deck, "J", 2);
+    assert.equal(validatePlay(room, me, JJ, lead).ok, true, "拆三条出 JJ 合法");
+    playCards(room, "me", JJ.map((c) => c.id));
+    assert.deepEqual(me.lockedTriples, [], "拆了 → 不锁定");
+  }
+});
+
+test("三条跟对子：异门对子不算，仍需面对拆/不拆（不拆则锁）", () => {
+  const { room, me, lead, deck } = tripleFollowSetup((d) => [
+    ...spadesOf(d, "J", 3), ...spadesOf(d, "7", 1),
+    ...d.filter((c) => c.rank === "9" && c.suit === "clubs").slice(0, 2) // 异门对子
+  ]);
+  const clubPair = deck.filter((c) => c.rank === "9" && c.suit === "clubs").slice(0, 2);
+  assert.equal(validatePlay(room, me, clubPair, lead).ok, false, "异门对子非法（必须跟黑桃）");
+  const J7 = [spadesOf(deck, "J", 1)[0], spadesOf(deck, "7", 1)[0]];
+  playCards(room, "me", J7.map((c) => c.id));
+  assert.deepEqual(me.lockedTriples, ["J|spades"], "异门的对救不了三条，不拆仍锁定");
+});
+
 test("盖庄后清空其他座位旧响应，不提前定庄、被盖者保留再抢机会", () => {
   const room = createRoom("BID2");
   const deck = createDeck();

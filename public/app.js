@@ -1,3 +1,5 @@
+import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, audioState } from "./audio.js";
+
 /* ─── State ──────────────────────────────────────────────── */
 // Stable, client-owned player identity. Generated once and reused forever so we
 // can always reclaim our seat after a refresh, app switch, or dropped connection.
@@ -146,6 +148,7 @@ function connectAndJoin(code, nickname, seatCount) {
       receivePong(msg.payload);
     }
     if (msg.type === "state") {
+      handleAudioEvents(msg.payload);
       state.room = msg.payload;
       // Remember the room so a refresh / reopen can auto-reconnect us back in.
       if (state.room.code) localStorage.setItem("szp.roomCode", state.room.code);
@@ -167,6 +170,50 @@ function send(type, payload = {}) {
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return false;
   state.ws.send(JSON.stringify({ type, payload }));
   return true;
+}
+
+/* ─── Sound & voice callouts (斗地主 style) ────────────────── */
+let audioPrev = null;
+function isTrumpCard(c, room) {
+  if (!c) return false;
+  if (c.suit === "joker") return true;
+  if (c.rank === room.levelRank) return true;
+  if (!room.noTrump && c.suit === room.trumpSuit) return true;
+  return false;
+}
+function handleAudioEvents(room) {
+  if (!room) return;
+  const snap = {
+    seq: room.lastTrickWin?.seq || 0,
+    trickLen: room.currentTrick?.length || 0,
+    logLen: room.tableLog?.length || 0
+  };
+  const prev = audioPrev;
+  audioPrev = snap;
+  if (!prev) return; // first state — nothing to compare against
+  const trick = room.currentTrick || [];
+
+  // a new card was played this trick
+  if (snap.trickLen > prev.trickLen && snap.trickLen > 0) {
+    sfx("play");
+    const last = trick[trick.length - 1];
+    const lead = trick[0];
+    const leadIsSide = lead && !lead.cards.every((c) => isTrumpCard(c, room));
+    const playedAllTrump = last && last.cards.length && last.cards.every((c) => isTrumpCard(c, room));
+    const isKill = leadIsSide && playedAllTrump;            // ruff / 主牌杀
+    const tookLead = snap.trickLen >= 2 && room.currentWinnerSeat === last?.seat;
+    if (isKill) { sfx("kill"); speak(pick(["杀！", "毙！", "大你！"])); }
+    else if (tookLead) speak(pick(["大你！", "管上！", "压你一头！"]));
+  }
+  // a trick was just won
+  if (snap.seq > prev.seq) sfx("win");
+  // new log lines → 甩牌 / 亮主 callouts
+  if (snap.logLen > prev.logLen && Array.isArray(room.tableLog)) {
+    for (const line of room.tableLog.slice(prev.logLen)) {
+      if (line.includes("甩牌") && !line.includes("失败")) speak("甩牌！");
+      else if (line.includes("亮主") || line.includes("叫主")) speak(pick(["亮主！", "我来定主！"]));
+    }
+  }
 }
 
 function scheduleTrickPauseRefresh(room) {
@@ -1201,6 +1248,18 @@ if (fullscreenBtn) {
     fullscreenBtn.textContent = document.fullscreenElement ? "✕" : "⛶";
   });
 }
+
+/* ─── Audio: unlock on first gesture + 🎵/🔊 toggles ───────── */
+// Browser autoplay policy: the AudioContext can only start from a user gesture.
+window.addEventListener("pointerdown", () => unlock(), { once: true });
+window.addEventListener("keydown", () => unlock(), { once: true });
+function paintAudioBtn(btn, on) { if (btn) btn.classList.toggle("audio-off", !on); }
+const musicBtn = document.getElementById("musicBtn");
+const voiceBtn = document.getElementById("voiceBtn");
+paintAudioBtn(musicBtn, audioState().musicOn);
+paintAudioBtn(voiceBtn, audioState().voiceOn);
+musicBtn?.addEventListener("click", () => { unlock(); paintAudioBtn(musicBtn, toggleMusic()); });
+voiceBtn?.addEventListener("click", () => { unlock(); const on = toggleVoice(); paintAudioBtn(voiceBtn, on); if (on) speak("语音已开"); });
 
 // Exit the current room and return to the join screen.
 function exitRoom() {
