@@ -64,75 +64,47 @@ const MUSIC = [
   { id: "world",   name: "游戏节拍",          src: "https://assets.mixkit.co/music/466/466.mp3" }
 ];
 let trackId = localStorage.getItem("szp.track") || "default";
-let musicPhase = "lobby";          // "lobby" (intro) | "game"
 let bgmEl = null;                  // HTMLAudioElement | null
 let bgmFailed = false;             // bundled file failed → use synth
-let regionStart = 0, regionEnd = Infinity;
-let gapTimer = null;               // silence gap between loop repeats
-let loopGapSec = Math.max(0, parseFloat(localStorage.getItem("szp.loopgap") ?? "4"));
+let loopStart = 0;                 // where the track loops back to (past the opening)
+let gapTimer = null;
+let loopGapSec = Math.max(0, parseFloat(localStorage.getItem("szp.loopgap") ?? "3"));
 const curTrack = () => MUSIC.find((t) => t.id === trackId) || MUSIC[0];
 
-// Loop the current region with a short silence gap between repeats (a "breath"),
-// instead of jumping back instantly.
-function scheduleLoop() {
-  if (gapTimer || !bgmEl) return;
-  try { bgmEl.pause(); } catch (_) {}
-  gapTimer = setTimeout(() => {
-    gapTimer = null;
-    if (!bgmEl || !started || !musicOn || trackId === "off") return;
-    bgmEl.currentTime = regionStart;
-    bgmEl.play().catch(() => {});
-  }, loopGapSec * 1000);
-}
 function clearLoopGap() { if (gapTimer) { clearTimeout(gapTimer); gapTimer = null; } }
-// Lobby intro loops with a breath-gap; the in-game track (and other tracks) loop
-// seamlessly and continuously — no gap, no per-round restart.
-function loopBack() {
-  if (musicPhase === "lobby" && curTrack().splitAt) scheduleLoop();
-  else if (bgmEl) bgmEl.currentTime = regionStart;
-}
-
-function applyRegion() {
-  const t = curTrack();
-  const dur = (bgmEl && bgmEl.duration) || Infinity;
-  if (t.splitAt && musicPhase === "lobby") { regionStart = 0; regionEnd = t.splitAt; }
-  else if (t.splitAt) { regionStart = t.splitAt; regionEnd = dur; } // in-game region
-  else { regionStart = 0; regionEnd = dur; }                        // non-split: whole loop
+// On reaching the end, loop back to loopStart (= splitAt for the default track, so
+// the 32s opening plays ONCE then only the in-game portion loops). Optional breath
+// gap. No phase-switching — the music never "resets" when a hand starts.
+function doLoop() {
+  if (gapTimer || !bgmEl) return;
+  const restart = () => { if (!bgmEl || !started || !musicOn || trackId === "off") return; bgmEl.currentTime = loopStart; bgmEl.play().catch(() => {}); };
+  if (loopGapSec > 0) { try { bgmEl.pause(); } catch (_) {} gapTimer = setTimeout(() => { gapTimer = null; restart(); }, loopGapSec * 1000); }
+  else restart();
 }
 
 function startMusic() {
   if (!ensureCtx() || trackId === "off") return;
   if (bgmFailed) { startSynthMusic(); return; }
   if (!bgmEl) {
-    bgmEl = new Audio(curTrack().src);
-    bgmEl.loop = false;            // we loop a sub-region manually (see timeupdate)
+    const t = curTrack();
+    loopStart = t.splitAt || 0;     // default: loop back past the 32s opening
+    bgmEl = new Audio(t.src);
+    bgmEl.loop = false;
     bgmEl.volume = Math.min(1, musicVol);
-    bgmEl.addEventListener("loadedmetadata", () => { applyRegion(); if (bgmEl.currentTime < regionStart) bgmEl.currentTime = regionStart; });
-    bgmEl.addEventListener("timeupdate", () => { if (!gapTimer && regionEnd !== Infinity && bgmEl.currentTime >= regionEnd - 0.06) loopBack(); });
-    bgmEl.addEventListener("ended", () => { if (!gapTimer) loopBack(); });
+    bgmEl.addEventListener("ended", doLoop); // play 0→end once (opening+in-game), then loop in-game
     bgmEl.addEventListener("error", () => { if (curTrack().id === "default") { bgmFailed = true; bgmEl = null; startSynthMusic(); } });
   }
-  applyRegion();
-  if (bgmEl.currentTime < regionStart || (regionEnd !== Infinity && bgmEl.currentTime >= regionEnd)) bgmEl.currentTime = regionStart;
   bgmEl.volume = Math.min(1, musicVol);
-  const p = bgmEl.play();
-  if (p && p.catch) p.catch(() => {});
+  bgmEl.play().catch(() => {});
 }
 function stopMusic() {
   clearLoopGap();
   if (bgmEl) { try { bgmEl.pause(); } catch (_) {} }
   stopSynthMusic();
 }
-// Tell the music which phase we're in so the default track switches intro↔in-game.
-export function setMusicPhase(phase) {
-  const p = phase === "lobby" ? "lobby" : "game";
-  if (p === musicPhase) return;
-  musicPhase = p;
-  if (!curTrack().splitAt) return;
-  clearLoopGap();
-  applyRegion();
-  if (started && musicOn && bgmEl) { bgmEl.currentTime = regionStart; if (bgmEl.paused) bgmEl.play().catch(() => {}); }
-}
+// Music no longer switches by game phase (that switch caused the "reset" at 开局).
+// Kept as a no-op so existing callers don't break.
+export function setMusicPhase() {}
 export function selectTrack(id) {
   trackId = id;
   localStorage.setItem("szp.track", id);
