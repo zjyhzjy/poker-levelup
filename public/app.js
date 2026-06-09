@@ -563,7 +563,8 @@ function renderSeats(room) {
             <span class="ai-add-label">加AI</span>
             <button class="seat-btn ai-lv" data-ai="${seat.index}" data-level="easy" title="弱：被动跟最小牌">弱</button>
             <button class="seat-btn ai-lv" data-ai="${seat.index}" data-level="medium" title="中：稳健抢墩、喂分、会抢庄">中</button>
-            <button class="seat-btn ai-lv" data-ai="${seat.index}" data-level="hard" title="强：会算牌、拔主、积极抢庄">强</button>
+            <button class="seat-btn ai-lv" data-ai="${seat.index}" data-level="hard" title="强：记牌器 + 轻量搜索推演，会算牌、拔主、积极抢庄（近乎秒出）">强</button>
+            <button class="seat-btn ai-lv ai-lv-master" data-ai="${seat.index}" data-level="master" title="大师：记牌器 + 深度蒙特卡洛搜索，逐步推演选最优出牌（最强，出牌略慢）">大师</button>
           </div>
         </div>`;
       } else if (seat.isYou) {

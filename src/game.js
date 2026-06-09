@@ -157,7 +157,7 @@ export function addAiPlayer(room, seatIndex, aiLevel = "medium") {
   if (!seat) throw new Error("座位不存在");
   if (seat.playerId) throw new Error("这个座位已经有人了");
   const level = AI_PROFILES[aiLevel] ? aiLevel : "medium";
-  const tag = { easy: "弱", medium: "中", hard: "强" }[level];
+  const tag = { easy: "弱", medium: "中", hard: "强", master: "大师" }[level];
   seat.playerId = uid("ai");
   seat.nickname = `AI${seatIndex + 1}·${tag}`;
   seat.avatar = "🤖";
@@ -798,10 +798,54 @@ export function recommendPlay(room, playerId) {
 export const AI_PROFILES = {
   easy:   { contest: true, feed: true, pull: false, voidDiscard: false, riskAware: false, bidRatio: 0.62, temp: 1.6  },
   medium: { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: false, bidRatio: 0.50, temp: 0.55 },
-  hard:   { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: true,  bidRatio: 0.42, temp: 0.12 }
+  hard:   { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: true,  bidRatio: 0.42, temp: 0.12 },
+  // 大师：叫牌/扣底/亮主等沿用 hard 启发式；出牌阶段由服务端接入 PIMC 搜索
+  // （src/ai/pimc.js）逐步推演，强于纯启发式。见 server.js 的 masterStep。
+  master: { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: true,  bidRatio: 0.42, temp: 0.12 }
 };
 export function aiProfile(seat) {
   return AI_PROFILES[seat?.aiLevel] || AI_PROFILES.medium;
+}
+
+// Tunable scoring weights for the heuristic (scoreFollow / scoreLead). The
+// defaults reproduce the hand-crafted behaviour EXACTLY; a self-play optimiser
+// (bench/tune-weights.mjs) perturbs them and the best vector can be loaded at
+// startup via loadAiWeights(). Centralised here so tuning never edits the
+// scoring logic itself. PIMC rollouts use this same heuristic, so improving
+// these weights lifts every difficulty AND the search.
+export const AI_WEIGHTS = {
+  // ── follow (scoreFollow) ──
+  fCost: 0.5,          // ×spendCost — conserve strong cards
+  fAllyFeed: 2.5,      // ×points — pour points to a securely-winning partner
+  fAllyKeep: 0.2,      // ×points — otherwise keep points low under a partner
+  fAllySecure: 1.5,    // ×points — 3rd-hand-high: secure team points
+  fAllySecureBase: 1,  // flat bonus for the secure play
+  fEnemyWinPts: 2,     // ×points — reward for taking an enemy trick
+  fEnemyWinBase: 1,    // flat bonus for contesting
+  fRiskWin: 0.5,       // ×reward — discount when the win isn't secured
+  fRiskOwnPts: 1.0,    // ×points — penalty: own points exposed to overtake
+  fDuck: 0.4,          // ×reward — extra discount when a teammate can still take it
+  fGiftPts: 3.5,       // ×points — penalty for gifting points to enemies
+  // ── lead (scoreLead) ──
+  lProbe: 0.5,         // base score of the safe low probe
+  lProbeCard: 0.01,    // ×cardOrderValue tiebreak on the probe
+  lNonBoss: 5,         // penalty for leading a beatable high card/combo
+  lNonBossCard: 0.01,  // ×cardOrderValue tiebreak
+  lBossBase: 3,        // base for cashing a boss combo
+  lBossPts: 3,         // ×points banked
+  lBossLen: 1.5,       // ×combo length (clear cards / pressure)
+  lTrumpPull: 4,       // declarer pulling-trump bonus base
+  lTrumpKeep: 2,       // penalty for leading trump when not pulling
+  lAceRuff: 4          // penalty for cashing a bare side ace into ruff risk
+};
+
+// Merge an override object into AI_WEIGHTS in place (only known keys). Used by
+// the tuner and by server startup to apply a saved weight vector.
+export function loadAiWeights(overrides = {}) {
+  for (const k of Object.keys(AI_WEIGHTS)) {
+    if (typeof overrides[k] === "number" && Number.isFinite(overrides[k])) AI_WEIGHTS[k] = overrides[k];
+  }
+  return AI_WEIGHTS;
 }
 
 // Per-seat PRNG (advanced each draw) so same-level AIs don't play identically.
@@ -848,6 +892,31 @@ export function chooseAiPlay(room, seat, leaderCards = null) {
     }
   } catch (_) { /* fall through to the safe baseline */ }
   return safeAiPlay(room, seat, leaderCards);
+}
+
+// Enumerate the de-duplicated LEGAL candidate plays for a seat — used by the
+// search-based AI (PIMC/ISMCTS) to know which moves to evaluate. Mirrors what
+// the heuristic considers: when leading, the develop-probe + every boss group;
+// when following, the bounded legal-follow set. The heuristic's own pick is
+// always appended so the list is never empty and never illegal.
+export function legalCandidatePlays(room, seat, leaderCards = null) {
+  const led = leaderCards || null;
+  const out = [];
+  const seen = new Set();
+  const add = (cards) => {
+    if (!cards || !cards.length) return;
+    if (!validatePlay(room, seat, cards, led).ok) return;
+    const key = cards.map((c) => c.id).slice().sort().join(",");
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(cards);
+  };
+  try {
+    if (!led) for (const c of leadCandidates(room, seat)) add(c);
+    else for (const c of followCandidates(room, seat, led)) add(c);
+  } catch (_) { /* fall back to just the safe pick */ }
+  add(chooseAiPlay(room, seat, led));
+  return out;
 }
 
 // Conservative baseline (the original behaviour): follow with the lowest legal
@@ -2072,7 +2141,7 @@ export function cardOrderValue(card, room) {
   return rankNumber(card.rank);
 }
 
-function playSuit(card, room) {
+export function playSuit(card, room) {
   if (card.rank === "bigJoker" || card.rank === "smallJoker") return "trump";
   if (card.rank === room.levelRank) return "trump";
   if (!room.noTrump && card.suit === room.trumpSuit) return "trump";
@@ -2605,7 +2674,7 @@ function calledCardLabel(call) {
   return `${call.suit}${call.rank}`;
 }
 
-function dealerTeamSeats(room) {
+export function dealerTeamSeats(room) {
   if (isFixedTeamMode(room)) {
     // 固定隔座队：与庄家同奇偶的座位是一队（4 人 {0,2}/{1,3}；6 人 {0,2,4}/{1,3,5}）。
     const parity = room.dealerSeat % 2;
@@ -2619,7 +2688,7 @@ function attackerSeats(room) {
   return room.seats.map((seat) => seat.index).filter((index) => !dealerTeam.has(index));
 }
 
-function isDealerTeam(room, seatIndex) {
+export function isDealerTeam(room, seatIndex) {
   return dealerTeamSeats(room).includes(seatIndex);
 }
 

@@ -32,6 +32,7 @@ import {
   startAuction,
   startRound
 } from "./src/game.js";
+import { pimcChoosePlay } from "./src/ai/pimc.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
@@ -40,6 +41,15 @@ const rooms = new Map();
 const sockets = new Map();
 const BID_RESPONSE_TIMEOUT_MS = 10000;
 const BURY_TIMEOUT_MS = 120000;
+// 搜索型 AI 的 PIMC 预算（按难度档）。timeBudgetMs 给每步思考设上限，避免阻塞
+// 服务端事件循环过久（回合制 + 友人对局可接受）。rollout 用启发式，不会递归回
+// 搜索。可用环境变量覆盖时间预算。
+//   强  ：轻量搜索，采样少、预算短 → 仍近乎秒出，但已用上"记牌器"推演。
+//   大师：深度搜索，采样多、预算长 → 最强，出牌略慢。
+const SEARCH_OPTS = {
+  hard:   { determinizations: 24, maxCandidates: 6, timeBudgetMs: Number(process.env.HARD_PIMC_MS || 400),    rolloutLevel: "hard" },
+  master: { determinizations: 40, maxCandidates: 8, timeBudgetMs: Number(process.env.MASTER_PIMC_MS || 1200), rolloutLevel: "hard" }
+};
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -207,11 +217,21 @@ function handleMessage(client, message) {
       return;
     }
 
-    // Recommended play — compute via AI logic and reply only to the requester.
+    // Recommended play — use the PIMC search (记牌器 + 推演) so the hint is an
+    // actual optimised pick, not just a rule-legal one. One-shot + user-triggered,
+    // so the深搜延迟可接受；任何失败回退到启发式 recommendPlay。
     if (type === "hint") {
       const room = currentRoom(client);
       let cardIds = [];
-      try { cardIds = recommendPlay(room, client.playerId) || []; } catch { cardIds = []; }
+      try {
+        const seat = room?.seats.find((s) => s.playerId === client.playerId);
+        if (seat && room.phase === "playing" && room.turnSeat === seat.index) {
+          const cards = pimcChoosePlay(room, seat.index, SEARCH_OPTS.master);
+          cardIds = cards && cards.length ? cards.map((c) => c.id) : (recommendPlay(room, client.playerId) || []);
+        } else {
+          cardIds = recommendPlay(room, client.playerId) || [];
+        }
+      } catch { try { cardIds = recommendPlay(room, client.playerId) || []; } catch { cardIds = []; } }
       send(client, "hint", { cardIds });
       return;
     }
@@ -396,6 +416,27 @@ function scheduleBidTimeout(room, delay = BID_RESPONSE_TIMEOUT_MS) {
   }, delay);
 }
 
+// 搜索档（强 / 大师）：轮到搜索型 AI（或其托管座位）在出牌阶段行动时，用 PIMC
+// 搜索选牌而非默认启发式。返回 true 表示已出牌。任何异常都吞掉并返回 false，让外层
+// 回退到 runAiStep（即该座位的启发式出牌），保证绝不卡死。
+function searchStep(room) {
+  if (room.phase !== "playing") return false;
+  if ((room.trickPauseUntil || 0) > Date.now()) return false;
+  const seat = room.seats[room.turnSeat];
+  if (!seat || !(seat.isAi || seat.trustee)) return false;
+  // 托管的真人座位（aiLevel 为空）默认用"强"档搜索，让自动出牌也用上记牌器。
+  const opts = SEARCH_OPTS[seat.aiLevel] || (seat.trustee ? SEARCH_OPTS.hard : null);
+  if (!opts) return false; // 弱/中：纯启发式，不搜索
+  try {
+    const cards = pimcChoosePlay(room, room.turnSeat, opts);
+    if (!cards || !cards.length) return false;
+    playCards(room, seat.playerId, cards.map((c) => c.id));
+    return true;
+  } catch (_) {
+    return false; // 回退到启发式
+  }
+}
+
 function scheduleAi(room) {
   scheduleAutoTrustee(room); // 轮到掉线真人时宽限后自动托管，避免整桌卡死
   if (room.phase === "burying") scheduleBuryTimeout(room);
@@ -406,7 +447,7 @@ function scheduleAi(room) {
   setTimeout(() => {
     let moved = false;
     try {
-      moved = runAiStep(room);
+      moved = searchStep(room) || runAiStep(room);
     } catch (error) {
       room.tableLog.push(`AI 操作失败：${error.message}`);
       broadcast(room);

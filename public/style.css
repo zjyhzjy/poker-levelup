@@ -462,6 +462,12 @@ button, input, select { font: inherit; }
   min-width: 20px;
   text-align: center;
 }
+.seat-btn.ai-lv-master {
+  background: linear-gradient(135deg, rgba(200,144,45,.55), rgba(150,60,160,.55));
+  border-color: rgba(220,170,90,.8);
+  font-weight: 600;
+}
+.seat-btn.ai-lv-master:active { background: linear-gradient(135deg, rgba(200,144,45,.8), rgba(150,60,160,.8)); }
 
 /* Seat positions by screen position (viewer always at pos 0) */
 .screen-pos-0 { bottom: 185px; left: 50%; transform: translateX(-50%); }

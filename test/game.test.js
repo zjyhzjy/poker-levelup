@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
 import { addAiPlayer, analyzeShape, buryKitty, callSixTrump, chooseAiFriendCard, chooseAiPlay, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, determineTrickWinner, evaluateBid, makeBid, passBid, passSixTrump, playCards, publicState, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, upgradeResult, upgradeResultClassic4, upgradeResultSix, validatePlay } from "../src/game.js";
+import { buryMultiplierClassic4 } from "../src/rules/classic4.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -1026,7 +1027,17 @@ test("4 人 80 分结算分档", () => {
   assert.deepEqual(upgradeResultClassic4(200), { side: "attackers", steps: 3, label: "闲家队上台，升 3 级" });
 });
 
-test("4 人 80 分：拖拉机扣底固定 8 倍", () => {
+test("4 人 80 分底牌倍率 = 2^张数（单×2 对×4 4张拖×16 6张拖×64）", () => {
+  const tractor = (count) => ({ type: "tractor", unit: 2, count });
+  assert.equal(buryMultiplierClassic4(null), 2);                       // 单张 2^1
+  assert.equal(buryMultiplierClassic4({ type: "single" }), 2);
+  assert.equal(buryMultiplierClassic4({ type: "pair" }), 4);           // 2^2
+  assert.equal(buryMultiplierClassic4(tractor(2)), 16);               // 4 张拖拉机 2^4
+  assert.equal(buryMultiplierClassic4(tractor(3)), 64);               // 6 张拖拉机 2^6
+  assert.equal(buryMultiplierClassic4(tractor(4)), 256);              // 8 张拖拉机 2^8
+});
+
+test("4 人 80 分：4 张拖拉机扣底 16 倍（整局结算）", () => {
   const room = createRoom("FOURKITTY", { seatCount: 4 });
   const deck = createDeck(2);
   for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; s.level = i % 2 === 0 ? "2" : "2"; }
@@ -1048,8 +1059,8 @@ test("4 人 80 分：拖拉机扣底固定 8 倍", () => {
   for (let i = 0; i < 4; i += 1) room.seats[i].hand = plays[i];
   for (let i = 0; i < 4; i += 1) playCards(room, `p${i}`, plays[i].map((card) => card.id));
   assert.equal(room.phase, "roundOver");
-  assert.equal(room.lastResult.buriedBonus, 160);
-  assert.equal(room.lastResult.attackers, 160);
+  assert.equal(room.lastResult.buriedBonus, 320); // 16 倍 × 底牌 20 分
+  assert.equal(room.lastResult.attackers, 320);
 });
 
 test("5 人房间默认配置不变（回归）", () => {

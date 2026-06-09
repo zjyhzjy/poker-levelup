@@ -8,9 +8,11 @@ export function upgradeResultClassic4(attackers) {
   return { side: "attackers", steps: 3, label: "闲家队上台，升 3 级" };
 }
 
+// 4 人 80 分底牌倍率 = 2^(获胜牌张数)，与全局规则一致：
+// 单张 ×2、对子 ×4、4 张拖拉机 ×16、6 张 ×64、8 张 ×256。
 export function buryMultiplierClassic4(shape) {
-  if (!shape) return 2;
-  if (shape.type === "pair") return 4;
-  if (shape.type === "tractor") return 8;
+  if (!shape) return 2;                                  // 单张 2^1
+  if (shape.type === "pair") return 4;                   // 2^2
+  if (shape.type === "tractor") return 2 ** (shape.unit * shape.count); // 2^张数
   return 2;
 }

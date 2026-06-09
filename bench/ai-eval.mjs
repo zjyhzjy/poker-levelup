@@ -33,7 +33,9 @@ function playGame(levels, seed) {
   startRound(room, mulberry32(seed));
   runAuction(room);
   let steps = 0, ok = true;
-  try { while (room.phase !== "roundOver" && steps++ < 3000) runAiStep(room); }
+  // 离线连跑：清掉每墩之间的展示暂停（trickPauseUntil），否则 runAiStep 会一直
+  // 因暂停返回 false、整局卡在第一墩后无法推进（线上由定时器处理，离线必须手动清）。
+  try { while (room.phase !== "roundOver" && steps++ < 3000) { room.trickPauseUntil = 0; runAiStep(room); } }
   catch { ok = false; }
   if (room.phase !== "roundOver") ok = false;
   return ok ? room : null;
