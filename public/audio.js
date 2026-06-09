@@ -51,26 +51,73 @@ function pluck(freq, when, dur = 0.5, gain = 0.18, type = "triangle") {
   o.start(when); o.stop(when + dur + 0.05);
 }
 
-// File-based BGM: if public/bgm.mp3 exists, loop it (so you can drop in any track
-// you're allowed to use); otherwise fall back to the synth loop below.
-let bgmEl = null; // HTMLAudioElement | "missing" | null
+// File-based BGM with a track picker. The default track (6199) has a 32s intro
+// then the in-game loop: we play the [0,32s) region on the opening/lobby and loop
+// the [32s,end) region once a hand starts. Other tracks just loop whole. Selection
+// persists. Falls back to the synth loop only if the bundled /bgm.mp3 fails.
+const MUSIC = [
+  { id: "default", name: "默认（开场+牌局）", src: "/bgm.mp3", splitAt: 32 },
+  { id: "swing",   name: "摇摆爵士",          src: "https://assets.mixkit.co/music/526/526.mp3" },
+  { id: "jazz",    name: "轻松爵士",          src: "https://assets.mixkit.co/music/528/528.mp3" },
+  { id: "world",   name: "游戏节拍",          src: "https://assets.mixkit.co/music/466/466.mp3" }
+];
+let trackId = localStorage.getItem("szp.track") || "default";
+let musicPhase = "lobby";          // "lobby" (intro) | "game"
+let bgmEl = null;                  // HTMLAudioElement | null
+let bgmFailed = false;             // bundled file failed → use synth
+let regionStart = 0, regionEnd = Infinity;
+const curTrack = () => MUSIC.find((t) => t.id === trackId) || MUSIC[0];
+
+function applyRegion() {
+  const t = curTrack();
+  const dur = (bgmEl && bgmEl.duration) || Infinity;
+  if (t.splitAt && musicPhase === "lobby") { regionStart = 0; regionEnd = t.splitAt; }
+  else if (t.splitAt) { regionStart = t.splitAt; regionEnd = dur; } // in-game region
+  else { regionStart = 0; regionEnd = dur; }                        // non-split: whole loop
+}
+
 function startMusic() {
-  if (!ensureCtx()) return;
-  if (bgmEl === "missing") { startSynthMusic(); return; }
+  if (!ensureCtx() || trackId === "off") return;
+  if (bgmFailed) { startSynthMusic(); return; }
   if (!bgmEl) {
-    bgmEl = new Audio("/bgm.mp3");
-    bgmEl.loop = true;
+    bgmEl = new Audio(curTrack().src);
+    bgmEl.loop = false;            // we loop a sub-region manually (see timeupdate)
     bgmEl.volume = Math.min(1, volume);
-    bgmEl.addEventListener("error", () => { if (bgmEl !== "missing") { bgmEl = "missing"; startSynthMusic(); } });
+    bgmEl.addEventListener("loadedmetadata", () => { applyRegion(); if (bgmEl.currentTime < regionStart) bgmEl.currentTime = regionStart; });
+    bgmEl.addEventListener("timeupdate", () => { if (regionEnd !== Infinity && bgmEl.currentTime >= regionEnd - 0.06) bgmEl.currentTime = regionStart; });
+    bgmEl.addEventListener("ended", () => { bgmEl.currentTime = regionStart; bgmEl.play().catch(() => {}); });
+    bgmEl.addEventListener("error", () => { if (curTrack().id === "default") { bgmFailed = true; bgmEl = null; startSynthMusic(); } });
   }
+  applyRegion();
+  if (bgmEl.currentTime < regionStart || (regionEnd !== Infinity && bgmEl.currentTime >= regionEnd)) bgmEl.currentTime = regionStart;
   bgmEl.volume = Math.min(1, volume);
   const p = bgmEl.play();
-  if (p && p.catch) p.catch(() => { bgmEl = "missing"; startSynthMusic(); });
+  if (p && p.catch) p.catch(() => {});
 }
 function stopMusic() {
-  if (bgmEl && bgmEl !== "missing") { try { bgmEl.pause(); } catch (_) {} }
+  if (bgmEl) { try { bgmEl.pause(); } catch (_) {} }
   stopSynthMusic();
 }
+// Tell the music which phase we're in so the default track switches intro↔in-game.
+export function setMusicPhase(phase) {
+  const p = phase === "lobby" ? "lobby" : "game";
+  if (p === musicPhase) return;
+  musicPhase = p;
+  if (!curTrack().splitAt) return;
+  applyRegion();
+  if (started && musicOn && bgmEl) { bgmEl.currentTime = regionStart; if (bgmEl.paused) bgmEl.play().catch(() => {}); }
+}
+export function selectTrack(id) {
+  trackId = id;
+  localStorage.setItem("szp.track", id);
+  bgmFailed = false;
+  if (bgmEl) { try { bgmEl.pause(); } catch (_) {} bgmEl = null; }
+  stopSynthMusic();
+  if (started && musicOn && id !== "off") startMusic();
+  return id;
+}
+export const musicTracks = () => MUSIC.map((t) => ({ id: t.id, name: t.name }));
+export const currentTrackId = () => trackId;
 
 function startSynthMusic() {
   if (!ensureCtx() || musicTimer) return;
@@ -222,7 +269,7 @@ export function setVolume(v) {
   volume = Math.min(1, Math.max(0, v));
   localStorage.setItem("szp.vol", String(volume));
   if (master) master.gain.setTargetAtTime(volume, ctx.currentTime, 0.03);
-  if (bgmEl && bgmEl !== "missing") bgmEl.volume = Math.min(1, volume);
+  if (bgmEl) bgmEl.volume = Math.min(1, volume);
   return volume;
 }
 export const audioState = () => ({ musicOn, voiceOn, volume, started });

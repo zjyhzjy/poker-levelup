@@ -1,4 +1,4 @@
-import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, setVolume, audioState } from "./audio.js";
+import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, setVolume, setMusicPhase, selectTrack, musicTracks, currentTrackId, audioState } from "./audio.js";
 
 /* ─── State ──────────────────────────────────────────────── */
 // Stable, client-owned player identity. Generated once and reused forever so we
@@ -149,6 +149,7 @@ function connectAndJoin(code, nickname, seatCount) {
     }
     if (msg.type === "state") {
       handleAudioEvents(msg.payload);
+      setMusicPhase(msg.payload.phase === "lobby" ? "lobby" : "game"); // 大厅放开场，开打后切牌局曲
       state.room = msg.payload;
       // Remember the room so a refresh / reopen can auto-reconnect us back in.
       if (state.room.code) localStorage.setItem("szp.roomCode", state.room.code);
@@ -1268,6 +1269,7 @@ const audioPanel = document.getElementById("audioPanel");
 const musicChk = document.getElementById("musicChk");
 const voiceChk = document.getElementById("voiceChk");
 const volRange = document.getElementById("volRange");
+const trackSel = document.getElementById("trackSel");
 function refreshAudioBtn() {
   const s = audioState();
   if (audioBtn) audioBtn.classList.toggle("audio-off", !s.musicOn && !s.voiceOn);
@@ -1277,8 +1279,13 @@ function refreshAudioBtn() {
   if (musicChk) musicChk.checked = s.musicOn;
   if (voiceChk) voiceChk.checked = s.voiceOn;
   if (volRange) volRange.value = String(Math.round(s.volume * 100));
+  if (trackSel) {
+    trackSel.innerHTML = musicTracks().map((t) => `<option value="${t.id}">${t.name}</option>`).join("");
+    trackSel.value = currentTrackId();
+  }
   refreshAudioBtn();
 }
+trackSel?.addEventListener("change", () => { unlock(); selectTrack(trackSel.value); });
 audioBtn?.addEventListener("click", (e) => { e.stopPropagation(); unlock(); audioPanel?.classList.toggle("hidden"); });
 document.addEventListener("click", (e) => {
   if (audioPanel && !audioPanel.classList.contains("hidden") && !e.target.closest(".audio-menu")) {
