@@ -125,7 +125,9 @@ setInterval(() => {
 }, ROOM_SWEEP_MS).unref?.();
 
 function serveStatic(urlPath, res) {
-  const safePath = urlPath === "/" ? "/index.html" : urlPath;
+  let decoded = urlPath;
+  try { decoded = decodeURIComponent(urlPath); } catch (_) { /* malformed % — use raw */ }
+  const safePath = decoded === "/" ? "/index.html" : decoded; // 解码后才能命中中文文件名（语音录音）
   const filePath = path.normalize(path.join(publicDir, safePath));
   if (!filePath.startsWith(publicDir)) {
     res.writeHead(403);
@@ -224,7 +226,7 @@ function handleMessage(client, message) {
       const room = currentRoom(client);
       const target = Number(payload.target);
       if (!Number.isInteger(target) || target < 0 || target >= room.seatCount) return;
-      const kind = payload.kind === "flower" ? "flower" : "tomato";
+      const kind = ["tomato", "flower", "poop", "pig", "coffee"].includes(payload.kind) ? payload.kind : "tomato";
       const fromSeat = room.seats.find((s) => s.playerId === client.playerId)?.index ?? null;
       for (const c of sockets.values()) {
         if (c.roomCode === room.code) send(c, "emote", { from: fromSeat, target, kind });
