@@ -288,7 +288,7 @@ export function speak(text) {
   const key = clipKey(text);
   if (clips[key] === "missing") { ttsSpeak(text); return; }
   let c = clips[key];
-  if (!c) { c = new Audio(`/voice/${encodeURIComponent(key)}.wav`); clips[key] = c; } // ChatTTS 录音
+  if (!c) { c = new Audio(`/voice/${encodeURIComponent(key)}.wav?v=2`); clips[key] = c; } // ChatTTS 录音(v2 平稳版)
   try {
     c.volume = Math.min(1, fxVol + 0.1);
     c.currentTime = 0;
