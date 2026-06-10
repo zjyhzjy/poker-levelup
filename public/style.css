@@ -580,6 +580,13 @@ body.desktop .seats.players-6 .played-card .card-center.joker-text { font-size: 
   text-shadow: 0 1px 4px rgba(0,0,0,.8);
   margin-bottom: 4px;
 }
+.score-main { line-height: 1.25; }
+.score-sub {
+  margin-top: 2px;
+  font-size: 10px;
+  color: rgba(244,238,213,.72);
+  font-weight: 500;
+}
 
 .turn-info {
   font-size: 12px;
@@ -1072,6 +1079,23 @@ body.desktop .friend-pop { font-size: 30px; }
   top: 0; left: 0;
 }
 
+.round-kitty-row {
+  display: flex;
+  justify-content: center;
+  gap: 3px;
+  margin: 0 auto 8px;
+  max-width: min(86vw, 340px);
+  overflow: hidden;
+}
+.kitty-mini-card {
+  transform: scale(.58);
+  transform-origin: top center;
+  width: 30px;
+  height: 42px;
+  flex: 0 0 30px;
+}
+.round-result-lines { line-height: 1.65; }
+
 /* Count badge on stack */
 .stack-count {
   position: absolute;
@@ -1206,6 +1230,51 @@ body.desktop #standingsToggle { right: 82px; }
 .champ-confetti {
   position: fixed; z-index: 300; pointer-events: none;
   font-size: 26px; will-change: transform, opacity;
+}
+
+.kick-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: calc(env(safe-area-inset-top, 0px) + 54px) 12px 12px;
+  background: rgba(0,0,0,.18);
+}
+.kick-dialog {
+  width: min(280px, calc(100vw - 24px));
+  padding: 10px;
+  border: 1px solid rgba(200,144,45,.48);
+  border-radius: 8px;
+  background: rgba(18,28,20,.96);
+  box-shadow: 0 12px 34px rgba(0,0,0,.55);
+  color: var(--text-on-felt);
+}
+.kick-dialog-title {
+  color: var(--gold-light);
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.kick-dialog-list {
+  display: grid;
+  gap: 6px;
+}
+.kick-target {
+  border: 1px solid rgba(200,144,45,.35);
+  border-radius: 6px;
+  background: rgba(255,255,255,.08);
+  color: var(--text-on-felt);
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 14px;
+}
+.kick-target:active { background: rgba(200,144,45,.22); }
+.kick-empty {
+  padding: 10px;
+  color: var(--muted-felt);
+  font-size: 13px;
 }
 
 #log {
@@ -1370,9 +1439,11 @@ body.desktop .spectator-name { font-size: 12px; }
   transform: translate(-50%, -100%);
   transform-origin: 50% 100%;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
-  max-width: min(86vw, 272px);
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  overflow-x: auto;
   gap: 6px;
   padding: 6px;
   background: rgba(18,28,20,.96);

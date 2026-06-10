@@ -108,6 +108,7 @@ export function createRoom(code = randomRoomCode(), options = {}) {
     finishedTricks: [],
     tableLog: [],
     scores: { attackers: 0, dealerTeam: 0 },
+    throwPenaltyStats: { attackers: 0, dealerTeam: 0, netToAttackers: 0 },
     seatPersonalScores: {},  // seatIndex -> number (pre-friend-reveal personal scores)
     lastResult: null
   };
@@ -151,6 +152,25 @@ export function sit(room, playerId, seatIndex, nickname, avatar) {
   room.spectators.delete(playerId);
 }
 
+export function takeoverAiSeat(room, playerId, seatIndex, nickname, avatar) {
+  const existingSeat = findSeatByPlayer(room, playerId);
+  if (existingSeat) throw new Error("你已经入座了");
+  const seat = room.seats[seatIndex];
+  if (!seat) throw new Error("座位不存在");
+  if (!seat.isAi || !seat.playerId) throw new Error("只能接管 AI 座位");
+  seat.playerId = playerId;
+  seat.nickname = sanitizeNickname(nickname) || room.spectators.get(playerId)?.nickname || `玩家${seatIndex + 1}`;
+  if (typeof avatar === "string" && avatar.trim()) seat.avatar = avatar.trim().slice(0, 8);
+  else seat.avatar = null;
+  seat.connected = true;
+  seat.isAi = false;
+  seat.aiLevel = null;
+  seat.aiWeights = undefined;
+  seat.trustee = false;
+  room.spectators.delete(playerId);
+  room.tableLog.push(`${seat.nickname} 接管了座位 ${seatIndex + 1} 的 AI，继续本局。`);
+}
+
 export function addAiPlayer(room, seatIndex, aiLevel = "medium") {
   assertPhase(room, PHASES.LOBBY);
   const seat = room.seats[seatIndex];
@@ -188,6 +208,34 @@ export function kickAi(room, seatIndex) {
   const seat = room.seats[seatIndex];
   if (!seat) throw new Error("座位不存在");
   if (!seat.isAi) throw new Error("只能踢 AI");
+  clearSeatForKick(room, seatIndex, { toSpectator: false });
+}
+
+export function kickSeatByVote(room, seatIndex) {
+  const seat = room.seats[seatIndex];
+  if (!seat || !seat.playerId) throw new Error("目标座位不存在");
+  if (room.phase === PHASES.LOBBY) {
+    clearSeatForKick(room, seatIndex, { toSpectator: true });
+    return;
+  }
+  if (seat.isAi) throw new Error("牌局中不能移除 AI 座位");
+  seat.playerId = uid("ai");
+  seat.nickname = `AI替补${seatIndex + 1}`;
+  seat.avatar = "🤖";
+  seat.connected = true;
+  seat.isAi = true;
+  seat.aiLevel = seat.aiLevel || "medium";
+  seat.aiRngState = (Math.random() * 2 ** 31) | 0;
+  seat.aiBias = Math.random() - 0.5;
+  seat.trustee = false;
+}
+
+function clearSeatForKick(room, seatIndex, { toSpectator }) {
+  const seat = room.seats[seatIndex];
+  if (!seat) throw new Error("座位不存在");
+  if (toSpectator && seat.playerId && !seat.isAi) {
+    room.spectators.set(seat.playerId, { playerId: seat.playerId, nickname: seat.nickname, connected: true });
+  }
   seat.playerId = null;
   seat.nickname = "";
   seat.avatar = null;
@@ -239,6 +287,7 @@ export function startRound(room, random = Math.random, options = {}) {
   room.throwResult = null;
   room.finishedTricks = [];
   room.scores = { attackers: 0, dealerTeam: 0 };
+  room.throwPenaltyStats = { attackers: 0, dealerTeam: 0, netToAttackers: 0 };
   room.seatPersonalScores = {};
   room.lastResult = null;
   room.tableLog = [];
@@ -494,6 +543,7 @@ function redealSixSameRound(room, dealerSeat) {
   room.throwResult = null;
   room.finishedTricks = [];
   room.scores = { attackers: 0, dealerTeam: 0 };
+  room.throwPenaltyStats = { attackers: 0, dealerTeam: 0, netToAttackers: 0 };
   room.seatPersonalScores = {};
   room.lastResult = null;
   room.kitty = [];
@@ -559,6 +609,7 @@ export function forceDealer(room, lastKittyCard) {
   room.noTrump = isJoker;
   room.trumpSuit = isJoker ? null : lastKittyCard.suit;
   room.currentBid = { seat: seatIndex, playerId: dealer.playerId, strength: 0, levelRank: dealer.level, trumpSuit: room.trumpSuit, noTrump: room.noTrump };
+  if (!isJoker) room.currentBid.cards = [lastKittyCard];
   room.seatBids = {};
   room.bidResponses = {};
   room.phase = PHASES.FORCED_SUIT;
@@ -581,7 +632,7 @@ export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
     if (cards.length !== 3 || !cards.every((card) => card.suit === "joker")) throw new Error("亮无主需要选择 3 张王");
     room.noTrump = true;
     room.trumpSuit = null;
-    if (room.currentBid) { room.currentBid.noTrump = true; room.currentBid.trumpSuit = null; }
+    if (room.currentBid) { room.currentBid.noTrump = true; room.currentBid.trumpSuit = null; room.currentBid.cards = cards; room.currentBid.strength = cards.length; }
     sortHand(dealer.hand, room);
     room.tableLog.push(`${dealer.nickname} 亮 3 张王，强制定为无主。`);
     giveKittyToDealer(room);
@@ -594,7 +645,8 @@ export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
     if (!hasLevelCard && !isFixedTeamMode(room)) throw new Error(`你手里没有 ${suit} 的级牌，不能亮此花色`);
     room.trumpSuit = suit;
     room.noTrump = false;
-    if (room.currentBid) { room.currentBid.trumpSuit = suit; room.currentBid.noTrump = false; }
+    const revealCards = dealer.hand.filter((card) => card.rank === room.levelRank && card.suit === suit).slice(0, 3);
+    if (room.currentBid) { room.currentBid.trumpSuit = suit; room.currentBid.noTrump = false; room.currentBid.cards = revealCards; room.currentBid.strength = revealCards.length; }
   }
   // If suit is null: keep whatever noTrump/trumpSuit forceDealer already set
   sortHand(dealer.hand, room);
@@ -1433,6 +1485,9 @@ function findHandTractors(sortedDesc, room) {
 export function recomputeScores(room) {
   let attackers = 0;
   let dealerTeam = 0;
+  let attackerThrowPenalty = 0;
+  let dealerThrowPenalty = 0;
+  let netThrowToAttackers = 0;
   for (const seat of room.seats) {
     if (isDealerTeam(room, seat.index)) dealerTeam += seat.takenTrickPoints;
     else attackers += seat.takenTrickPoints;
@@ -1442,10 +1497,22 @@ export function recomputeScores(room) {
   for (const [idxStr, penalty] of Object.entries(room.seatPersonalScores || {})) {
     if (penalty >= 0) continue;
     const idx = Number(idxStr);
-    if (isDealerTeam(room, idx)) attackers += Math.abs(penalty);
-    else attackers += penalty;
+    if (isDealerTeam(room, idx)) {
+      dealerThrowPenalty += Math.abs(penalty);
+      netThrowToAttackers += Math.abs(penalty);
+      attackers += Math.abs(penalty);
+    } else {
+      attackerThrowPenalty += Math.abs(penalty);
+      netThrowToAttackers += penalty;
+      attackers += penalty;
+    }
   }
   room.scores = { attackers: Math.max(0, attackers), dealerTeam };
+  room.throwPenaltyStats = {
+    attackers: attackerThrowPenalty,
+    dealerTeam: dealerThrowPenalty,
+    netToAttackers: netThrowToAttackers
+  };
 }
 
 function finishTrick(room) {
@@ -1514,7 +1581,7 @@ function finishRound(room, lastWinner) {
       seat.level = levelAdvance(seat.level, result.steps);
     }
   }
-  room.lastResult = { attackers, buriedBonus, result, upgradedSeats, champion };
+  room.lastResult = { attackers, buriedBonus, result, upgradedSeats, champion, hiddenKitty: room.hiddenKitty };
   // 战绩：累积每局结果，供“战绩”面板展示。
   (room.matchLog ||= []).push({
     round: room.round, attackers, label: result.label,
@@ -1779,7 +1846,7 @@ function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available)
     if (comp.kind !== "tractor") continue;
     const need = comp.unit * comp.count;
     const pool = comp.unit === 2
-      ? available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`))
+      ? naturalPairPool(available, room, lockedSet)
       : available;
     if (findTractors(pool, room, need).length && !findTractors(playedSameSuit, room, need).length) {
       return { ok: false, reason: "需要优先跟拖拉机" };
@@ -2089,7 +2156,7 @@ function matchingThrowTierValue(cards, room, target) {
       if (comp.kind === "tractor" && comp.unit === target.unit && comp.count >= target.count) {
         value = Math.max(value, cardOrderValue(comp.cards[0], room));
       }
-    } else if (comp.kind === "group" && comp.unit === target.unit) {
+    } else if (comp.kind === "group" && comp.unit >= target.unit) {
       value = Math.max(value, cardOrderValue(comp.cards[0], room));
     }
   }
@@ -2185,17 +2252,21 @@ function lockedPairViolation(seat, cards, room) {
   return null;
 }
 
-// 在“跟对子”的选择时刻记录玩家是否保留了三条：
-// 当首家出对子、跟家该门没有天然对子但有三条时，玩家可以选择不拆三条。
-// 若他这一手没有把某副三条拆成对子（出的牌里该三条点数花色不足 2 张），
-// 则把这副三条锁定，本局之后不得再拆成对子出。每位玩家分别记录。
+// 在“需要对子但天然对子不够”的选择时刻记录玩家是否保留了三条：
+// 若对子需求已由天然对子满足，三条没有参与选择，不锁；
+// 若天然对子不足而玩家没有把某副三条拆成对子，则这副三条本局之后不得再拆成对子。
 function recordTripleLockDecision(room, seat, cards, leaderCards) {
   const leaderShape = analyzeShape(leaderCards, room);
-  if (leaderShape.type !== "pair") return;
   const ledSuit = playSuit(leaderCards[0], room);
-  const available = seat.hand.filter((c) => playSuit(c, room) === ledSuit); // 出牌前的手牌
+  const playedAllTrumpCut = ledSuit !== "trump" && cards.every((c) => playSuit(c, room) === "trump");
+  const poolSuit = playedAllTrumpCut ? "trump" : ledSuit;
+  const available = seat.hand.filter((c) => playSuit(c, room) === poolSuit); // 出牌前的手牌
+  const pairDemand = pairDemandForTripleChoice(leaderShape, leaderCards, room);
+  if (pairDemand <= 0) return;
+
   const groups = groupCards([...available].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)));
-  if (groups.some((g) => g.length === 2)) return; // 有天然对子 → 被强制跟对子，不存在“选择”
+  const naturalPairs = groups.filter((g) => g.length === 2).length;
+  if (naturalPairs >= pairDemand) return;
   const triples = groups.filter((g) => g.length >= 3);
   if (triples.length === 0) return;
   if (!seat.lockedTriples) seat.lockedTriples = [];
@@ -2203,8 +2274,20 @@ function recordTripleLockDecision(room, seat, cards, leaderCards) {
     const key = `${t[0].rank}|${t[0].suit}`;
     if (seat.lockedTriples.includes(key)) continue;
     const playedOfKey = cards.filter((c) => c.rank === t[0].rank && c.suit === t[0].suit).length;
-    if (playedOfKey !== 2) seat.lockedTriples.push(key); // 没拆成对子 → 锁定
+    if (playedOfKey < 2) seat.lockedTriples.push(key); // 没拆成对子 → 锁定
   }
+}
+
+function pairDemandForTripleChoice(leaderShape, leaderCards, room) {
+  if (leaderShape.type === "pair") return 1;
+  if (leaderShape.type === "tractor" && leaderShape.unit === 2) return leaderShape.count;
+  if (leaderShape.type !== "throw") return 0;
+  const ledSuit = playSuit(leaderCards[0], room);
+  return decomposeThrowComponents(leaderCards, room, ledSuit).reduce((sum, comp) => {
+    if (comp.kind === "tractor" && comp.unit === 2) return sum + comp.count;
+    if (comp.kind === "group" && comp.unit === 2) return sum + 1;
+    return sum;
+  }, 0);
 }
 
 function forcedRequirement(leaderShape, available, room, lockedTriples = []) {
@@ -2229,9 +2312,9 @@ function forcedRequirement(leaderShape, available, room, lockedTriples = []) {
       }
 
       const pairSlots = Math.floor(total / 2);
-      const pairPool = available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`));
+      const pairPool = naturalPairPool(available, room, lockedSet);
       const pairRun = findBestTractorRun(pairPool, room, 2);
-      const pairAvail = groupCards(pairPool).filter((g) => g.length >= 2).length;
+      const pairAvail = groupCards(pairPool).filter((g) => g.length === 2).length;
       if (pairRun && pairRun.length >= 2) {
         const tractorPairs = Math.min(pairRun.length, pairSlots);
         return { type: "pairTractorFallback", tractorPairs, pairs: Math.min(pairSlots, pairAvail) };
@@ -2243,11 +2326,13 @@ function forcedRequirement(leaderShape, available, room, lockedTriples = []) {
     // 对子拖拉机里锁定点数恰好用 2 张（= 拆对，违规），故检测可跟的拖拉机时
     // 把锁定牌整体剔除；三张单位的拖拉机用整组三张，不触发拆对，无需剔除。
     const tractorPool = leaderShape.unit === 2
-      ? available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`))
+      ? naturalPairPool(available, room, lockedSet)
       : available;
     const tractors = findTractors(tractorPool, room, leaderShape.count * leaderShape.unit);
     if (tractors.length) return { type: "tractor", unit: leaderShape.unit, count: leaderShape.count };
-    const pairsAvail = groupCards(available).filter((g) => g.length >= leaderShape.unit && !isLockedGroup(g));
+    const pairsAvail = groupCards(available).filter((g) =>
+      leaderShape.unit === 2 ? g.length === 2 && !isLockedGroup(g) : g.length >= leaderShape.unit && !isLockedGroup(g)
+    );
     const pairCount = Math.min(leaderShape.count, pairsAvail.length);
     if (pairCount > 0) return { type: "pairs", unit: leaderShape.unit, count: pairCount };
     return { type: "any" };
@@ -2278,6 +2363,17 @@ function forcedRequirement(leaderShape, available, room, lockedTriples = []) {
   return { type: "any" };
 }
 
+function naturalPairPool(cards, room, lockedSet = new Set()) {
+  const groups = groupCards([...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)));
+  const allowed = new Set();
+  for (const g of groups) {
+    if (g.length === 2 && !lockedSet.has(`${g[0].rank}|${g[0].suit}`)) {
+      for (const c of g) allowed.add(c.id);
+    }
+  }
+  return cards.filter((c) => allowed.has(c.id));
+}
+
 function shapeSatisfies(actual, wanted, cards, available, room) {
   if (wanted.type === "any") return true;
 
@@ -2289,8 +2385,8 @@ function shapeSatisfies(actual, wanted, cards, available, room) {
   }
 
   if (wanted.type === "pairs") {
-    // Must contain at least `wanted.count` pairs/triples of the correct unit size
-    const groups = groupCards(sorted).filter((g) => g.length >= wanted.unit);
+    // 对子要求只认天然对子；三条不能被强制拆成对子。
+    const groups = groupCards(sorted).filter((g) => wanted.unit === 2 ? g.length === 2 : g.length >= wanted.unit);
     return groups.length >= wanted.count;
   }
 
@@ -2303,7 +2399,7 @@ function shapeSatisfies(actual, wanted, cards, available, room) {
 
   if (wanted.type === "pairTractorFallback") {
     const run = findBestTractorRun(cards, room, 2);
-    const pairs = groupCards(sorted).filter((g) => g.length >= 2).length;
+    const pairs = groupCards(sorted).filter((g) => g.length === 2).length;
     return !!run && run.length >= wanted.tractorPairs && pairs >= wanted.pairs;
   }
 
@@ -2313,8 +2409,8 @@ function shapeSatisfies(actual, wanted, cards, available, room) {
   }
 
   if (wanted.type === "pair") {
-    // Must contain at least one group of 2
-    return groupCards(sorted).some((g) => g.length >= 2);
+    // Must contain at least one natural pair; triples may be kept intact.
+    return groupCards(sorted).some((g) => g.length === 2);
   }
 
   return true;
@@ -2999,6 +3095,7 @@ export function publicState(room, viewerId = null) {
       : [],
     throwResult: room.throwResult,
     scores: room.scores,
+    throwPenaltyStats: room.throwPenaltyStats || { attackers: 0, dealerTeam: 0, netToAttackers: 0 },
     seatPersonalScores: room.seatPersonalScores || {},
     lastResult: room.lastResult,
     matchLog: room.matchLog || [],

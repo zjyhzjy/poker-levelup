@@ -162,6 +162,8 @@ function connectAndJoin(code, nickname, seatCount) {
       render();
     }
     if (msg.type === "emote") playEmote(msg.payload);
+    if (msg.type === "kickVote") showKickVotePrompt(msg.payload);
+    if (msg.type === "kicked") handleKicked(msg.payload);
     if (msg.type === "hint") applyHint(msg.payload);
     if (msg.type === "error") showError(msg.payload.message);
   });
@@ -318,6 +320,12 @@ function render() {
 
   const trump = room.noTrump ? "无主" : (room.trumpSuit ? suitSymbolColored(room.trumpSuit) : "-");
   $("#roundInfo").innerHTML = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}`;
+  const kickBtn = $("#kickBtn");
+  if (kickBtn) {
+    const seated = room.seats.some((s) => s.isYou);
+    kickBtn.disabled = !seated;
+    kickBtn.style.display = seated ? "" : "none";
+  }
 
   try { renderSeats(room); }    catch(e) { console.error("renderSeats:", e); }
   try { renderCenter(room); }   catch(e) { console.error("renderCenter:", e); }
@@ -647,9 +655,13 @@ function renderSeats(room) {
         </div>`;
       } else if (seat.isYou) {
         actionsHTML = `<div class="seat-actions"><button class="seat-btn" data-leave>离座</button></div>`;
+      } else if (seat.isAi && room.viewerSeat == null) {
+        actionsHTML = `<div class="seat-actions"><button class="seat-btn" data-takeover="${seat.index}" title="接管这个 AI 座位继续打">接管AI</button></div>`;
       } else if (seat.isAi) {
         actionsHTML = `<div class="seat-actions"><button class="seat-btn" data-kick="${seat.index}" title="踢掉这个 AI，让真人坐下">踢掉</button></div>`;
       }
+    } else if (seat.isAi && room.viewerSeat == null) {
+      actionsHTML = `<div class="seat-actions"><button class="seat-btn" data-takeover="${seat.index}" title="接管这个 AI 座位继续打">接管AI</button></div>`;
     }
 
     const levelText = seat.level ? `Lv.${seat.level}` : "";
@@ -692,6 +704,8 @@ function renderSeats(room) {
     btn.addEventListener("click", () => send("leaveSeat")));
   seatsEl.querySelectorAll("[data-kick]").forEach(btn =>
     btn.addEventListener("click", () => send("kickAi", { seatIndex: Number(btn.dataset.kick) })));
+  seatsEl.querySelectorAll("[data-takeover]").forEach(btn =>
+    btn.addEventListener("click", () => send("takeoverAi", { seatIndex: Number(btn.dataset.takeover), nickname: state.nickname, avatar: state.avatar })));
 }
 
 /* ─── Played Cards HTML (beside seat) ───────────────────── */
@@ -758,9 +772,12 @@ function renderCenter(room) {
   // （6 人固定队从开局就已知队伍，直接显示）
   const friendRevealed = room.fixedTeams || room.friendSeat !== null;
   if (friendRevealed || room.phase === "roundOver") {
-    $("#scoreInfo").textContent = `闲家 ${room.scores.attackers} 分 · 庄家队 ${room.scores.dealerTeam} 分`;
+    const penalties = throwPenaltyLines(room);
+    $("#scoreInfo").innerHTML = `
+      <div class="score-main">闲家分数 ${room.scores.attackers} 分</div>
+      ${penalties.length ? `<div class="score-sub">${penalties.join("<br>")}</div>` : ""}`;
   } else {
-    $("#scoreInfo").textContent = "";
+    $("#scoreInfo").innerHTML = "";
   }
   $("#turnInfo").textContent = room.turnSeat != null && room.phase === "playing"
     ? `轮到：${seatName(room, room.turnSeat)}`
@@ -855,6 +872,10 @@ function renderCenter(room) {
     const champLine = r.champion
       ? `<div class="champ-banner">🏆 ${r.champion === "dealer" ? "庄家队" : "闲家队"} 打过 A，夺冠！</div>`
       : "";
+    const kittyCards = (r.hiddenKitty || []).map((c) => `<div class="kitty-mini-card">${playedCardHTML(c)}</div>`).join("");
+    const kittyLine = kittyCards
+      ? `<div class="round-kitty-row">${kittyCards}</div>`
+      : "";
     const lines = [
       `本局闲家得分：${r.attackers} 分`,
       r.buriedBonus > 0 ? `底牌加成：+${r.buriedBonus} 分` : null,
@@ -863,12 +884,21 @@ function renderCenter(room) {
         ? `升级：${r.upgradedSeats.map((i) => seatName(room, i)).join("、")}`
         : null
     ].filter(Boolean).join("<br>");
-    resultEl.innerHTML = champLine + lines;
+    resultEl.innerHTML = champLine + kittyLine + `<div class="round-result-lines">${lines}</div>`;
     resultEl.style.display = "block";
   } else {
     resultEl.innerHTML = "";
     resultEl.style.display = "none";
   }
+}
+
+function throwPenaltyLines(room) {
+  const personal = room.seatPersonalScores || {};
+  return Object.entries(personal)
+    .map(([idx, value]) => ({ idx: Number(idx), points: Math.abs(Number(value) || 0) }))
+    .filter((item) => item.points > 0)
+    .sort((a, b) => a.idx - b.idx)
+    .map((item) => `${seatName(room, item.idx)}甩牌失败扣${item.points}分`);
 }
 
 /* ─── Center "亮主" reveal ───────────────────────────────── */
@@ -1347,6 +1377,60 @@ function exitRoom() {
 
 const exitRoomBtn = document.getElementById("exitRoomBtn");
 if (exitRoomBtn) exitRoomBtn.addEventListener("click", exitRoom);
+
+let kickDialogEl = null;
+function openKickDialog() {
+  const room = state.room;
+  if (!room) return;
+  const you = room.seats.find((s) => s.isYou);
+  if (!you) { showError("请先入座"); return; }
+  closeKickDialog();
+  const targets = room.seats.filter((s) => s.playerId && !s.isYou);
+  const overlay = document.createElement("div");
+  overlay.className = "kick-dialog-backdrop";
+  overlay.innerHTML = `
+    <div class="kick-dialog" role="dialog" aria-modal="true">
+      <div class="kick-dialog-title">发起踢人投票</div>
+      <div class="kick-dialog-list">
+        ${targets.length ? targets.map((s) =>
+          `<button class="kick-target" data-seat="${s.index}">${escapeHtml(s.nickname || `座位${s.index + 1}`)}</button>`
+        ).join("") : `<div class="kick-empty">暂无可选择玩家</div>`}
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeKickDialog();
+  });
+  overlay.querySelectorAll("[data-seat]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      send("kickStart", { targetSeat: Number(btn.dataset.seat) });
+      closeKickDialog();
+    });
+  });
+  kickDialogEl = overlay;
+}
+function closeKickDialog() {
+  if (kickDialogEl) { kickDialogEl.remove(); kickDialogEl = null; }
+}
+
+function showKickVotePrompt(vote) {
+  if (!vote?.voteId) return;
+  const ok = confirm(`${vote.initiatorName} 玩家发起对 ${vote.targetName} 的踢人，是否同意？`);
+  if (ok) send("kickAgree", { voteId: vote.voteId });
+}
+
+function handleKicked(payload = {}) {
+  alert(payload.message || "你已被移出房间。");
+  localStorage.removeItem("szp.roomCode");
+  state.room = null;
+  state.selected.clear();
+  try { state.ws?.close(); } catch (_) {}
+  state.ws = null;
+  document.querySelector('[data-view="game"]').classList.add("hidden");
+  document.querySelector('[data-view="join"]').classList.remove("hidden");
+}
+
+$("#kickBtn")?.addEventListener("click", openKickDialog);
 
 /* ─── Error ──────────────────────────────────────────────── */
 function showError(msg) {

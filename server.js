@@ -18,6 +18,7 @@ import {
   forceDealer,
   joinRoom,
   kickAi,
+  kickSeatByVote,
   leaveSeat,
   makeBid,
   passBid,
@@ -32,6 +33,7 @@ import {
   sit,
   startAuction,
   startRound,
+  takeoverAiSeat,
   loadAiWeights
 } from "./src/game.js";
 import { pimcChoosePlay } from "./src/ai/pimc.js";
@@ -233,6 +235,21 @@ function handleMessage(client, message) {
       return;
     }
 
+    if (type === "kickStart") {
+      const room = currentRoom(client);
+      startKickVote(room, client, Number(payload.targetSeat));
+      broadcast(room);
+      return;
+    }
+
+    if (type === "kickAgree") {
+      const room = currentRoom(client);
+      agreeKickVote(room, client, String(payload.voteId || ""));
+      broadcast(room);
+      scheduleAi(room);
+      return;
+    }
+
     // Recommended play — use the PIMC search (记牌器 + 推演) so the hint is an
     // actual optimised pick, not just a rule-legal one. One-shot + user-triggered,
     // so the深搜延迟可接受；任何失败回退到启发式 recommendPlay。
@@ -255,6 +272,7 @@ function handleMessage(client, message) {
     const room = currentRoom(client);
     const actions = {
       sit:              () => sit(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname, payload.avatar),
+      takeoverAi:       () => takeoverAiSeat(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname, payload.avatar),
       addAi:            () => addAiPlayer(room, Number(payload.seatIndex), payload.level),
       kickAi:           () => kickAi(room, Number(payload.seatIndex)),
       leaveSeat:        () => leaveSeat(room, client.playerId),
@@ -333,6 +351,69 @@ function currentRoom(client) {
 function broadcast(room) {
   for (const client of sockets.values()) {
     if (client.roomCode === room.code) send(client, "state", publicState(room, client.playerId));
+  }
+}
+
+function startKickVote(room, client, targetSeatIndex) {
+  const initiator = room.seats.find((s) => s.playerId === client.playerId);
+  if (!initiator) throw new Error("只有入座玩家可以发起踢人");
+  const target = room.seats[targetSeatIndex];
+  if (!target || !target.playerId) throw new Error("目标玩家不存在");
+  if (target.index === initiator.index) throw new Error("不能踢自己");
+  if (room.kickVote?.timer) clearTimeout(room.kickVote.timer);
+  const vote = {
+    id: crypto.randomUUID(),
+    initiatorSeat: initiator.index,
+    targetSeat: target.index,
+    initiatorName: initiator.nickname || `座位${initiator.index + 1}`,
+    targetName: target.nickname || `座位${target.index + 1}`,
+    targetPlayerId: target.isAi ? null : target.playerId,
+    approvals: new Set([initiator.index])
+  };
+  vote.timer = setTimeout(() => {
+    if (room.kickVote?.id === vote.id) {
+      room.kickVote = null;
+      broadcast(room);
+    }
+  }, 20000);
+  room.kickVote = vote;
+  room.tableLog.push(`${vote.initiatorName} 发起对 ${vote.targetName} 的踢人投票。`);
+  const payload = {
+    voteId: vote.id,
+    initiatorSeat: vote.initiatorSeat,
+    targetSeat: vote.targetSeat,
+    initiatorName: vote.initiatorName,
+    targetName: vote.targetName
+  };
+  for (const c of sockets.values()) {
+    if (c.roomCode !== room.code) continue;
+    const seat = room.seats.find((s) => s.playerId === c.playerId);
+    if (!seat || seat.index === vote.initiatorSeat || seat.index === vote.targetSeat) continue;
+    send(c, "kickVote", payload);
+  }
+}
+
+function agreeKickVote(room, client, voteId) {
+  const vote = room.kickVote;
+  if (!vote || vote.id !== voteId) throw new Error("踢人投票已失效");
+  const voter = room.seats.find((s) => s.playerId === client.playerId);
+  if (!voter) throw new Error("只有入座玩家可以投票");
+  if (voter.index === vote.targetSeat) throw new Error("被踢玩家不能参与投票");
+  vote.approvals.add(voter.index);
+  room.tableLog.push(`${voter.nickname} 同意踢出 ${vote.targetName}。`);
+  if (vote.approvals.size < 2) return;
+  if (vote.timer) clearTimeout(vote.timer);
+  const targetPlayerId = vote.targetPlayerId;
+  kickSeatByVote(room, vote.targetSeat);
+  if (targetPlayerId) room.spectators.delete(targetPlayerId);
+  room.tableLog.push(`踢人投票通过，${vote.targetName} 已离开座位。`);
+  room.kickVote = null;
+  if (targetPlayerId) {
+    for (const c of sockets.values()) {
+      if (c.playerId !== targetPlayerId || c.roomCode !== room.code) continue;
+      send(c, "kicked", { message: "你已被投票移出座位。" });
+      c.roomCode = null;
+    }
   }
 }
 
