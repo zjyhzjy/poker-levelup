@@ -62,8 +62,8 @@ const BURY_TIMEOUT_MS = 120000;
 //   强  ：轻量搜索，采样少、预算短 → 仍近乎秒出，但已用上"记牌器"推演。
 //   大师：深度搜索，采样多、预算长 → 最强，出牌略慢。
 const SEARCH_OPTS = {
-  hard:   { determinizations: 24, maxCandidates: 6, timeBudgetMs: Number(process.env.HARD_PIMC_MS || 400),    rolloutLevel: "hard" },
-  master: { determinizations: 40, maxCandidates: 8, timeBudgetMs: Number(process.env.MASTER_PIMC_MS || 1200), rolloutLevel: "hard" }
+  hard:   { determinizations: 32, maxCandidates: 8,  timeBudgetMs: Number(process.env.HARD_PIMC_MS || 600),    rolloutLevel: "hard" },
+  master: { determinizations: 64, maxCandidates: 12, timeBudgetMs: Number(process.env.MASTER_PIMC_MS || 2200), rolloutLevel: "hard" }
 };
 
 const server = http.createServer((req, res) => {
