@@ -7,3 +7,4 @@ node_modules/
 bench/tune-progress.log
 public/voice/cand/
 asset/
+public/voice/cand2/

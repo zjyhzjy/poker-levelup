@@ -207,7 +207,32 @@ function synthSfx(name) {
     pluckFx(120, t + 0.06, 0.22, 0.28, "sawtooth");
   } else if (name === "deal") {
     pluckFx(800, t, 0.05, 0.12, "square");
+  } else if (name === "tractor") {
+    // 拖拉机=连对：火车汽笛 + 哐当哐当（可被 /sfx/tractor.wav 覆盖）
+    [349.23, 466.16].forEach((f) => {            // 双音汽笛 "呜——"
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.type = "sawtooth"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.16, t + 0.05);
+      g.gain.setValueAtTime(0.16, t + 0.32); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.48);
+      o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.5);
+    });
+    for (let i = 0; i < 6; i++) {                 // 由慢到快的车轮声
+      const when = t + 0.5 + i * (0.16 - i * 0.008);
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.type = "sine"; o.frequency.setValueAtTime(95, when); o.frequency.exponentialRampToValueAtTime(52, when + 0.07);
+      g.gain.setValueAtTime(0.0001, when); g.gain.exponentialRampToValueAtTime(0.3, when + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, when + 0.1);
+      o.connect(g); g.connect(master); o.start(when); o.stop(when + 0.12);
+      noiseBurst(when + 0.005, 0.08, 0.14, 1400); // 蒸汽 "嚓"
+    }
   }
+}
+let _noiseBuf = null;
+function noiseBurst(when, dur, gain, cutoff) {
+  if (!_noiseBuf) { _noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.5), ctx.sampleRate); const d = _noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; }
+  const src = ctx.createBufferSource(); src.buffer = _noiseBuf;
+  const f = ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = cutoff;
+  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, when); g.gain.exponentialRampToValueAtTime(gain, when + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+  src.connect(f); f.connect(g); g.connect(master); src.start(when); src.stop(when + dur + 0.02);
 }
 function pluckFx(freq, when, dur, gain, type) {
   const o = ctx.createOscillator(); const g = ctx.createGain();

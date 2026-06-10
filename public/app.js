@@ -204,7 +204,7 @@ function handleAudioEvents(room) {
     const allTrump = last && last.cards.length && last.cards.every((c) => isTrumpCard(c, room));
     const isKill = Array.isArray(room.trumpKillSeats) && room.trumpKillSeats.includes(last?.seat);
     const tookLead = !isLead && room.currentWinnerSeat === last?.seat;
-    if (isTractor) { sfx("win"); speak("拖拉机！"); }                     // 拖拉机最有排面
+    if (isTractor) { sfx("tractor"); speak("拖拉机！"); }                 // 拖拉机=火车音效
     // 领出主牌＝调主(diào zhǔ)拔主。TTS 会把"调"误读成 tiáo，故用同音的"吊"逼出 diào。
     else if (isLead && allTrump) speak(pick(["吊主！", "吊主！", "拔主咯！"]));
     else if (isKill) { sfx("kill"); speak(pick(["杀！", "毙！", "大你！"])); }
