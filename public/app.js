@@ -627,6 +627,8 @@ function renderSeats(room) {
         </div>`;
       } else if (seat.isYou) {
         actionsHTML = `<div class="seat-actions"><button class="seat-btn" data-leave>离座</button></div>`;
+      } else if (seat.isAi) {
+        actionsHTML = `<div class="seat-actions"><button class="seat-btn" data-kick="${seat.index}" title="踢掉这个 AI，让真人坐下">踢掉</button></div>`;
       }
     }
 
@@ -668,6 +670,8 @@ function renderSeats(room) {
     btn.addEventListener("click", () => send("addAi", { seatIndex: Number(btn.dataset.ai), level: btn.dataset.level || "medium" })));
   seatsEl.querySelectorAll("[data-leave]").forEach(btn =>
     btn.addEventListener("click", () => send("leaveSeat")));
+  seatsEl.querySelectorAll("[data-kick]").forEach(btn =>
+    btn.addEventListener("click", () => send("kickAi", { seatIndex: Number(btn.dataset.kick) })));
 }
 
 /* ─── Played Cards HTML (beside seat) ───────────────────── */

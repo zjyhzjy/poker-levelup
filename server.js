@@ -17,6 +17,7 @@ import {
   chooseAiBury,
   forceDealer,
   joinRoom,
+  kickAi,
   leaveSeat,
   makeBid,
   passBid,
@@ -254,6 +255,7 @@ function handleMessage(client, message) {
     const actions = {
       sit:              () => sit(room, client.playerId, Number(payload.seatIndex), payload.nickname || client.nickname, payload.avatar),
       addAi:            () => addAiPlayer(room, Number(payload.seatIndex), payload.level),
+      kickAi:           () => kickAi(room, Number(payload.seatIndex)),
       leaveSeat:        () => leaveSeat(room, client.playerId),
       startRound:       () => startRound(room, Math.random, { deal: false }),
       bid:              () => makeBid(room, client.playerId, payload.cardIds || []),

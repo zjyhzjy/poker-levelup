@@ -64,36 +64,45 @@ const MUSIC = [
   { id: "world",   name: "游戏节拍",          src: "https://assets.mixkit.co/music/466/466.mp3" }
 ];
 let trackId = localStorage.getItem("szp.track") || "default";
+let musicPhase = "lobby";          // "lobby" (opening) | "game"
 let bgmEl = null;                  // HTMLAudioElement | null
 let bgmFailed = false;             // bundled file failed → use synth
-let loopStart = 0;                 // where the track loops back to (past the opening)
+let regionStart = 0, regionEnd = Infinity;
 let gapTimer = null;
 let loopGapSec = Math.max(0, parseFloat(localStorage.getItem("szp.loopgap") ?? "3"));
 const curTrack = () => MUSIC.find((t) => t.id === trackId) || MUSIC[0];
 
 function clearLoopGap() { if (gapTimer) { clearTimeout(gapTimer); gapTimer = null; } }
-// On reaching the end, loop back to loopStart (= splitAt for the default track, so
-// the 32s opening plays ONCE then only the in-game portion loops). Optional breath
-// gap. No phase-switching — the music never "resets" when a hand starts.
-function doLoop() {
+function applyRegion() {
+  const t = curTrack();
+  const dur = (bgmEl && bgmEl.duration) || Infinity;
+  if (t.splitAt && musicPhase === "lobby") { regionStart = 0; regionEnd = t.splitAt; } // 开场段 [0,32)
+  else if (t.splitAt) { regionStart = t.splitAt; regionEnd = dur; }                     // 牌局段 [32,末)
+  else { regionStart = 0; regionEnd = dur; }                                            // 非分段曲整段
+}
+// Opening (lobby) loops with a short breath-gap; in-game loops seamlessly.
+function loopBack() {
   if (gapTimer || !bgmEl) return;
-  const restart = () => { if (!bgmEl || !started || !musicOn || trackId === "off") return; bgmEl.currentTime = loopStart; bgmEl.play().catch(() => {}); };
-  if (loopGapSec > 0) { try { bgmEl.pause(); } catch (_) {} gapTimer = setTimeout(() => { gapTimer = null; restart(); }, loopGapSec * 1000); }
-  else restart();
+  if (musicPhase === "lobby" && curTrack().splitAt && loopGapSec > 0) {
+    try { bgmEl.pause(); } catch (_) {}
+    gapTimer = setTimeout(() => { gapTimer = null; if (!bgmEl || !started || !musicOn || trackId === "off") return; bgmEl.currentTime = regionStart; bgmEl.play().catch(() => {}); }, loopGapSec * 1000);
+  } else { bgmEl.currentTime = regionStart; }
 }
 
 function startMusic() {
   if (!ensureCtx() || trackId === "off") return;
   if (bgmFailed) { startSynthMusic(); return; }
   if (!bgmEl) {
-    const t = curTrack();
-    loopStart = t.splitAt || 0;     // default: loop back past the 32s opening
-    bgmEl = new Audio(t.src);
+    bgmEl = new Audio(curTrack().src);
     bgmEl.loop = false;
     bgmEl.volume = Math.min(1, musicVol);
-    bgmEl.addEventListener("ended", doLoop); // play 0→end once (opening+in-game), then loop in-game
+    bgmEl.addEventListener("loadedmetadata", () => { applyRegion(); if (bgmEl.currentTime < regionStart || bgmEl.currentTime >= regionEnd) bgmEl.currentTime = regionStart; });
+    bgmEl.addEventListener("timeupdate", () => { if (!gapTimer && regionEnd !== Infinity && bgmEl.currentTime >= regionEnd - 0.06) loopBack(); });
+    bgmEl.addEventListener("ended", () => { if (!gapTimer) loopBack(); });
     bgmEl.addEventListener("error", () => { if (curTrack().id === "default") { bgmFailed = true; bgmEl = null; startSynthMusic(); } });
   }
+  applyRegion();
+  if (bgmEl.currentTime < regionStart || (regionEnd !== Infinity && bgmEl.currentTime >= regionEnd)) bgmEl.currentTime = regionStart;
   bgmEl.volume = Math.min(1, musicVol);
   bgmEl.play().catch(() => {});
 }
@@ -102,9 +111,24 @@ function stopMusic() {
   if (bgmEl) { try { bgmEl.pause(); } catch (_) {} }
   stopSynthMusic();
 }
-// Music no longer switches by game phase (that switch caused the "reset" at 开局).
-// Kept as a no-op so existing callers don't break.
-export function setMusicPhase() {}
+// 大厅放开场段循环；进房开打切到牌局段（带 0.4s 淡入淡出，切换不突兀）。
+export function setMusicPhase(phase) {
+  const p = phase === "lobby" ? "lobby" : "game";
+  if (p === musicPhase) return;
+  musicPhase = p;
+  clearLoopGap();
+  applyRegion();
+  if (!started || !musicOn || !bgmEl || !curTrack().splitAt) return;
+  const tgt = Math.min(1, musicVol);
+  const fadeOut = setInterval(() => {
+    if (!bgmEl) { clearInterval(fadeOut); return; }
+    if (bgmEl.volume > 0.08) { bgmEl.volume = Math.max(0, bgmEl.volume - 0.12); return; }
+    clearInterval(fadeOut);
+    bgmEl.currentTime = regionStart; bgmEl.volume = 0;
+    bgmEl.play().catch(() => {});
+    const fadeIn = setInterval(() => { if (!bgmEl) { clearInterval(fadeIn); return; } bgmEl.volume = Math.min(tgt, bgmEl.volume + 0.12); if (bgmEl.volume >= tgt) clearInterval(fadeIn); }, 45);
+  }, 45);
+}
 export function selectTrack(id) {
   trackId = id;
   localStorage.setItem("szp.track", id);

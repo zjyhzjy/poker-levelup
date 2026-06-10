@@ -181,6 +181,23 @@ export function leaveSeat(room, playerId) {
   seat.trustee = false;
 }
 
+// 踢掉某个 AI，腾出座位让真人坐下。只能在大厅（开局前）操作，且只能踢 AI——
+// 这样朋友来了可以替掉一个 AI。座位变空后，对方用 sit 坐下即可。
+export function kickAi(room, seatIndex) {
+  assertPhase(room, PHASES.LOBBY);
+  const seat = room.seats[seatIndex];
+  if (!seat) throw new Error("座位不存在");
+  if (!seat.isAi) throw new Error("只能踢 AI");
+  seat.playerId = null;
+  seat.nickname = "";
+  seat.avatar = null;
+  seat.connected = false;
+  seat.isAi = false;
+  seat.aiLevel = null;
+  seat.trustee = false;
+  seat.aiWeights = undefined;
+}
+
 export function startRound(room, random = Math.random, options = {}) {
   // options.deal === false → set up the round but deal cards gradually via
   // dealRound() (driven by a timer in server.js). Default deals everything at
