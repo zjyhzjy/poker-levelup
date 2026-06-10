@@ -278,8 +278,13 @@ function ttsSpeak(text) {
     speechSynthesis.speak(u);
   } catch (_) { /* ignore */ }
 }
+let lastSpeakAt = 0;
 export function speak(text) {
   if (!voiceOn) return;
+  // 别打断上一句：事件密集时跳过新台词，避免被掐断、重叠成"瘆人"的乱响。
+  const now = Date.now();
+  if (now - lastSpeakAt < 1500) return;
+  lastSpeakAt = now;
   const key = clipKey(text);
   if (clips[key] === "missing") { ttsSpeak(text); return; }
   let c = clips[key];

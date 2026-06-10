@@ -38,17 +38,16 @@ import { pimcChoosePlay } from "./src/ai/pimc.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// 载入自对弈调参得到的启发式权重（若存在）。实测比出厂默认更强（6000 局新种子：
-// 净级数 +0.46、庄家胜率 +15pt），且 PIMC 推演用同一启发式，故各档 AI 一并变强。
-try {
-  const wf = path.join(__dirname, "bench", "tuned-weights.json");
-  if (fs.existsSync(wf)) {
-    const tuned = JSON.parse(fs.readFileSync(wf, "utf8"));
-    loadAiWeights(tuned.weights || {});
-    console.log(`AI 权重：已载入自对弈调参权重（gen ${tuned.generation}, valFit ${tuned.valFitness}）`);
-  }
-} catch (e) {
-  console.log(`AI 权重：使用出厂默认（调参权重载入失败：${e.message}）`);
+// 自对弈调参权重默认【关闭】：它在自对弈指标上看着更强(+0.46)，但实为过拟合——
+// 把"给敌家送分"的惩罚调到几乎为 0(fGiftPts 3.5→0.2)、不保护自己分(fRiskOwnPts→0)，
+// 实战体感很笨。故默认用出厂手调权重。要再试调参版可设 USE_TUNED_WEIGHTS=1。
+if (process.env.USE_TUNED_WEIGHTS === "1") {
+  try {
+    const wf = path.join(__dirname, "bench", "tuned-weights.json");
+    if (fs.existsSync(wf)) { const tuned = JSON.parse(fs.readFileSync(wf, "utf8")); loadAiWeights(tuned.weights || {}); console.log(`AI 权重：已载入调参权重（gen ${tuned.generation}）`); }
+  } catch (e) { console.log(`AI 权重：调参权重载入失败：${e.message}`); }
+} else {
+  console.log("AI 权重：使用出厂手调权重（调参权重默认关闭——过拟合，实战偏笨）");
 }
 const publicDir = path.join(__dirname, "public");
 const port = Number(process.env.PORT || 3000);
@@ -62,8 +61,8 @@ const BURY_TIMEOUT_MS = 120000;
 //   强  ：轻量搜索，采样少、预算短 → 仍近乎秒出，但已用上"记牌器"推演。
 //   大师：深度搜索，采样多、预算长 → 最强，出牌略慢。
 const SEARCH_OPTS = {
-  hard:   { determinizations: 32, maxCandidates: 8,  timeBudgetMs: Number(process.env.HARD_PIMC_MS || 600),    rolloutLevel: "hard" },
-  master: { determinizations: 64, maxCandidates: 12, timeBudgetMs: Number(process.env.MASTER_PIMC_MS || 2200), rolloutLevel: "hard" }
+  hard:   { determinizations: 24, maxCandidates: 6, timeBudgetMs: Number(process.env.HARD_PIMC_MS || 400),    rolloutLevel: "hard" },
+  master: { determinizations: 40, maxCandidates: 8, timeBudgetMs: Number(process.env.MASTER_PIMC_MS || 1200), rolloutLevel: "hard" }
 };
 
 const server = http.createServer((req, res) => {
