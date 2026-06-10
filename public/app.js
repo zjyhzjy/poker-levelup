@@ -355,13 +355,24 @@ function escapeHtml(s) {
 
 /* ─── Emotes: throw tomato / send flower at a player's avatar ─── */
 let emoteMenuEl = null;
+// 可投掷物：表情、命中后的粒子、命中是否抖动（友好的=放大）。
+const EMOTES = {
+  tomato: { emoji: "🍅", parts: ["🍅", "💥", "🍅", "💦"], shake: true },
+  flower: { emoji: "🌹", parts: ["🌸", "🌷", "💕", "✨", "🌹"], shake: false },
+  poop:   { emoji: "💩", parts: ["💩", "💩", "🪰", "💨"], shake: true },
+  pig:    { emoji: "🐷", parts: ["🐷", "💢", "💥", "🐽"], shake: true },
+  coffee: { emoji: "☕", parts: ["☕", "💦", "💧", "♨️"], shake: true }
+};
 function openEmoteMenu(targetIndex, anchorEl) {
   closeEmoteMenu();
   const menu = document.createElement("div");
   menu.className = "emote-menu";
   menu.innerHTML = `
     <button class="emote-btn" data-kind="tomato" title="砸西红柿">🍅</button>
-    <button class="emote-btn" data-kind="flower" title="送花">🌹</button>`;
+    <button class="emote-btn" data-kind="flower" title="送花">🌹</button>
+    <button class="emote-btn" data-kind="poop" title="扔大便">💩</button>
+    <button class="emote-btn" data-kind="pig" title="扔猪头">🐷</button>
+    <button class="emote-btn" data-kind="coffee" title="泼咖啡">☕</button>`;
   document.body.appendChild(menu);
   const r = anchorEl.getBoundingClientRect();
   menu.style.left = `${r.left + r.width / 2}px`;
@@ -397,9 +408,10 @@ function playEmote({ from, target, kind }) {
     const fromEl = seatTokenEl(from);
     if (fromEl) { const fr = fromEl.getBoundingClientRect(); startX = fr.left + fr.width / 2; startY = fr.top + fr.height / 2; }
   }
+  const def = EMOTES[kind] || EMOTES.tomato;
   const proj = document.createElement("div");
   proj.className = "emote-proj";
-  proj.textContent = kind === "flower" ? "🌹" : "🍅";
+  proj.textContent = def.emoji;
   proj.style.left = `${startX}px`;
   proj.style.top = `${startY}px`;
   document.body.appendChild(proj);
@@ -413,7 +425,7 @@ function playEmote({ from, target, kind }) {
     proj.remove();
     emoteBurst(endX, endY, kind);
     targetEl.animate(
-      kind === "tomato"
+      def.shake
         ? [{ transform: "translate(0,0)" }, { transform: "translate(-4px,2px)" }, { transform: "translate(4px,-2px)" }, { transform: "translate(-3px,1px)" }, { transform: "translate(0,0)" }]
         : [{ transform: "scale(1)" }, { transform: "scale(1.14)" }, { transform: "scale(1)" }],
       { duration: 440, easing: "ease-out" });
@@ -421,7 +433,7 @@ function playEmote({ from, target, kind }) {
 }
 
 function emoteBurst(x, y, kind) {
-  const particles = kind === "flower" ? ["🌸", "🌷", "💕", "✨", "🌹"] : ["🍅", "💥", "🍅", "💦"];
+  const particles = (EMOTES[kind] || EMOTES.tomato).parts;
   const n = 8;
   for (let i = 0; i < n; i++) {
     const p = document.createElement("div");

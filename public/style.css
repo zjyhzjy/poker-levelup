@@ -1360,6 +1360,9 @@ body.desktop .spectator-name { font-size: 12px; }
 }
 .emote-splat.tomato { background: radial-gradient(circle, rgba(220,40,30,.7) 0%, rgba(180,20,20,.22) 58%, transparent 70%); }
 .emote-splat.flower { background: radial-gradient(circle, rgba(255,120,180,.6) 0%, rgba(255,205,90,.22) 58%, transparent 70%); }
+.emote-splat.poop   { background: radial-gradient(circle, rgba(120,72,30,.72) 0%, rgba(90,55,20,.24) 58%, transparent 70%); }
+.emote-splat.pig    { background: radial-gradient(circle, rgba(255,150,180,.62) 0%, rgba(230,110,150,.22) 58%, transparent 70%); }
+.emote-splat.coffee { background: radial-gradient(circle, rgba(90,55,30,.66) 0%, rgba(120,80,45,.22) 58%, transparent 70%); }
 
 .emote-menu {
   position: fixed;
