@@ -377,6 +377,14 @@ function openEmoteMenu(targetIndex, anchorEl) {
   const r = anchorEl.getBoundingClientRect();
   menu.style.left = `${r.left + r.width / 2}px`;
   menu.style.top = `${r.top - 6}px`;
+  // 手机端：靠边座位时把菜单水平夹在屏幕内，避免被裁掉
+  requestAnimationFrame(() => {
+    const mr = menu.getBoundingClientRect();
+    const half = mr.width / 2, pad = 8;
+    let left = r.left + r.width / 2;
+    left = Math.max(pad + half, Math.min(window.innerWidth - pad - half, left));
+    menu.style.left = `${left}px`;
+  });
   menu.querySelectorAll("[data-kind]").forEach((b) =>
     b.addEventListener("click", (e) => {
       e.stopPropagation();
