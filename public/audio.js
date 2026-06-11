@@ -14,8 +14,8 @@ let started = false;
 let musicOn = localStorage.getItem("szp.music") !== "0"; // default on
 let voiceOn = localStorage.getItem("szp.voice") === "1"; // default off; players opt in
 // Separate volumes: music vs voice/effects (so you can balance them).
-let musicVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem("szp.musicVol") ?? "0.5")));
-let fxVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem("szp.fxVol") ?? "0.9")));
+let musicVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem("szp.musicVol") ?? "0.2")));
+let fxVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem("szp.fxVol") ?? "0.8")));
 
 function ensureCtx() {
   if (!ctx) {
@@ -182,6 +182,7 @@ function stopSynthMusic() {
 // the synth below if the file is absent.
 const sfxClips = {};
 export function sfx(name) {
+  if (fxVol <= 0) return;
   if (sfxClips[name] !== "missing") {
     let c = sfxClips[name];
     if (!c) { c = new Audio(`/sfx/${name}.wav`); sfxClips[name] = c; }
@@ -269,10 +270,30 @@ function pickVoice() {
 }
 if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 
-// Optional recorded clips for real intonation: drop public/voice/<词>.mp3
-// (例如 大你.mp3、吊主.mp3)。有则播片，无则退回 TTS（短词偏平）。
+// Optional recorded clips for real intonation: drop public/voice/<key>.wav.
+// Cue keys are defined in app.js, e.g. tractor1.wav, kill1.wav, overtake-dani1.wav.
 const clips = {};
 const clipKey = (t) => t.replace(/[！!。．.\s，,、？?]/g, "");
+function playClipByKey(keys, text, options, index = 0) {
+  if (index >= keys.length) return false;
+  const key = keys[index];
+  if (clips[key] === "missing") return playClipByKey(keys, text, options, index + 1);
+  let c = clips[key];
+  if (!c) { c = new Audio(`/voice/${encodeURIComponent(key)}.wav?v=3`); clips[key] = c; }
+  try {
+    c.volume = Math.min(1, fxVol);
+    c.currentTime = 0;
+    const p = c.play();
+    if (p && p.catch) p.catch(() => {
+      clips[key] = "missing";
+      if (!playClipByKey(keys, text, options, index + 1)) ttsSpeak(text, options);
+    });
+    return true;
+  } catch (_) {
+    clips[key] = "missing";
+    return playClipByKey(keys, text, options, index + 1);
+  }
+}
 function ttsSpeak(text, options = {}) {
   if (!("speechSynthesis" in window)) return;
   try {
@@ -284,7 +305,7 @@ function ttsSpeak(text, options = {}) {
     const elongated = text.includes("～");
     u.rate = options.rate ?? (elongated ? 0.78 : 1.05 + Math.random() * 0.15);
     u.pitch = options.pitch ?? (female ? 1.16 : male ? 0.88 : 1.0 + Math.random() * 0.25);
-    u.volume = Math.min(1, fxVol + 0.1);
+    u.volume = Math.min(1, fxVol);
     if (female && zhFemaleVoice) u.voice = zhFemaleVoice;
     else if (male && zhMaleVoice) u.voice = zhMaleVoice;
     else if (zhVoice) u.voice = zhVoice;
@@ -293,25 +314,23 @@ function ttsSpeak(text, options = {}) {
 }
 let lastSpeakAt = 0;
 export function speak(text, options = {}) {
-  if (!voiceOn) return;
+  if (!voiceOn || fxVol <= 0) return;
   // 别打断上一句：事件密集时跳过新台词，避免被掐断、重叠成"瘆人"的乱响。
   const now = Date.now();
-  if (now - lastSpeakAt < 1500) return;
+  const minGap = options.minGap ?? 1500;
+  if (now - lastSpeakAt < minGap) return;
   lastSpeakAt = now;
-  if (options.voice || options.forceTts || text.includes("～")) {
-    ttsSpeak(text, options);
-    return;
-  }
-  const key = clipKey(text);
-  if (clips[key] === "missing") { ttsSpeak(text, options); return; }
-  let c = clips[key];
-  if (!c) { c = new Audio(`/voice/${encodeURIComponent(key)}.wav?v=2`); clips[key] = c; } // ChatTTS 录音(v2 平稳版)
-  try {
-    c.volume = Math.min(1, fxVol + 0.1);
-    c.currentTime = 0;
-    const p = c.play();
-    if (p && p.catch) p.catch(() => { clips[key] = "missing"; ttsSpeak(text, options); }); // 无此片→TTS
-  } catch (_) { clips[key] = "missing"; ttsSpeak(text, options); }
+  const playVoice = () => {
+    if (!voiceOn || fxVol <= 0) return;
+    if (options.forceTts) {
+      ttsSpeak(text, options);
+      return;
+    }
+    const keys = [...(options.clipKeys || []), clipKey(text)];
+    if (!playClipByKey(keys, text, options)) ttsSpeak(text, options);
+  };
+  if (options.delay > 0) setTimeout(playVoice, options.delay);
+  else playVoice();
 }
 export const pick = (arr) => arr[(Math.random() * arr.length) | 0];
 

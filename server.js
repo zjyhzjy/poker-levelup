@@ -250,21 +250,11 @@ function handleMessage(client, message) {
       return;
     }
 
-    // Recommended play — use the PIMC search (记牌器 + 推演) so the hint is an
-    // actual optimised pick, not just a rule-legal one. One-shot + user-triggered,
-    // so the深搜延迟可接受；任何失败回退到启发式 recommendPlay。
+    // Recommended play — deterministic legal minimum, separate from AI strategy.
     if (type === "hint") {
       const room = currentRoom(client);
       let cardIds = [];
-      try {
-        const seat = room?.seats.find((s) => s.playerId === client.playerId);
-        if (seat && room.phase === "playing" && room.turnSeat === seat.index) {
-          const cards = pimcChoosePlay(room, seat.index, SEARCH_OPTS.master);
-          cardIds = cards && cards.length ? cards.map((c) => c.id) : (recommendPlay(room, client.playerId) || []);
-        } else {
-          cardIds = recommendPlay(room, client.playerId) || [];
-        }
-      } catch { try { cardIds = recommendPlay(room, client.playerId) || []; } catch { cardIds = []; } }
+      try { cardIds = recommendPlay(room, client.playerId) || []; } catch { cardIds = []; }
       send(client, "hint", { cardIds });
       return;
     }

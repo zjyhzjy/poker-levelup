@@ -177,6 +177,53 @@ function send(type, payload = {}) {
 
 /* ─── Sound & voice callouts (斗地主 style) ────────────────── */
 let audioPrev = null;
+const VOICE_CUES = {
+  tractor: {
+    minGap: 1500,
+    variants: [
+      { text: "拖～拉～机！", clipKeys: ["tractor1", "tractor-female1", "tractor"], rate: 0.72, pitch: 1.08 },
+      { text: "拖拉机！", clipKeys: ["tractor2", "tractor-male1", "tractor"], rate: 0.9, pitch: 1.0 },
+      { text: "拖～拉机！", clipKeys: ["tractor3", "tractor-female2", "tractor"], rate: 0.78, pitch: 0.94 },
+      { text: "拖拉机来啦！", clipKeys: ["tractor4", "tractor-male2", "tractor"], rate: 0.94, pitch: 1.12 }
+    ]
+  },
+  leadTrump: {
+    minGap: 1700,
+    variants: [
+      { text: "吊主", clipKeys: ["lead-trump1", "diaozhu1", "吊主"], voice: "female", rate: 0.92, pitch: 1.18 },
+      { text: "吊主", clipKeys: ["lead-trump2", "diaozhu2", "吊主"], voice: "female", rate: 0.82, pitch: 1.08 }
+    ]
+  },
+  kill: {
+    minGap: 1700,
+    variants: [
+      { text: "毙了！", clipKeys: ["kill1", "bile1", "毙了"], rate: 0.95, pitch: 0.94 },
+      { text: "毙了！", clipKeys: ["kill2", "bile2", "毙了"], rate: 0.88, pitch: 1.1 },
+      { text: "毙了！", clipKeys: ["kill3", "bile3", "毙了"], rate: 1.02, pitch: 0.98 }
+    ]
+  },
+  overtakeDani: {
+    minGap: 1500,
+    variants: [
+      { text: "大你！", clipKeys: ["overtake-dani1", "dani1", "大你"], rate: 0.96, pitch: 1.08 },
+      { text: "大你！", clipKeys: ["overtake-dani2", "dani2", "大你"], rate: 0.86, pitch: 0.96 }
+    ]
+  },
+  overtakeGuanshang: {
+    minGap: 1500,
+    variants: [
+      { text: "管上！", clipKeys: ["overtake-guanshang1", "guanshang1", "管上"], rate: 0.98, pitch: 1.12 },
+      { text: "管上！", clipKeys: ["overtake-guanshang2", "guanshang2", "管上"], rate: 0.88, pitch: 0.98 }
+    ]
+  },
+  throw: {
+    minGap: 1800,
+    variants: [
+      { text: "甩牌！", clipKeys: ["throw1", "shuaipai1", "甩牌"], rate: 0.95, pitch: 1.08 },
+      { text: "甩牌！", clipKeys: ["throw2", "shuaipai2", "甩牌"], rate: 0.84, pitch: 0.96 }
+    ]
+  }
+};
 function isTrumpCard(c, room) {
   if (!c) return false;
   if (c.suit === "joker") return true;
@@ -205,24 +252,42 @@ function handleAudioEvents(room) {
     const isTractor = last?.shape?.type === "tractor";
     const leaderShape = trick[0]?.shape?.type;
     const allTrump = last && last.cards.length && last.cards.every((c) => isTrumpCard(c, room));
-    const isKill = Array.isArray(room.trumpKillSeats) && room.trumpKillSeats.includes(last?.seat);
+    const killSeats = Array.isArray(room.trumpKillSeats) ? room.trumpKillSeats : [];
+    const isKill = killSeats.includes(last?.seat);
     const tookLead = !isLead && room.currentWinnerSeat === last?.seat;
     const importantLead = leaderShape === "tractor" || leaderShape === "triple";
-    const trickHasKill = Array.isArray(room.trumpKillSeats) && room.trumpKillSeats.length > 0;
-    if (isLead && isTractor) { sfx("tractor"); speak("拖～拉～机～！", { voice: nextAltVoice() }); } // 拖拉机=火车音效
+    const priorKill = isKill && trick.slice(0, -1).some((play) => killSeats.includes(play.seat));
+    const firstKill = isKill && !priorKill;
+    const trickHasKill = killSeats.length > 0;
+    if (isLead && isTractor) {
+      playVoiceCue("tractor", { voice: nextAltVoice() });
+    }
     // 领出主牌＝调主(diào zhǔ)拔主。TTS 会把"调"误读成 tiáo，故用同音的"吊"逼出 diào。
-    else if (isLead && allTrump) speak("吊主", { voice: "female" });
-    else if (isKill) { sfx("kill"); speak("毙了！", { voice: nextAltVoice() }); }
-    else if (tookLead && (importantLead || trickHasKill)) speak(pick(["大你！", "管上！"]));
+    else if (isLead && allTrump) playVoiceCue("leadTrump", { voice: "female" });
+    else if (firstKill) { sfx("kill"); playVoiceCue("kill", { voice: nextAltVoice() }); }
+    else {
+      if (isKill) sfx("kill");
+      if (tookLead && (importantLead || trickHasKill)) playVoiceCue(pick(["overtakeDani", "overtakeGuanshang"]));
+    }
   }
-  // a trick was just won
-  if (snap.seq > prev.seq) sfx("win");
   // new log lines → 甩牌 / 亮主 callouts
   if (snap.logLen > prev.logLen && Array.isArray(room.tableLog)) {
     for (const line of room.tableLog.slice(prev.logLen)) {
-      if (line.includes("甩牌：")) speak("甩牌！");
+      if (line.includes("甩牌：")) playVoiceCue("throw");
     }
   }
+}
+
+function playVoiceCue(name, overrides = {}) {
+  const cue = VOICE_CUES[name];
+  if (!cue) return;
+  const variant = pick(cue.variants);
+  speak(variant.text, {
+    ...variant,
+    ...overrides,
+    minGap: overrides.minGap ?? variant.minGap ?? cue.minGap,
+    pitch: (overrides.pitch ?? variant.pitch ?? 1) + (Math.random() * 0.08 - 0.04)
+  });
 }
 
 let altVoiceNext = "female";

@@ -846,14 +846,138 @@ export function setTrustee(room, playerId, on) {
   return seat.trustee;
 }
 
-// 推荐出牌：用 AI 逻辑算出当前应出的牌，返回 cardId 数组（仅在轮到该玩家出牌时）。
+// 推荐出牌：只给“规则内最小组合”，不参与 AI 的赢墩/送分策略。
 export function recommendPlay(room, playerId) {
   if (room.phase !== PHASES.PLAYING) return null;
   const seat = room.seats.find((s) => s.playerId === playerId);
   if (!seat || seat.index !== room.turnSeat) return null;
   const leaderCards = room.currentTrick[0]?.cards ?? null;
-  const cards = chooseAiPlay(room, seat, leaderCards) || [];
+  const cards = chooseRecommendedPlay(room, seat, leaderCards) || [];
   return cards.map((card) => card.id);
+}
+
+function chooseRecommendedPlay(room, seat, leaderCards = null) {
+  if (!leaderCards) return [lowestRecommendedCard(seat.hand, room)];
+  if (leaderCards.length === 1) {
+    const single = chooseRecommendedSingleFollow(room, seat, leaderCards);
+    if (single) return single;
+  }
+  const length = leaderCards.length;
+  const noScore = findRecommendedLegalCombination(
+    room,
+    seat,
+    leaderCards,
+    length,
+    seat.hand.filter((card) => cardScore(card) === 0)
+  );
+  if (noScore) return noScore;
+
+  const any = findRecommendedLegalCombination(room, seat, leaderCards, length, seat.hand);
+  if (any) return any;
+
+  const fallbackCandidates = [
+    ...legalCandidatePlays(room, seat, leaderCards),
+    legalFollow(room, seat, leaderCards),
+    safeAiPlay(room, seat, leaderCards)
+  ];
+  return bestRecommendedCandidate(room, seat, leaderCards, fallbackCandidates);
+}
+
+function chooseRecommendedSingleFollow(room, seat, leaderCards) {
+  const ledSuit = playSuit(leaderCards[0], room);
+  const sameSuit = seat.hand.filter((card) => playSuit(card, room) === ledSuit);
+  const pool = sameSuit.length ? sameSuit : seat.hand;
+  const naturalSingles = rankSuitGroups(pool).filter((group) => group.length === 1).map((group) => group[0]);
+  const stages = [
+    naturalSingles.filter((card) => cardScore(card) === 0),
+    pool.filter((card) => cardScore(card) === 0),
+    naturalSingles,
+    pool
+  ];
+  for (const stage of stages) {
+    const sorted = sortRecommendedCards(stage, room);
+    for (const card of sorted) {
+      if (validatePlay(room, seat, [card], leaderCards).ok) return [card];
+    }
+  }
+  return null;
+}
+
+function findRecommendedLegalCombination(room, seat, leaderCards, length, pool = seat.hand) {
+  if (pool.length < length) return null;
+  const sorted = sortRecommendedCards(pool, room);
+  const combo = [];
+  let checked = 0;
+  const limit = 120000;
+  function search(start) {
+    if (checked > limit) return null;
+    if (combo.length === length) {
+      checked += 1;
+      return validatePlay(room, seat, combo, leaderCards).ok ? [...combo] : null;
+    }
+    const remaining = length - combo.length;
+    for (let i = start; i <= sorted.length - remaining; i += 1) {
+      combo.push(sorted[i]);
+      const found = search(i + 1);
+      if (found) return found;
+      combo.pop();
+    }
+    return null;
+  }
+  return search(0);
+}
+
+function bestRecommendedCandidate(room, seat, leaderCards, candidates) {
+  const valid = [];
+  const seen = new Set();
+  for (const cards of candidates) {
+    if (!cards || !cards.length) continue;
+    if (!validatePlay(room, seat, cards, leaderCards).ok) continue;
+    const key = cards.map((card) => card.id).slice().sort().join(",");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    valid.push(cards);
+  }
+  valid.sort((a, b) => compareRecommendedPlays(a, b, room));
+  return valid[0] || [];
+}
+
+function compareRecommendedPlays(a, b, room) {
+  const scoreA = a.reduce((sum, card) => sum + cardScore(card), 0);
+  const scoreB = b.reduce((sum, card) => sum + cardScore(card), 0);
+  if (scoreA !== scoreB) return scoreA - scoreB;
+  const aa = sortRecommendedCards(a, room);
+  const bb = sortRecommendedCards(b, room);
+  for (let i = 0; i < Math.min(aa.length, bb.length); i += 1) {
+    const diff = compareRecommendedCards(aa[i], bb[i], room);
+    if (diff) return diff;
+  }
+  return aa.length - bb.length;
+}
+
+function lowestRecommendedCard(hand, room) {
+  return sortRecommendedCards(hand, room)[0];
+}
+
+function sortRecommendedCards(cards, room) {
+  return [...cards].sort((a, b) => compareRecommendedCards(a, b, room));
+}
+
+function compareRecommendedCards(a, b, room) {
+  return cardScore(a) - cardScore(b)
+    || cardOrderValue(a, room) - cardOrderValue(b, room)
+    || String(a.suit).localeCompare(String(b.suit))
+    || String(a.id).localeCompare(String(b.id));
+}
+
+function rankSuitGroups(cards) {
+  const groups = new Map();
+  for (const card of cards) {
+    const key = `${card.rank}|${card.suit}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(card);
+  }
+  return [...groups.values()];
 }
 
 // ─── AI difficulty profiles ─────────────────────────────────
@@ -1532,7 +1656,7 @@ function finishTrick(room) {
   }
   room.currentLeader = winner;
   room.turnSeat = winner;
-  room.trickPauseUntil = Date.now() + 1000;
+  room.trickPauseUntil = Date.now() + 600;
 }
 
 // 通关判定：升级是 A→2 循环、没有封顶，故“当前已是 A 还要再升（steps≥1）”即视为

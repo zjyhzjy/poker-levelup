@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, buryKitty, callSixTrump, chooseAiFriendCard, chooseAiPlay, chooseForcedTrump, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, determineTrickWinner, evaluateBid, forceDealer, kickSeatByVote, makeBid, passBid, passSixTrump, playCards, publicState, recomputeScores, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, takeoverAiSeat, upgradeResult, upgradeResultClassic4, upgradeResultSix, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, buryKitty, callSixTrump, chooseAiFriendCard, chooseAiPlay, chooseForcedTrump, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, determineTrickWinner, evaluateBid, forceDealer, kickSeatByVote, makeBid, passBid, passSixTrump, playCards, publicState, recommendPlay, recomputeScores, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, takeoverAiSeat, upgradeResult, upgradeResultClassic4, upgradeResultSix, validatePlay } from "../src/game.js";
 import { buryMultiplierClassic4 } from "../src/rules/classic4.js";
 
 test("三副牌共 162 张", () => {
@@ -185,6 +185,67 @@ test("AI 跟单张时自然单张只有分牌，才考虑拆对子出非分牌",
   const play = chooseAiPlay(room, ai, [lead]);
   assert.equal(play.length, 1);
   assert.equal(play[0].rank, "4");
+});
+
+test("推荐跟单张时选择自然单张最小非分牌", () => {
+  const room = createRoom("HINTSINGLE1");
+  room.phase = "playing";
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 1) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = cardsOf("A", "spades", 1)[0];
+  room.seats[0].playerId = "p0";
+  const seat = room.seats[1];
+  seat.playerId = "p1";
+  seat.hand = [
+    ...cardsOf("4", "spades", 2),
+    ...["5", "6", "7", "8"].map((rank) => cardsOf(rank, "spades", 1)[0])
+  ];
+  room.currentTrick = [{ seat: 0, cards: [lead], shape: analyzeShape([lead], room), points: 0 }];
+  room.turnSeat = 1;
+  const ids = recommendPlay(room, "p1");
+  const card = seat.hand.find((c) => c.id === ids[0]);
+  assert.equal(ids.length, 1);
+  assert.equal(card.rank, "6");
+});
+
+test("推荐默认不带分，必要带分时从小到大", () => {
+  const room = createRoom("HINTPOINTS");
+  room.phase = "playing";
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 1) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = cardsOf("A", "clubs", 1)[0];
+  room.seats[0].playerId = "p0";
+  const seat = room.seats[1];
+  seat.playerId = "p1";
+  seat.hand = [cardsOf("5", "clubs", 1)[0], cardsOf("10", "clubs", 1)[0], cardsOf("K", "clubs", 1)[0]];
+  room.currentTrick = [{ seat: 0, cards: [lead], shape: analyzeShape([lead], room), points: 0 }];
+  room.turnSeat = 1;
+  const ids = recommendPlay(room, "p1");
+  const card = seat.hand.find((c) => c.id === ids[0]);
+  assert.equal(ids.length, 1);
+  assert.equal(card.rank, "5");
+});
+
+test("推荐首出时避开分牌，先出最小非分单张", () => {
+  const room = createRoom("HINTLEAD");
+  room.phase = "playing";
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const card = (rank, suit) => deck.find((c) => c.rank === rank && c.suit === suit);
+  const seat = room.seats[0];
+  seat.playerId = "p0";
+  seat.hand = [card("5", "spades"), card("6", "spades"), card("10", "clubs")];
+  room.currentTrick = [];
+  room.turnSeat = 0;
+  const ids = recommendPlay(room, "p0");
+  const recommended = seat.hand.find((c) => c.id === ids[0]);
+  assert.equal(ids.length, 1);
+  assert.equal(recommended.rank, "6");
 });
 
 test("AI 抢庄只用手里真实的常主牌", () => {
@@ -1088,7 +1149,7 @@ test("多人主杀时 currentWinnerSeat 只标记最大的一家", () => {
   assert.equal(state.currentWinnerSeat, 2);
 });
 
-test("一墩结束后至少暂停展示，赢家不能立刻领出下一墩", () => {
+test("一墩结束后暂停约 0.6 秒展示，赢家不能立刻领出下一墩", () => {
   const room = createRoom("PAUSE");
   room.phase = "playing";
   room.levelRank = "2"; room.trumpSuit = "hearts";
@@ -1107,9 +1168,12 @@ test("一墩结束后至少暂停展示，赢家不能立刻领出下一墩", ()
   room.currentLeader = 0;
   room.turnSeat = 0;
 
+  const beforeFinish = Date.now();
   for (let i = 0; i < 5; i += 1) playCards(room, `p${i}`, [cards[i].id]);
   assert.equal(room.turnSeat, 0);
   assert.ok(room.trickPauseUntil > Date.now());
+  assert.ok(room.trickPauseUntil - beforeFinish >= 550);
+  assert.ok(room.trickPauseUntil - beforeFinish <= 800);
   assert.throws(() => playCards(room, "p0", [nextLead.id]), /上一墩展示中/);
 
   room.trickPauseUntil = Date.now() - 1;
