@@ -973,6 +973,79 @@ test("跟对子加单张甩牌时，只有三条不强制拆对子", () => {
   assert.equal(validatePlay(room, follower, [triple2[0], ...singles.slice(0, 2)], lead).ok, true);
 });
 
+function trumpTwoTripleThrowSetup(handCards) {
+  const room = createRoom("TRUMP2TRI");
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, n = 1) => deck.filter((c) => c.rank === rank && c.suit === "hearts").slice(0, n);
+  const lead = [...cardsOf("A", 3), ...cardsOf("9", 3)]; // 两组三条，不相邻，属于甩牌而非三条拖拉机
+  const follower = room.seats[1];
+  follower.playerId = "p1";
+  follower.lockedTriples = [];
+  follower.hand = handCards(cardsOf);
+  assert.equal(analyzeShape(lead, room).type, "throw");
+  return { room, follower, lead, cardsOf };
+}
+
+test("主牌甩两个三条：手里三个单独对子时，必须至少跟两个对子", () => {
+  const { room, follower, lead, cardsOf } = trumpTwoTripleThrowSetup((c) => [
+    ...c("K", 2), ...c("J", 2), ...c("7", 2), c("5")[0], c("4")[0], c("3")[0]
+  ]);
+  const legal = [...cardsOf("K", 2), ...cardsOf("J", 2), cardsOf("5")[0], cardsOf("4")[0]];
+  const illegal = [...cardsOf("K", 2), cardsOf("J")[0], cardsOf("7")[0], cardsOf("5")[0], cardsOf("4")[0]];
+
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
+test("主牌甩两个三条：手里一个对子加一个对子拖拉机时，对子拖拉机可作为对子来源", () => {
+  const { room, follower, lead, cardsOf } = trumpTwoTripleThrowSetup((c) => [
+    ...c("Q", 2), ...c("8", 2), ...c("7", 2), c("5")[0], c("4")[0], c("3")[0]
+  ]);
+  const legal = [...cardsOf("8", 2), ...cardsOf("7", 2), cardsOf("5")[0], cardsOf("4")[0]];
+  const illegal = [...cardsOf("Q", 2), cardsOf("8")[0], cardsOf("7")[0], cardsOf("5")[0], cardsOf("4")[0]];
+
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
+test("主牌甩两个三条：手里六张对子拖拉机时，至少跟两个对子，整条拖拉机也合法", () => {
+  const { room, follower, lead, cardsOf } = trumpTwoTripleThrowSetup((c) => [
+    ...c("8", 2), ...c("7", 2), ...c("6", 2), c("5")[0], c("4")[0], c("3")[0]
+  ]);
+  const legalFullTractor = [...cardsOf("8", 2), ...cardsOf("7", 2), ...cardsOf("6", 2)];
+  const legalTwoPairs = [...cardsOf("8", 2), ...cardsOf("7", 2), cardsOf("5")[0], cardsOf("4")[0]];
+  const illegal = [...cardsOf("8", 2), cardsOf("7")[0], cardsOf("6")[0], cardsOf("5")[0], cardsOf("4")[0]];
+
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legalTwoPairs, lead).ok, true);
+  assert.equal(validatePlay(room, follower, legalFullTractor, lead).ok, true);
+});
+
+test("主牌甩两个三条：手里有三条拖拉机时，必须跟出两个三条", () => {
+  const { room, follower, lead, cardsOf } = trumpTwoTripleThrowSetup((c) => [
+    ...c("8", 3), ...c("7", 3), c("5")[0], c("4")[0], c("3")[0]
+  ]);
+  const legal = [...cardsOf("8", 3), ...cardsOf("7", 3)];
+  const illegal = [...cardsOf("8", 3), cardsOf("7")[0], cardsOf("5")[0], cardsOf("4")[0]];
+
+  assert.equal(validatePlay(room, follower, illegal, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
+test("主牌甩两个三条：手里一组三条加一个对子拖拉机时，必须跟三条并补一个天然对子", () => {
+  const { room, follower, lead, cardsOf } = trumpTwoTripleThrowSetup((c) => [
+    ...c("8", 3), ...c("6", 2), ...c("5", 2), c("4")[0], c("3")[0]
+  ]);
+  const legal = [...cardsOf("8", 3), ...cardsOf("6", 2), cardsOf("4")[0]];
+  const illegalNoPair = [...cardsOf("8", 3), cardsOf("6")[0], cardsOf("5")[0], cardsOf("4")[0]];
+  const illegalNoTriple = [...cardsOf("6", 2), ...cardsOf("5", 2), cardsOf("8")[0], cardsOf("4")[0]];
+
+  assert.equal(validatePlay(room, follower, illegalNoPair, lead).ok, false);
+  assert.equal(validatePlay(room, follower, illegalNoTriple, lead).ok, false);
+  assert.equal(validatePlay(room, follower, legal, lead).ok, true);
+});
+
 test("publicState 标记主牌杀副牌，仅在首家副牌时显示杀", () => {
   const room = createRoom("KILL");
   room.phase = "playing";

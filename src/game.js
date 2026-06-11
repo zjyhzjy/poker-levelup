@@ -1869,7 +1869,7 @@ function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available)
 
   // Check follower's actual played cards satisfy the requirement
   const playedGroups = groupCards([...playedSameSuit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)));
-  const playedPairs   = playedGroups.filter(g => g.length >= 2).length;
+  const playedPairs   = playedGroups.filter(g => g.length === 2).length;
   const playedTriples = playedGroups.filter(g => g.length >= 3).length;
 
   if (playedTriples < mustTriples) return { ok: false, reason: `需要出 ${mustTriples} 个三条跟甩牌` };

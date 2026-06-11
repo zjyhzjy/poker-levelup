@@ -241,6 +241,12 @@ button, input, select { font: inherit; }
 .topbar-btn:active { background: rgba(200,144,45,.2); }
 .topbar-btn.audio-off { opacity: .45; }
 .audio-menu { position: relative; display: inline-block; }
+.join-screen .join-audio-menu {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  right: 12px;
+  z-index: 3;
+}
 .audio-panel {
   position: absolute; top: 132%; right: 0; z-index: 60;
   min-width: 190px; max-width: 84vw; padding: 11px 13px;

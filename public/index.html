@@ -17,6 +17,16 @@
       <!-- 加入界面 -->
       <section class="join-screen" data-view="join">
         <div class="join-bg"></div>
+        <div class="join-audio-menu audio-menu">
+          <button id="joinAudioBtn" class="topbar-btn" title="声音设置">🎵</button>
+          <div id="joinAudioPanel" class="audio-panel hidden">
+            <label class="audio-row"><span>🎵 背景音乐</span><input type="checkbox" id="joinMusicChk"></label>
+            <div class="audio-row"><span>🎶 曲目</span><select id="joinTrackSel"></select></div>
+            <label class="audio-row"><span>🗣️ 语音播报</span><input type="checkbox" id="joinVoiceChk"></label>
+            <div class="audio-row vol"><span>🎵 音乐音量</span><input type="range" id="joinMusicVolRange" min="0" max="100" step="1"></div>
+            <div class="audio-row vol"><span>🔊 语音/音效</span><input type="range" id="joinFxVolRange" min="0" max="100" step="1"></div>
+          </div>
+        </div>
         <div class="join-content">
           <div class="brand">
             <div class="brand-suits">♠ ♥ ♣ ♦</div>

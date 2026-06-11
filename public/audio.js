@@ -12,7 +12,7 @@ let musicGain = null;
 let musicTimer = null;
 let started = false;
 let musicOn = localStorage.getItem("szp.music") !== "0"; // default on
-let voiceOn = localStorage.getItem("szp.voice") !== "0"; // default on
+let voiceOn = localStorage.getItem("szp.voice") === "1"; // default off; players opt in
 // Separate volumes: music vs voice/effects (so you can balance them).
 let musicVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem("szp.musicVol") ?? "0.5")));
 let fxVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem("szp.fxVol") ?? "0.9")));
@@ -253,11 +253,19 @@ const PREFERRED = [
   /Google.*(普通话|中文|Chinese)/i
 ];
 let zhVoice = null;
+let zhFemaleVoice = null;
+let zhMaleVoice = null;
 function pickVoice() {
   if (!("speechSynthesis" in window)) return;
   const zh = speechSynthesis.getVoices().filter((v) => /zh/i.test(v.lang) || /Chinese|普通话|中文/i.test(v.name));
-  for (const re of PREFERRED) { const m = zh.find((v) => re.test(v.name)); if (m) { zhVoice = m; return; } }
-  zhVoice = zh.find((v) => /zh[-_]?CN/i.test(v.lang)) || zh[0] || null;
+  zhVoice = null;
+  for (const re of PREFERRED) {
+    const m = zh.find((v) => re.test(v.name));
+    if (m) { zhVoice = m; break; }
+  }
+  zhVoice = zhVoice || zh.find((v) => /zh[-_]?CN/i.test(v.lang)) || zh[0] || null;
+  zhFemaleVoice = zh.find((v) => /female|woman|girl|Tingting|婷婷|Meijia|美佳|Yaoyao|Huihui|慧慧|Xiaoxiao|Xiaoyi|晓晓|晓伊/i.test(v.name)) || zhVoice;
+  zhMaleVoice = zh.find((v) => /male|man|boy|Kangkang|康康|Yunxi|Yunjian|云希|云健|Sinji|Tianyi/i.test(v.name)) || zhVoice;
 }
 if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 
@@ -265,36 +273,45 @@ if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.onvoiceschanged 
 // (例如 大你.mp3、吊主.mp3)。有则播片，无则退回 TTS（短词偏平）。
 const clips = {};
 const clipKey = (t) => t.replace(/[！!。．.\s，,、？?]/g, "");
-function ttsSpeak(text) {
+function ttsSpeak(text, options = {}) {
   if (!("speechSynthesis" in window)) return;
   try {
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "zh-CN";
-    u.rate = 1.05 + Math.random() * 0.15;  // 1.05–1.20，干脆利落
-    u.pitch = 1.0 + Math.random() * 0.25;  // 1.0–1.25，自然又带点精神（过高会发尖）
+    const female = options.voice === "female";
+    const male = options.voice === "male";
+    const elongated = text.includes("～");
+    u.rate = options.rate ?? (elongated ? 0.78 : 1.05 + Math.random() * 0.15);
+    u.pitch = options.pitch ?? (female ? 1.16 : male ? 0.88 : 1.0 + Math.random() * 0.25);
     u.volume = Math.min(1, fxVol + 0.1);
-    if (zhVoice) u.voice = zhVoice;
+    if (female && zhFemaleVoice) u.voice = zhFemaleVoice;
+    else if (male && zhMaleVoice) u.voice = zhMaleVoice;
+    else if (zhVoice) u.voice = zhVoice;
     speechSynthesis.speak(u);
   } catch (_) { /* ignore */ }
 }
 let lastSpeakAt = 0;
-export function speak(text) {
+export function speak(text, options = {}) {
   if (!voiceOn) return;
   // 别打断上一句：事件密集时跳过新台词，避免被掐断、重叠成"瘆人"的乱响。
   const now = Date.now();
   if (now - lastSpeakAt < 1500) return;
   lastSpeakAt = now;
+  if (options.voice || options.forceTts || text.includes("～")) {
+    ttsSpeak(text, options);
+    return;
+  }
   const key = clipKey(text);
-  if (clips[key] === "missing") { ttsSpeak(text); return; }
+  if (clips[key] === "missing") { ttsSpeak(text, options); return; }
   let c = clips[key];
   if (!c) { c = new Audio(`/voice/${encodeURIComponent(key)}.wav?v=2`); clips[key] = c; } // ChatTTS 录音(v2 平稳版)
   try {
     c.volume = Math.min(1, fxVol + 0.1);
     c.currentTime = 0;
     const p = c.play();
-    if (p && p.catch) p.catch(() => { clips[key] = "missing"; ttsSpeak(text); }); // 无此片→TTS
-  } catch (_) { clips[key] = "missing"; ttsSpeak(text); }
+    if (p && p.catch) p.catch(() => { clips[key] = "missing"; ttsSpeak(text, options); }); // 无此片→TTS
+  } catch (_) { clips[key] = "missing"; ttsSpeak(text, options); }
 }
 export const pick = (arr) => arr[(Math.random() * arr.length) | 0];
 

@@ -203,30 +203,33 @@ function handleAudioEvents(room) {
     const last = trick[trick.length - 1];
     const isLead = trick.length === 1;
     const isTractor = last?.shape?.type === "tractor";
+    const leaderShape = trick[0]?.shape?.type;
     const allTrump = last && last.cards.length && last.cards.every((c) => isTrumpCard(c, room));
     const isKill = Array.isArray(room.trumpKillSeats) && room.trumpKillSeats.includes(last?.seat);
     const tookLead = !isLead && room.currentWinnerSeat === last?.seat;
-    if (isTractor) { sfx("tractor"); speak("拖拉机！"); }                 // 拖拉机=火车音效
+    const importantLead = leaderShape === "tractor" || leaderShape === "triple";
+    const trickHasKill = Array.isArray(room.trumpKillSeats) && room.trumpKillSeats.length > 0;
+    if (isLead && isTractor) { sfx("tractor"); speak("拖～拉～机～！", { voice: nextAltVoice() }); } // 拖拉机=火车音效
     // 领出主牌＝调主(diào zhǔ)拔主。TTS 会把"调"误读成 tiáo，故用同音的"吊"逼出 diào。
-    else if (isLead && allTrump) speak(pick(["吊主！", "吊主！", "拔主咯！"]));
-    else if (isKill) { sfx("kill"); speak(pick(["杀！", "毙！", "大你！"])); }
-    else if (tookLead) speak(pick(["大你！", "管上！", "压你一头！"]));
+    else if (isLead && allTrump) speak("吊主", { voice: "female" });
+    else if (isKill) { sfx("kill"); speak("毙了！", { voice: nextAltVoice() }); }
+    else if (tookLead && (importantLead || trickHasKill)) speak(pick(["大你！", "管上！"]));
   }
   // a trick was just won
   if (snap.seq > prev.seq) sfx("win");
-  // round just ended → 夺冠播报
-  if (snap.phase === "roundOver" && prev.phase !== "roundOver" && room.lastResult?.champion) {
-    sfx("win"); speak("夺冠啦！");
-  }
   // new log lines → 甩牌 / 亮主 callouts
   if (snap.logLen > prev.logLen && Array.isArray(room.tableLog)) {
     for (const line of room.tableLog.slice(prev.logLen)) {
-      // 只在"真正亮主/亮庄"那一刻播报：实际宣告含全角冒号(亮主：/亮庄：)；
-      // 其余如"亮主者坐庄""无人亮主""重新叫主"都是提示语，不应触发。
       if (line.includes("甩牌：")) speak("甩牌！");
-      else if (line.includes("亮主：") || line.includes("亮庄：")) speak(pick(["亮主！", "我来定主！", "这主我来定！"]));
     }
   }
+}
+
+let altVoiceNext = "female";
+function nextAltVoice() {
+  const v = altVoiceNext;
+  altVoiceNext = v === "female" ? "male" : "female";
+  return v;
 }
 
 function scheduleTrickPauseRefresh(room) {
@@ -1320,38 +1323,55 @@ window.addEventListener("pointerdown", () => unlock(), { once: true });
 window.addEventListener("keydown", () => unlock(), { once: true });
 const audioBtn = document.getElementById("audioBtn");
 const audioPanel = document.getElementById("audioPanel");
+const joinAudioBtn = document.getElementById("joinAudioBtn");
+const joinAudioPanel = document.getElementById("joinAudioPanel");
 const musicChk = document.getElementById("musicChk");
+const joinMusicChk = document.getElementById("joinMusicChk");
 const voiceChk = document.getElementById("voiceChk");
+const joinVoiceChk = document.getElementById("joinVoiceChk");
 const musicVolRange = document.getElementById("musicVolRange");
+const joinMusicVolRange = document.getElementById("joinMusicVolRange");
 const fxVolRange = document.getElementById("fxVolRange");
+const joinFxVolRange = document.getElementById("joinFxVolRange");
 const trackSel = document.getElementById("trackSel");
+const joinTrackSel = document.getElementById("joinTrackSel");
+const audioButtons = [audioBtn, joinAudioBtn].filter(Boolean);
+const audioPanels = [audioPanel, joinAudioPanel].filter(Boolean);
+const musicChecks = [musicChk, joinMusicChk].filter(Boolean);
+const voiceChecks = [voiceChk, joinVoiceChk].filter(Boolean);
+const musicRanges = [musicVolRange, joinMusicVolRange].filter(Boolean);
+const fxRanges = [fxVolRange, joinFxVolRange].filter(Boolean);
+const trackSelects = [trackSel, joinTrackSel].filter(Boolean);
 function refreshAudioBtn() {
   const s = audioState();
-  if (audioBtn) audioBtn.classList.toggle("audio-off", !s.musicOn && !s.voiceOn);
-}
-{
-  const s = audioState();
-  if (musicChk) musicChk.checked = s.musicOn;
-  if (voiceChk) voiceChk.checked = s.voiceOn;
-  if (musicVolRange) musicVolRange.value = String(Math.round(s.musicVol * 100));
-  if (fxVolRange) fxVolRange.value = String(Math.round(s.fxVol * 100));
-  if (trackSel) {
-    trackSel.innerHTML = musicTracks().map((t) => `<option value="${t.id}">${t.name}</option>`).join("");
-    trackSel.value = currentTrackId();
+  for (const btn of audioButtons) btn.classList.toggle("audio-off", !s.musicOn && !s.voiceOn);
+  for (const chk of musicChecks) chk.checked = s.musicOn;
+  for (const chk of voiceChecks) chk.checked = s.voiceOn;
+  for (const range of musicRanges) range.value = String(Math.round(s.musicVol * 100));
+  for (const range of fxRanges) range.value = String(Math.round(s.fxVol * 100));
+  for (const sel of trackSelects) {
+    sel.innerHTML = musicTracks().map((t) => `<option value="${t.id}">${t.name}</option>`).join("");
+    sel.value = currentTrackId();
   }
-  refreshAudioBtn();
 }
-trackSel?.addEventListener("change", () => { unlock(); selectTrack(trackSel.value); });
-audioBtn?.addEventListener("click", (e) => { e.stopPropagation(); unlock(); audioPanel?.classList.toggle("hidden"); });
+refreshAudioBtn();
+trackSelects.forEach((sel) => sel.addEventListener("change", () => { unlock(); selectTrack(sel.value); refreshAudioBtn(); }));
+[
+  [audioBtn, audioPanel],
+  [joinAudioBtn, joinAudioPanel]
+].forEach(([btn, panel]) => btn?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  unlock();
+  for (const p of audioPanels) if (p !== panel) p.classList.add("hidden");
+  panel?.classList.toggle("hidden");
+}));
 document.addEventListener("click", (e) => {
-  if (audioPanel && !audioPanel.classList.contains("hidden") && !e.target.closest(".audio-menu")) {
-    audioPanel.classList.add("hidden");
-  }
+  if (!e.target.closest(".audio-menu")) for (const panel of audioPanels) panel.classList.add("hidden");
 });
-musicChk?.addEventListener("change", () => { unlock(); musicChk.checked = toggleMusic(); refreshAudioBtn(); });
-voiceChk?.addEventListener("change", () => { unlock(); const on = toggleVoice(); voiceChk.checked = on; if (on) speak("语音已开"); refreshAudioBtn(); });
-musicVolRange?.addEventListener("input", () => { unlock(); setMusicVol(Number(musicVolRange.value) / 100); });
-fxVolRange?.addEventListener("input", () => { unlock(); setFxVol(Number(fxVolRange.value) / 100); });
+musicChecks.forEach((chk) => chk.addEventListener("change", () => { unlock(); toggleMusic(); refreshAudioBtn(); }));
+voiceChecks.forEach((chk) => chk.addEventListener("change", () => { unlock(); toggleVoice(); refreshAudioBtn(); }));
+musicRanges.forEach((range) => range.addEventListener("input", () => { unlock(); setMusicVol(Number(range.value) / 100); refreshAudioBtn(); }));
+fxRanges.forEach((range) => range.addEventListener("input", () => { unlock(); setFxVol(Number(range.value) / 100); refreshAudioBtn(); }));
 
 // Exit the current room and return to the join screen.
 function exitRoom() {
