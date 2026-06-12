@@ -4,7 +4,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-CLOUDFLARED="$HOME/.local/bin/cloudflared"
+CLOUDFLARED="${CLOUDFLARED:-}"
+if [ -z "$CLOUDFLARED" ]; then
+  if [ -x "$HOME/.local/bin/cloudflared" ]; then
+    CLOUDFLARED="$HOME/.local/bin/cloudflared"
+  else
+    CLOUDFLARED="$(command -v cloudflared || true)"
+  fi
+fi
 PORT=3000
 RUN_DIR=".run"
 SERVER_LOG="$RUN_DIR/server.log"
@@ -27,6 +34,11 @@ else
 fi
 
 # --- Cloudflare 隧道 ---
+if [ -z "$CLOUDFLARED" ] || [ ! -x "$CLOUDFLARED" ]; then
+  echo "✗ 未找到 cloudflared。Mac 可运行: brew install cloudflared"
+  exit 1
+fi
+
 if pgrep -f "cloudflared tunnel --url" >/dev/null; then
   echo "✓ 隧道已在运行"
 else

@@ -11,7 +11,7 @@ let master = null;
 let musicGain = null;
 let musicTimer = null;
 let started = false;
-let musicOn = localStorage.getItem("szp.music") !== "0"; // default on
+let musicOn = localStorage.getItem("szp.music") === "1"; // default off; players opt in
 let voiceOn = localStorage.getItem("szp.voice") === "1"; // default off; players opt in
 // Separate volumes: music vs voice/effects (so you can balance them).
 let musicVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem("szp.musicVol") ?? "0.2")));
@@ -181,13 +181,20 @@ function stopSynthMusic() {
 // Prefer a downloaded clip public/sfx/<name>.mp3 (real, polished); fall back to
 // the synth below if the file is absent.
 const sfxClips = {};
+function isTouchDevice() {
+  return (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches) ||
+    (typeof navigator !== "undefined" && navigator.maxTouchPoints > 0);
+}
+function sfxVolume(name) {
+  return name === "play" && isTouchDevice() ? fxVol * 0.16 : fxVol;
+}
 export function sfx(name) {
-  if (fxVol <= 0) return;
+  if (!voiceOn || fxVol <= 0) return;
   if (sfxClips[name] !== "missing") {
     let c = sfxClips[name];
     if (!c) { c = new Audio(`/sfx/${name}.wav`); sfxClips[name] = c; }
     try {
-      c.volume = Math.min(1, fxVol);
+      c.volume = Math.min(1, sfxVolume(name));
       c.currentTime = 0;
       const p = c.play();
       if (p && p.catch) p.catch(() => { sfxClips[name] = "missing"; synthSfx(name); });
@@ -200,7 +207,7 @@ function synthSfx(name) {
   if (!ensureCtx()) return;
   const t = ctx.currentTime;
   if (name === "play") {
-    pluckFx(330, t, 0.12, 0.22, "square");
+    pluckFx(330, t, 0.12, isTouchDevice() ? 0.035 : 0.22, "square");
   } else if (name === "win") {
     [523.25, 659.25, 783.99].forEach((f, i) => pluckFx(f, t + i * 0.08, 0.25, 0.2, "triangle"));
   } else if (name === "kill") {
@@ -273,11 +280,47 @@ if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.onvoiceschanged 
 // Optional recorded clips for real intonation: drop public/voice/<key>.wav.
 // Cue keys are defined in app.js, e.g. tractor1.wav, kill1.wav, overtake-dani1.wav.
 const clips = {};
+const voiceBuffers = {};
 const clipKey = (t) => t.replace(/[！!。．.\s，,、？?]/g, "");
+function decodeAudioDataCompat(arrayBuffer) {
+  return new Promise((resolve, reject) => {
+    const result = ctx.decodeAudioData(arrayBuffer, resolve, reject);
+    if (result && result.then) result.then(resolve, reject);
+  });
+}
+async function playBufferedVoiceByKey(key) {
+  if (!ensureCtx()) return false;
+  try {
+    if (!voiceBuffers[key]) {
+      voiceBuffers[key] = fetch(`/voice/${encodeURIComponent(key)}.wav?v=3`)
+        .then((res) => {
+          if (!res.ok) throw new Error("missing voice clip");
+          return res.arrayBuffer();
+        })
+        .then((buf) => decodeAudioDataCompat(buf));
+    }
+    const buffer = await voiceBuffers[key];
+    if (!voiceOn || fxVol <= 0 || !buffer) return false;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(master);
+    src.start(ctx.currentTime);
+    return true;
+  } catch (_) {
+    voiceBuffers[key] = null;
+    return false;
+  }
+}
 function playClipByKey(keys, text, options, index = 0) {
   if (index >= keys.length) return false;
   const key = keys[index];
   if (clips[key] === "missing") return playClipByKey(keys, text, options, index + 1);
+  if (isTouchDevice()) {
+    playBufferedVoiceByKey(key).then((ok) => {
+      if (!ok && !playClipByKey(keys, text, options, index + 1)) ttsSpeak(text, options);
+    });
+    return true;
+  }
   let c = clips[key];
   if (!c) { c = new Audio(`/voice/${encodeURIComponent(key)}.wav?v=3`); clips[key] = c; }
   try {
@@ -358,6 +401,7 @@ export function setMusicVol(v) {
   musicVol = Math.min(1, Math.max(0, v));
   localStorage.setItem("szp.musicVol", String(musicVol));
   if (bgmEl) bgmEl.volume = Math.min(1, musicVol);
+  if (musicGain && ctx) musicGain.gain.setTargetAtTime(0.5 * musicVol, ctx.currentTime, 0.03);
   return musicVol;
 }
 export function setFxVol(v) {

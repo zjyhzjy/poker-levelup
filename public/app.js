@@ -673,7 +673,8 @@ function renderSeats(room) {
       if (resp === "pass") bidIndicator = `<div class="bid-indicator pass">${room.phase === "sixTrump" ? "不亮" : "不抢"}</div>`;
     }
 
-    // Cards beside seat — bottom seats (pos 1,4) show cards ABOVE the token
+    // Cards beside seat — bottom-side seats show cards above the token.
+    // Your own bid reveal stays below your info and is nudged by mobile CSS.
     const playedAbove = screenPos === 1 || screenPos === (room.seatCount || 5) - 1;
     let sideCardsHTML = "";
     let currentPlayShown = false;
@@ -716,7 +717,6 @@ function renderSeats(room) {
           <div class="ai-add">
             <span class="ai-add-label">加AI</span>
             <button class="seat-btn ai-lv" data-ai="${seat.index}" data-level="easy" title="弱：被动跟最小牌">弱</button>
-            <button class="seat-btn ai-lv" data-ai="${seat.index}" data-level="medium" title="中：稳健抢墩、喂分、会抢庄">中</button>
             <button class="seat-btn ai-lv" data-ai="${seat.index}" data-level="hard" title="强：记牌器 + 轻量搜索推演，会算牌、拔主、积极抢庄（近乎秒出）">强</button>
             <button class="seat-btn ai-lv ai-lv-master" data-ai="${seat.index}" data-level="master" title="大师：记牌器 + 深度蒙特卡洛搜索，逐步推演选最优出牌（最强，出牌略慢）">大师</button>
           </div>
@@ -739,6 +739,7 @@ function renderSeats(room) {
 
     const playedClasses = [
       "seat-played",
+      showBids ? "bid-played" : "",
       winningPlay ? "winning" : "",
       killPlay ? "trump-kill" : ""
     ].filter(Boolean).join(" ");
@@ -1435,8 +1436,16 @@ document.addEventListener("click", (e) => {
 });
 musicChecks.forEach((chk) => chk.addEventListener("change", () => { unlock(); toggleMusic(); refreshAudioBtn(); }));
 voiceChecks.forEach((chk) => chk.addEventListener("change", () => { unlock(); toggleVoice(); refreshAudioBtn(); }));
-musicRanges.forEach((range) => range.addEventListener("input", () => { unlock(); setMusicVol(Number(range.value) / 100); refreshAudioBtn(); }));
-fxRanges.forEach((range) => range.addEventListener("input", () => { unlock(); setFxVol(Number(range.value) / 100); refreshAudioBtn(); }));
+musicRanges.forEach((range) => {
+  const update = () => { unlock(); setMusicVol(Number(range.value) / 100); refreshAudioBtn(); };
+  range.addEventListener("input", update);
+  range.addEventListener("change", update);
+});
+fxRanges.forEach((range) => {
+  const update = () => { unlock(); setFxVol(Number(range.value) / 100); refreshAudioBtn(); };
+  range.addEventListener("input", update);
+  range.addEventListener("change", update);
+});
 
 // Exit the current room and return to the join screen.
 function exitRoom() {
