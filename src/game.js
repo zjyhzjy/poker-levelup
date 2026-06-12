@@ -104,6 +104,7 @@ export function createRoom(code = randomRoomCode(), options = {}) {
     currentTrick: [],
     lastTrick: [],
     throwResult: null,   // { seat, allCards, keepCards, failed, message } — cleared after next play
+    autoFinishLastTrick: false,
     trickPauseUntil: 0,
     finishedTricks: [],
     tableLog: [],
@@ -282,6 +283,7 @@ export function startRound(room, random = Math.random, options = {}) {
   room.currentTrick = [];
   room.lastTrick = [];
   room.lastTrickWin = null;
+  room.autoFinishLastTrick = false;
   room.trickPauseUntil = 0;
   room.friendReveal = null;
   room.throwResult = null;
@@ -443,7 +445,7 @@ export function callSixTrump(room, playerId, cardIds) {
   const seat = findSeatByPlayer(room, playerId);
   if (!seat) throw new Error("请先入座");
   if (room.bidResponses[seat.index]) throw new Error("你已经响应过了");
-  const openingAuction = room.sixFirstAuction === true;
+  const openingAuction = room.sixFirstAuction === true && room.round === 1;
   const levelRank = openingAuction ? seat.level : room.levelRank;
   const cards = pickCards(seat.hand, cardIds);
   const bid = evaluateSixTrumpCall(cards, levelRank, { allowNoTrump: isClassic4(room) });
@@ -539,6 +541,7 @@ function redealSixSameRound(room, dealerSeat) {
   room.currentTrick = [];
   room.lastTrick = [];
   room.lastTrickWin = null;
+  room.autoFinishLastTrick = false;
   room.friendReveal = null;
   room.throwResult = null;
   room.finishedTricks = [];
@@ -711,9 +714,15 @@ export function playCards(room, playerId, cardIds) {
   if (!seat) throw new Error("请先入座");
   if ((room.trickPauseUntil || 0) > Date.now()) throw new Error("上一墩展示中，请稍候");
   if (seat.index !== room.turnSeat) throw new Error("还没轮到你");
+  playCardsInternal(room, seat, cardIds);
+  autoPlayRestOfLastTrick(room);
+}
+
+function playCardsInternal(room, seat, cardIds) {
   const cards = pickCards(seat.hand, cardIds);
   if (!cards.length) throw new Error("请选择要出的牌");
   const leaderPlay = room.currentTrick[0]?.cards ?? null;
+  const wasLead = !leaderPlay;
 
   // Clear previous throwResult whenever a new card is played
   room.throwResult = null;
@@ -780,6 +789,24 @@ export function playCards(room, playerId, cardIds) {
     finishTrick(room);
   } else {
     room.turnSeat = nextSeat(room.turnSeat, room.seatCount);
+    if (wasLead && seat.hand.length === 0) {
+      room.autoFinishLastTrick = true;
+    }
+  }
+}
+
+function autoPlayRestOfLastTrick(room) {
+  while (room.phase === PHASES.PLAYING
+    && room.autoFinishLastTrick
+    && room.currentTrick.length > 0
+    && room.currentTrick.length < room.seatCount) {
+    const seat = room.seats[room.turnSeat];
+    const leaderCards = room.currentTrick[0]?.cards ?? null;
+    if (!seat || !leaderCards || seat.hand.length !== leaderCards.length) break;
+    playCardsInternal(room, seat, seat.hand.map((card) => card.id));
+  }
+  if (room.currentTrick.length === 0 || room.phase !== PHASES.PLAYING) {
+    room.autoFinishLastTrick = false;
   }
 }
 
@@ -1650,6 +1677,7 @@ function finishTrick(room) {
   room.lastTrickWin = { winner, points, seq: room.finishedTricks.length };
   room.lastTrick = room.currentTrick;
   room.currentTrick = [];
+  room.autoFinishLastTrick = false;
   if (room.seats.every((seat) => seat.hand.length === 0)) {
     finishRound(room, winner);
     return;
@@ -1897,7 +1925,10 @@ export function validatePlay(room, seat, cards, leaderCards) {
     const forced = (seat.hand.length - lockedInHand) < leaderCards.length
       || (lockedSuit === ledSuitForLock && availForLock.length <= leaderCards.length)
       || (availForLock.length > 0 && availForLock.every((c) => c.rank === lr && c.suit === ls));
-    if (competitive && !forced) {
+    const leaderShapeForLock = analyzeShape(leaderCards, room);
+    const wantedForLock = forcedRequirement(leaderShapeForLock, availForLock, room, seat.lockedTriples || []);
+    const lockedPairNeeded = !requirementSatisfiedWithoutLockedPair(cards, wantedForLock, room, lockedKey);
+    if (competitive && !forced && lockedPairNeeded) {
       return { ok: false, reason: "这副三条已锁定，不能拆成对子出（请改出单张）" };
     }
   }
@@ -2374,6 +2405,37 @@ function lockedPairViolation(seat, cards, room) {
     }
   }
   return null;
+}
+
+function requirementSatisfiedWithoutLockedPair(cards, wanted, room, lockedKey) {
+  if (!wanted || wanted.type === "any") return true;
+  const filtered = cards.filter((c) => `${c.rank}|${c.suit}` !== lockedKey);
+  const sorted = [...filtered].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  const groups = groupCards(sorted);
+
+  if (wanted.type === "tractor") {
+    if (wanted.unit === 3) {
+      const run = findBestTractorRun(filtered, room, 3);
+      return !!run && run.length >= wanted.count;
+    }
+    return findTractors(filtered, room, wanted.count * wanted.unit).length > 0;
+  }
+  if (wanted.type === "pairs") {
+    return groups.filter((g) => wanted.unit === 2 ? g.length === 2 : g.length >= wanted.unit).length >= wanted.count;
+  }
+  if (wanted.type === "tripleFallback") {
+    const triples = groups.filter((g) => g.length >= 3).length;
+    const pairs = groups.filter((g) => g.length >= 2 && g.length < 3).length;
+    return triples >= wanted.triples && pairs >= wanted.pairs;
+  }
+  if (wanted.type === "pairTractorFallback") {
+    const run = findBestTractorRun(filtered, room, 2);
+    const pairs = groups.filter((g) => g.length === 2).length;
+    return !!run && run.length >= wanted.tractorPairs && pairs >= wanted.pairs;
+  }
+  if (wanted.type === "triple") return groups.some((g) => g.length >= 3);
+  if (wanted.type === "pair") return groups.some((g) => g.length === 2);
+  return true;
 }
 
 // 在“需要对子但天然对子不够”的选择时刻记录玩家是否保留了三条：
@@ -3241,6 +3303,7 @@ export function publicState(room, viewerId = null) {
       handCount: seat.hand.length,
       takenTrickPoints: seat.takenTrickPoints,
       isYou: seat.playerId === viewerId,
+      lockedTriples: seat.playerId === viewerId ? (seat.lockedTriples || []) : [],
       hand: seat.playerId === viewerId ? seat.hand : []
     })),
     hiddenKittyCount: room.hiddenKitty.length,

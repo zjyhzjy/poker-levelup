@@ -29,6 +29,8 @@ const $ = (sel) => document.querySelector(sel);
 // Tracks the currently shown bid so the center reveal only re-animates on change
 let lastBidSig = "";
 let trickPauseRenderTimer = null;
+let lastKillTrickSig = "";
+const animatedKillSeats = new Set();
 // Card ids that have already played their deal-in animation, so re-renders during
 // dealing don't make the whole hand flicker (only newly dealt cards animate).
 const dealtCardIds = new Set();
@@ -78,12 +80,13 @@ $("#avatarPicker")?.addEventListener("touchend", chooseAvatarFromEvent, { passiv
 $("#joinForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const code = $("#roomCode").value.trim();
-  const seatCount = code ? undefined : Number($("#seatCountSel")?.value) || 5;
-  connectAndJoin(code, $("#nickname").value.trim(), seatCount);
+  connectAndJoin(code, $("#nickname").value.trim(), code ? undefined : 5);
 });
 
-$("#createRoom").addEventListener("click", () => {
-  connectAndJoin("", $("#nickname").value.trim(), Number($("#seatCountSel")?.value) || 5);
+document.querySelectorAll("[data-create-seat]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    connectAndJoin("", $("#nickname").value.trim(), Number(btn.dataset.createSeat) || 5);
+  });
 });
 
 // 复制邀请链接（含房间码深链），朋友打开即自动填入房间码、一键加入。
@@ -638,6 +641,13 @@ function renderSeats(room) {
   for (const play of (room.lastTrick || [])) lastPlayed[play.seat] = play.cards;
   const currentKillSeats = new Set(room.trumpKillSeats || []);
   const completedWinner = room.currentTrick.length === 0 ? room.lastTrickWin?.winner : null;
+  const killTrickSig = (room.currentTrick || [])
+    .map((play) => `${play.seat}:${(play.cards || []).map((card) => card.id).join(",")}`)
+    .join("|");
+  if (killTrickSig !== lastKillTrickSig) {
+    lastKillTrickSig = killTrickSig;
+    animatedKillSeats.clear();
+  }
 
   const isDealer = (i) => room.dealerSeat === i;
   const myParity = (room.viewerSeat ?? 0) % 2;
@@ -696,6 +706,8 @@ function renderSeats(room) {
     const winningPlay = (currentPlayShown && room.currentWinnerSeat === seat.index)
       || (completedPlayShown && completedWinner === seat.index);
     const killPlay = currentPlayShown && currentKillSeats.has(seat.index);
+    const animateKill = killPlay && !animatedKillSeats.has(seat.index);
+    if (animateKill) animatedKillSeats.add(seat.index);
 
     // Personal score
     let personalScore = "";
@@ -741,7 +753,8 @@ function renderSeats(room) {
       "seat-played",
       showBids ? "bid-played" : "",
       winningPlay ? "winning" : "",
-      killPlay ? "trump-kill" : ""
+      killPlay ? "trump-kill" : "",
+      killPlay && !animateKill ? "trump-kill-settled" : ""
     ].filter(Boolean).join(" ");
     const playedDiv = sideCardsHTML
       ? `<div class="${playedClasses}">${sideCardsHTML}</div>`
@@ -1169,7 +1182,7 @@ function renderHand(room) {
   const you = room.seats.find((s) => s.isYou);
   const hand = you?.hand || [];
 
-  $("#selectionInfo").textContent = state.selected.size > 0 ? `已选 ${state.selected.size} 张` : "";
+  $("#selectionInfo").textContent = describeSelectedCards(you, hand);
 
   // Reset the deal-in tracker whenever we're not actively dealing, so the next
   // round's deal animates fresh (and normal play never animates).
@@ -1200,6 +1213,18 @@ function renderHand(room) {
     container.style.height = `${Math.round(86 * UI)}px`;
     renderHandRow(container, hand, containerWidth, cardW, 2);
   }
+}
+
+function describeSelectedCards(seat, hand) {
+  if (state.selected.size === 0) return "";
+  const selected = hand.filter((card) => state.selected.has(card.id));
+  if (selected.length === 2
+    && selected[0].rank === selected[1].rank
+    && selected[0].suit === selected[1].suit
+    && (seat?.lockedTriples || []).includes(`${selected[0].rank}|${selected[0].suit}`)) {
+    return `两张单${selected[0].rank}`;
+  }
+  return `已选 ${state.selected.size} 张`;
 }
 
 function renderHandRow(container, hand, containerWidth, cardW, bottomOffset) {

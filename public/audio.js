@@ -59,9 +59,9 @@ function pluck(freq, when, dur = 0.5, gain = 0.18, type = "triangle") {
 // persists. Falls back to the synth loop only if the bundled /bgm.mp3 fails.
 const MUSIC = [
   { id: "default", name: "默认（开场+牌局）", src: "/bgm.mp3", splitAt: 32 },
-  { id: "swing",   name: "摇摆爵士",          src: "https://assets.mixkit.co/music/526/526.mp3" },
-  { id: "jazz",    name: "轻松爵士",          src: "https://assets.mixkit.co/music/528/528.mp3" },
-  { id: "world",   name: "游戏节拍",          src: "https://assets.mixkit.co/music/466/466.mp3" }
+  { id: "one-summers-day", name: "One Summer's Day", src: "/One%20Summer%27S%20Day.mp3" },
+  { id: "kiss-the-rain",   name: "Kiss the Rain",    src: "/kiss%20the%20rain.mp3" },
+  { id: "huan-qin",        name: "欢沁",              src: "/%E6%AC%A2%E6%B2%81.mp3" }
 ];
 let trackId = localStorage.getItem("szp.track") || "default";
 let musicPhase = "lobby";          // "lobby" (opening) | "game"
