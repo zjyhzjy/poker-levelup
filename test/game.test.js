@@ -120,6 +120,32 @@ test("AI 叫朋友不会把自己当成朋友", () => {
   assert.ok(call.ordinal >= 1 && call.ordinal <= 3);
 });
 
+test("大师庄家叫朋友优先叫副牌 A，常主 A 时改叫 K", () => {
+  const deck = createDeck();
+
+  const room = createRoom("FRMASTER");
+  room.levelRank = "7";
+  room.trumpSuit = "hearts";
+  const dealer = room.seats[0];
+  dealer.playerId = "d"; dealer.isAi = true; dealer.aiLevel = "master"; dealer.level = "7";
+  dealer.hand = [
+    ...deck.filter((c) => c.rank === "A" && c.suit === "spades").slice(0, 1),
+    ...deck.filter((c) => c.rank === "K" && c.suit === "clubs").slice(0, 1)
+  ];
+  assert.deepEqual(chooseAiFriendCard(room, dealer), { ordinal: 2, rank: "A", suit: "spades" });
+
+  const aceRoom = createRoom("FRMASTERACE");
+  aceRoom.levelRank = "A";
+  aceRoom.trumpSuit = "hearts";
+  const aceDealer = aceRoom.seats[0];
+  aceDealer.playerId = "d"; aceDealer.isAi = true; aceDealer.aiLevel = "master"; aceDealer.level = "A";
+  aceDealer.hand = [
+    ...deck.filter((c) => c.rank === "K" && c.suit === "diamonds").slice(0, 1),
+    ...deck.filter((c) => c.rank === "Q" && c.suit === "clubs").slice(0, 1)
+  ];
+  assert.deepEqual(chooseAiFriendCard(aceRoom, aceDealer), { ordinal: 2, rank: "K", suit: "diamonds" });
+});
+
 test("AI 跟牌不会把分牌送给对家", () => {
   const room = createRoom("PT");
   room.levelRank = "2";
@@ -139,6 +165,31 @@ test("AI 跟牌不会把分牌送给对家", () => {
   const play = chooseAiPlay(room, ai, [spadeK]);
   assert.equal(play.length, 1);
   assert.equal(play[0].rank, "3"); // dump the 3, never feed the 5 to an enemy
+});
+
+test("潜在朋友确认自己是队友后，会给庄家稳张上分", () => {
+  const room = createRoom("SECRETFR");
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  room.dealerSeat = 0;
+  room.friendSeat = null;
+  room.friendCall = { ordinal: 2, rank: "A", suit: "spades" };
+  const deck = createDeck();
+  const dealerA = deck.find((c) => c.rank === "A" && c.suit === "spades");
+  const friendAs = deck.filter((c) => c.rank === "A" && c.suit === "spades").slice(1, 3);
+  const spadeK = deck.find((c) => c.rank === "K" && c.suit === "spades");
+  const spade9 = deck.find((c) => c.rank === "9" && c.suit === "spades");
+  room.seats[0].playerId = "d";
+  const ai = room.seats[1];
+  ai.playerId = "ai1"; ai.isAi = true; ai.aiLevel = "master";
+  ai.hand = [...friendAs, spadeK, spade9];
+  room.currentTrick = [{ seat: 0, cards: [dealerA], shape: analyzeShape([dealerA], room), points: 0 }];
+  room.turnSeat = 1;
+
+  const play = chooseAiPlay(room, ai, [dealerA]);
+
+  assert.equal(play.length, 1);
+  assert.equal(play[0].rank, "K", "已知自己是朋友时，应把分上给庄家的 A");
 });
 
 test("AI 跟单张时优先出自然单张最小非分牌，不拆对子", () => {
@@ -296,6 +347,42 @@ test("AI 领牌会兑现确定的赢张（基础）", () => {
   let cashes = 0;
   for (let k = 0; k < 40; k++) { ai.aiRngState = (k * 2654435761) | 0; const p = chooseAiPlay(room, ai, null); if (p.length === 1 && p[0].rank === "A") cashes++; }
   assert.ok(cashes > 30, `应当通常兑现黑桃A，实际 ${cashes}/40`);
+});
+
+test("大师首出优先兑现副牌大组合，而不是无意义小单张", () => {
+  const room = createRoom("MASTERLEAD");
+  room.levelRank = "2"; room.trumpSuit = "hearts"; room.dealerSeat = 1; room.friendSeat = null;
+  const deck = createDeck();
+  const ai = room.seats[0];
+  ai.playerId = "ai0"; ai.isAi = true; ai.aiLevel = "master";
+  ai.hand = [
+    ...deck.filter((c) => c.rank === "A" && c.suit === "spades").slice(0, 2),
+    deck.find((c) => c.rank === "3" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "4" && c.suit === "diamonds")
+  ];
+
+  const play = chooseAiPlay(room, ai, null);
+
+  assert.equal(play.length, 2);
+  assert.equal(play.every((c) => c.rank === "A" && c.suit === "spades"), true);
+});
+
+test("大师首出会优先尝试副牌对子，即使未必绝对最大", () => {
+  const room = createRoom("MASTERPAIR");
+  room.levelRank = "2"; room.trumpSuit = "hearts"; room.dealerSeat = 1; room.friendSeat = null;
+  const deck = createDeck();
+  const ai = room.seats[0];
+  ai.playerId = "ai0"; ai.isAi = true; ai.aiLevel = "master";
+  ai.hand = [
+    ...deck.filter((c) => c.rank === "K" && c.suit === "spades").slice(0, 2),
+    deck.find((c) => c.rank === "3" && c.suit === "clubs"),
+    deck.find((c) => c.rank === "4" && c.suit === "diamonds")
+  ];
+
+  const play = chooseAiPlay(room, ai, null);
+
+  assert.equal(play.length, 2);
+  assert.equal(play.every((c) => c.rank === "K" && c.suit === "spades"), true);
 });
 
 test("AI 垫牌优先做空门（基础）", () => {
@@ -521,6 +608,29 @@ test("翻底强制坐庄公开轮盘动画起点、步数和目标", () => {
   // 最后一张底牌只在中央轮盘面板（forceSpin.card）显示，不挂到被迫庄家头顶（seatBids），
   // 以免被误解成他亮的花色牌。
   assert.equal(state.seatBids["4"], undefined, "翻出的底牌不应显示在庄家座位上");
+});
+
+test("翻底强制坐庄：大小王按 0 点停在第一个摸牌人", () => {
+  for (const rank of ["smallJoker", "bigJoker"]) {
+    const room = createRoom(`FORCE${rank}`);
+    const deck = createDeck();
+    for (let i = 0; i < 5; i += 1) {
+      room.seats[i].playerId = `p${i}`;
+      room.seats[i].nickname = `P${i}`;
+      room.seats[i].level = "7";
+    }
+    room.starterSeat = 2;
+    const lastKittyCard = deck.find((c) => c.rank === rank);
+    forceDealer(room, lastKittyCard);
+    const state = publicState(room, "p2");
+
+    assert.equal(room.dealerSeat, 2, `${rank} 为 0 点，应停在 starterSeat`);
+    assert.equal(state.forceSpin.startSeat, 2);
+    assert.equal(state.forceSpin.count, 0);
+    assert.equal(state.forceSpin.targetSeat, 2);
+    assert.equal(state.forceSpin.card.rank, rank);
+    assert.equal(room.noTrump, true);
+  }
 });
 
 test("翻底轮盘倒计时结束前不能亮主或定主", () => {
@@ -1770,6 +1880,57 @@ test("4 人 80 分：至少 2 张王可以亮无主", () => {
   assert.equal(room.dealerSeat, 0);
   assert.equal(room.trumpSuit, null);
   assert.equal(room.noTrump, true);
+});
+
+test("4 人 80 分已有庄家：闲家盖主只改花色不改庄家", () => {
+  const room = createRoom("FOURCOVER", { seatCount: 4 });
+  for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  room.phase = "sixTrump";
+  room.round = 2;
+  room.teamLevels = { 0: "3", 1: "4" };
+  room.dealerSeat = 0;
+  room.sixOriginalDealerSeat = 0;
+  room.sixFirstAuction = true; // defensive: existing dealer means no one can抢庄
+  room.levelRank = "3";
+  room.starterSeat = 0;
+
+  const deck = createDeck(2);
+  const spade3 = deck.find((card) => card.rank === "3" && card.suit === "spades");
+  const club3s = deck.filter((card) => card.rank === "3" && card.suit === "clubs").slice(0, 2);
+  room.seats[0].hand.push(spade3);
+  room.seats[1].hand.push(...club3s);
+
+  callSixTrump(room, "p0", [spade3.id]);
+  callSixTrump(room, "p1", club3s.map((card) => card.id));
+  for (const i of [0, 2, 3]) passSixTrump(room, `p${i}`);
+
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, 0, "4 人已有庄家时盖主不能改变庄家");
+  assert.equal(room.levelRank, "3");
+  assert.equal(room.trumpSuit, "clubs");
+  assert.equal(room.starterSeat, 0);
+});
+
+test("4 人 80 分已有庄家：闲家不能亮自己等级牌夺庄", () => {
+  const room = createRoom("FOURSTEAL", { seatCount: 4 });
+  for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  room.phase = "sixTrump";
+  room.round = 2;
+  room.teamLevels = { 0: "2", 1: "3" };
+  room.dealerSeat = 0;
+  room.sixOriginalDealerSeat = 0;
+  room.sixFirstAuction = true; // defensive: stale first-auction flag must not allow夺庄
+  room.levelRank = "2";
+  room.starterSeat = 0;
+
+  const deck = createDeck(2);
+  const club3s = deck.filter((card) => card.rank === "3" && card.suit === "clubs").slice(0, 2);
+  room.seats[1].hand.push(...club3s);
+
+  assert.throws(() => callSixTrump(room, "p1", club3s.map((card) => card.id)), /当前等级 2/);
+  assert.equal(room.dealerSeat, 0);
+  assert.equal(room.levelRank, "2");
+  assert.equal(room.trumpSuit, null);
 });
 
 test("4 人 80 分结算分档", () => {

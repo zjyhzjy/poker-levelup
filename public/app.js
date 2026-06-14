@@ -339,7 +339,7 @@ function activeForceSpin(room) {
     return null;
   }
   const interval = Math.max(120, Number(forceSpinLocal.intervalMs || 1000));
-  const count = Math.max(1, Number(forceSpinLocal.count || 1));
+  const count = Math.max(0, Number(forceSpinLocal.count ?? 1));
   const hold = Math.max(0, Number(forceSpinLocal.holdMs || 5000));
   const elapsed = Math.max(0, Date.now() - forceSpinClientStartedAt);
   if (elapsed <= count * interval + hold) return forceSpinLocal;
@@ -356,19 +356,19 @@ function forceSpinInfo(room) {
   const spin = activeForceSpin(room);
   if (!spin) return null;
   const interval = Math.max(120, Number(spin.intervalMs || 1000));
-  const total = Math.max(1, Number(spin.count || 1));
+  const total = Math.max(0, Number(spin.count ?? 1));
   const elapsed = Math.max(0, Date.now() - forceSpinClientStartedAt);
-  const step = Math.min(total - 1, Math.floor(elapsed / interval));
+  const step = total === 0 ? 0 : Math.min(total - 1, Math.floor(elapsed / interval));
   const seatCount = room?.seatCount || 5;
   const startSeat = Number(spin.startSeat || 0);
   return {
     spin,
     total,
     step,
-    current: step + 1,                 // 1-indexed running count shown on the seat
+    current: total === 0 ? 0 : step + 1,
     seatIndex: (startSeat + step) % seatCount,
     startSeat,
-    landed: step + 1 >= total,         // highlight has reached the final (target) seat
+    landed: total === 0 || step + 1 >= total,
     card: spin.card || null
   };
 }
@@ -390,7 +390,7 @@ function scheduleForceSpinRefresh(room) {
   const spin = activeForceSpin(room);
   if (!spin) return;
   const interval = Math.max(120, Number(spin.intervalMs || 1000));
-  const count = Math.max(1, Number(spin.count || 1));
+  const count = Math.max(0, Number(spin.count ?? 1));
   const hold = Math.max(0, Number(spin.holdMs || 5000));
   const elapsed = Math.max(0, Date.now() - forceSpinClientStartedAt);
   const total = count * interval + hold;

@@ -553,7 +553,7 @@ function scheduleAi(room) {
   // 会让 AI 循环停摆、AI 庄家永远不定主而整桌卡死。倒计时未结束则改为倒计时后再调度。
   if (room.phase === "forcedSuit" && room.forceSpin) {
     const spin = room.forceSpin;
-    const until = (spin.startedAt || 0) + (spin.count || 1) * (spin.intervalMs || 1000);
+    const until = (spin.startedAt || 0) + Math.max(0, Number(spin.count ?? 1)) * (spin.intervalMs || 1000);
     if (until > Date.now()) {
       setTimeout(() => scheduleAi(room), Math.max(20, until - Date.now() + 50));
       return;

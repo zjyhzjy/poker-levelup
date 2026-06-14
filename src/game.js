@@ -613,8 +613,8 @@ export function confirmDealer(room) {
 
 export function forceDealer(room, lastKittyCard) {
   // 从第一个摸牌玩家(starterSeat)开始，按逆时针(nextSeat，与摸牌/出牌方向一致)数人。
-  // 点数映射位置：A=1(starterSeat 自己)、2=第2个、… K=13、王=14/15。
-  const count = forceCount(lastKittyCard); // 1 for A/jokers, number for 2-K
+  // 点数映射位置：王=0、A=1（都停在 starterSeat 自己）、2=第2个、… K=13。
+  const count = forceCount(lastKittyCard);
   let seatIndex = room.starterSeat;
   for (let i = 1; i < count; i += 1) seatIndex = nextSeat(seatIndex, room.seatCount);
   const dealer = room.seats[seatIndex];
@@ -650,7 +650,7 @@ function forceSpinCountdownActive(room) {
   const spin = room.forceSpin;
   if (!spin) return false;
   const interval = Math.max(0, Number(spin.intervalMs || 0));
-  const count = Math.max(1, Number(spin.count || 1));
+  const count = Math.max(0, Number(spin.count ?? 1));
   return Date.now() < Number(spin.startedAt || 0) + count * interval;
 }
 
@@ -1062,7 +1062,7 @@ export const AI_PROFILES = {
   hard:   { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: true,  bidRatio: 0.42, temp: 0.12 },
   // 大师：叫牌/扣底/亮主等沿用 hard 启发式；出牌阶段由服务端接入 PIMC 搜索
   // （src/ai/pimc.js）逐步推演，强于纯启发式。见 server.js 的 masterStep。
-  master: { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: true,  bidRatio: 0.42, temp: 0.12 }
+  master: { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: true, masterLead: true, bidRatio: 0.42, temp: 0.12 }
 };
 export function aiProfile(seat) {
   return AI_PROFILES[seat?.aiLevel] || AI_PROFILES.medium;
@@ -1289,8 +1289,32 @@ function aiRelation(room, selfIndex, otherIndex) {
     const team = dealerTeamSeats(room);
     return team.includes(selfIndex) === team.includes(otherIndex) ? "ally" : "enemy";
   }
+  if (hasFriendMode(room) && room.friendCall && inferredFriendSeat(room, selfIndex) === selfIndex) {
+    return otherIndex === room.dealerSeat ? "ally" : "enemy";
+  }
   if (otherIndex === room.dealerSeat) return "enemy";
   return "unknown";
+}
+
+function inferredFriendSeat(room, seatIndex) {
+  if (!hasFriendMode(room) || room.friendSeat !== null || seatIndex === room.dealerSeat) return null;
+  const call = room.friendCall;
+  if (!call || !call.rank || !call.suit) return null;
+  const seat = room.seats[seatIndex];
+  const inHand = seat.hand.filter((card) => card.rank === call.rank && card.suit === call.suit).length;
+  if (inHand <= 0) return null;
+  let dealerShown = 0;
+  for (const t of room.finishedTricks) {
+    for (const p of t.plays) {
+      if (p.seat !== room.dealerSeat) continue;
+      dealerShown += p.cards.filter((card) => card.rank === call.rank && card.suit === call.suit).length;
+    }
+  }
+  for (const p of room.currentTrick) {
+    if (p.seat !== room.dealerSeat) continue;
+    dealerShown += p.cards.filter((card) => card.rank === call.rank && card.suit === call.suit).length;
+  }
+  return dealerShown >= call.ordinal - 1 && dealerShown + inHand >= call.ordinal ? seatIndex : null;
 }
 
 // Who currently holds the trick, and how it relates to me + points at stake.
@@ -1444,12 +1468,13 @@ function allyBehind(room, seat) {
 }
 
 function chooseFollow(room, seat, leaderCards, profile) {
-  const preferredSingle = preferredSingleFollow(room, seat, leaderCards);
+  const stand = trickStanding(room, seat);
+  const seen = seenCounts(room, seat);
+  const allySecure = stand?.rel === "ally" && (stand.isLast || stand.winnerRuffed || isComboBoss(room, seat, stand.winnerCards, seen));
+  const preferredSingle = allySecure ? null : preferredSingleFollow(room, seat, leaderCards);
   if (preferredSingle && validatePlay(room, seat, preferredSingle, leaderCards).ok) return preferredSingle;
   const cands = followCandidates(room, seat, leaderCards);
   if (!cands.length) return null;
-  const stand = trickStanding(room, seat);
-  const seen = seenCounts(room, seat);
   const scores = cands.map((c) => scoreFollow(room, seat, c, stand, profile, seen));
   return chooseWeighted(cands, scores, seat, profile);
 }
@@ -1488,6 +1513,8 @@ function preferredSingleFollow(room, seat, leaderCards) {
 // ruff risk a human also accepts when cashing winners.
 function chooseLead(room, seat, profile) {
   const hand = seat.hand;
+  const friendLead = dealerFriendSignalLead(room, seat, profile);
+  if (friendLead && validatePlay(room, seat, friendLead, null).ok) return friendLead;
   const seen = seenCounts(room, seat);
   const cands = leadCandidates(room, seat).filter((c) => validatePlay(room, seat, c, null).ok);
   if (!cands.length) return [lowestCard(hand, room)];
@@ -1546,8 +1573,16 @@ function scoreLead(room, seat, cards, profile, seen) {
 
   // Non-point low single = the probe: pick it only when nothing is worth cashing.
   if (len === 1 && !boss && cardScore(head) === 0) return W.lProbe - cardOrderValue(head, room) * W.lProbeCard;
-  // A non-boss high card / combo can be beaten or ruffed — don't throw it away.
-  if (!boss) return -W.lNonBoss - cardOrderValue(head, room) * W.lNonBossCard - len;
+  // A non-boss high card / combo can be beaten or ruffed. Master still prefers
+  // meaningful side-suit structures over a pointless low single: pairs/triples/
+  // tractors often take control even when not mathematically boss yet.
+  if (!boss) {
+    if (profile.masterLead && !isTrump && len >= 2) {
+      const ruffable = enemyVoidIn(room, seat, head.suit) || suitPlayed(room, head.suit) > 8;
+      return 1.2 + len * 1.1 + cardOrderValue(head, room) * 0.08 + pts * 0.35 - (ruffable ? 2.5 : 0);
+    }
+    return -W.lNonBoss - cardOrderValue(head, room) * W.lNonBossCard - len;
+  }
 
   // Boss combo: cash a guaranteed winner — bank points, clear cards, apply pressure.
   let u = W.lBossBase + pts * W.lBossPts + len * W.lBossLen;
@@ -1563,6 +1598,17 @@ function scoreLead(room, seat, cards, profile, seen) {
     if (ruffable) u -= W.lAceRuff;
   }
   return u;
+}
+
+function dealerFriendSignalLead(room, seat, profile) {
+  if (!profile.masterLead || seat.index !== room.dealerSeat || room.friendSeat !== null) return null;
+  const call = room.friendCall;
+  if (!call || call.suit === "joker") return null;
+  const own = seat.hand
+    .filter((card) => card.rank === call.rank && card.suit === call.suit)
+    .sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  if (!own.length) return null;
+  return [own[0]];
 }
 
 // Has `seatIndex` shown void in `suit` (a side suit) — i.e. failed to follow it
@@ -2823,20 +2869,21 @@ export function chooseAiBury(room, dealer) {
 export function chooseAiFriendCard(room, dealer) {
   const level = room.levelRank;
   const isTrump = (c) => playSuit(c, room) === "trump";
-  // Prefer recruiting a partner in the dealer's SHORTEST side suit (the dealer's
-  // weak spot, so the friend complements it).
   const suitLen = {};
   for (const c of dealer.hand) if (!isTrump(c)) suitLen[c.suit] = (suitLen[c.suit] || 0) + 1;
-  const RANK_PREF = ["A", "K", "10", "Q", "J", "9", "8", "7", "6", "5"];
+  const primary = level === "A" ? "K" : "A";
+  const RANK_PREF = [primary, "A", "K", "10", "Q", "J", "9", "8", "7", "6", "5"]
+    .filter((rank, index, arr) => rank !== level && arr.indexOf(rank) === index);
   let best = null;
   for (const rank of RANK_PREF) {
-    if (rank === level) continue; // level rank is trump — we want a side partner card
     for (const suit of SUITS) {
       const held = dealer.hand.filter((c) => c.rank === rank && c.suit === suit).length;
       const ordinal = held + 1;
       if (ordinal > 3) continue; // dealer holds all 3 copies — nobody else can have it
       const pts = (rank === "K" || rank === "10" || rank === "5") ? 1 : 0;
-      const score = (held === 0 ? 60 : 0) + rankNumber(rank) + pts * 5 - (suitLen[suit] || 0) * 3 - held * 10;
+      const isPrimary = rank === primary;
+      const transfer = isPrimary ? (held > 0 ? 95 : 80) : 0;
+      const score = transfer + rankNumber(rank) + pts * 5 - (suitLen[suit] || 0) * 3 - Math.max(0, held - 1) * 8;
       if (!best || score > best.score) best = { ordinal, rank, suit, score };
     }
   }
@@ -3092,12 +3139,11 @@ function trumpKillSeats(room, plays = room.currentTrick) {
 }
 
 function forceCount(card) {
+  if (card.rank === "smallJoker" || card.rank === "bigJoker") return 0;
   if (card.rank === "A") return 1;
   if (card.rank === "J") return 11;
   if (card.rank === "Q") return 12;
   if (card.rank === "K") return 13;
-  if (card.rank === "smallJoker") return 14;
-  if (card.rank === "bigJoker") return 15;
   return Number(card.rank);
 }
 
