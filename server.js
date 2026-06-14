@@ -25,6 +25,8 @@ import {
   passSixTrump,
   playCards,
   publicState,
+  buildSharedState,
+  projectStateForViewer,
   recommendPlay,
   resetToLobby,
   revealKittyCard,
@@ -115,7 +117,7 @@ const ROOM_SWEEP_MS = 2 * 60 * 1000;
 setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms) {
-    const hasLiveClient = [...sockets.values()].some((c) => c.roomCode === code);
+    const hasLiveClient = room.clients && room.clients.size > 0;
     if (hasLiveClient) { room.emptySince = null; continue; }
     if (room.emptySince == null) { room.emptySince = now; continue; }
     if (now - room.emptySince > ROOM_EMPTY_TTL_MS) {
@@ -168,7 +170,7 @@ function handleMessage(client, message) {
       if (seat) {
         // Re-use old playerId and reconnect
         client.playerId = storedId;
-        client.roomCode = code;
+        setClientRoom(client, room);
         client.nickname = seat.nickname;
         seat.connected = true;
         room.spectators.delete(storedId);
@@ -200,7 +202,7 @@ function handleMessage(client, message) {
         const seat = room.seats.find(s => s.playerId === storedId);
         if (seat) {
           client.playerId = storedId;
-          client.roomCode = code;
+          setClientRoom(client, room);
           client.nickname = seat.nickname;
           seat.connected = true;
           room.spectators.delete(storedId);
@@ -229,8 +231,8 @@ function handleMessage(client, message) {
       if (!Number.isInteger(target) || target < 0 || target >= room.seatCount) return;
       const kind = ["tomato", "flower", "poop", "pig", "coffee"].includes(payload.kind) ? payload.kind : "tomato";
       const fromSeat = room.seats.find((s) => s.playerId === client.playerId)?.index ?? null;
-      for (const c of sockets.values()) {
-        if (c.roomCode === room.code) send(c, "emote", { from: fromSeat, target, kind });
+      for (const c of room.clients || []) {
+        try { send(c, "emote", { from: fromSeat, target, kind }); } catch (_) { /* dead socket */ }
       }
       return;
     }
@@ -325,8 +327,19 @@ function handleMessage(client, message) {
   }
 }
 
-function attachToRoom(client, room, nickname) {
+// Track which clients are in a room so broadcast() iterates only this room's
+// members instead of scanning every socket on the server. A client only ever
+// belongs to one room, but guard against a same-socket room switch just in case.
+function setClientRoom(client, room) {
+  if (client.roomCode && client.roomCode !== room.code) {
+    rooms.get(client.roomCode)?.clients?.delete(client);
+  }
   client.roomCode = room.code;
+  (room.clients ??= new Set()).add(client);
+}
+
+function attachToRoom(client, room, nickname) {
+  setClientRoom(client, room);
   client.nickname = nickname?.trim() || client.nickname || "玩家";
   joinRoom(room, client.playerId, client.nickname);
   broadcast(room);
@@ -339,8 +352,11 @@ function currentRoom(client) {
 }
 
 function broadcast(room) {
-  for (const client of sockets.values()) {
-    if (client.roomCode === room.code) send(client, "state", publicState(room, client.playerId));
+  if (!room.clients || room.clients.size === 0) return;
+  const shared = buildSharedState(room); // heavy work done once, reused per viewer
+  for (const client of room.clients) {
+    try { send(client, "state", projectStateForViewer(shared, room, client.playerId)); }
+    catch (_) { /* dead socket — disconnect handler will clean it up */ }
   }
 }
 
@@ -402,6 +418,7 @@ function agreeKickVote(room, client, voteId) {
     for (const c of sockets.values()) {
       if (c.playerId !== targetPlayerId || c.roomCode !== room.code) continue;
       send(c, "kicked", { message: "你已被投票移出座位。" });
+      room.clients?.delete(c);
       c.roomCode = null;
     }
   }
@@ -532,6 +549,16 @@ function scheduleAi(room) {
     setTimeout(() => scheduleAi(room), Math.max(20, room.trickPauseUntil - Date.now() + 20));
     return;
   }
+  // 翻底强制坐庄：runAiStep 在轮盘倒计时内会拒绝定主（返回 false），若此刻 tick 到就
+  // 会让 AI 循环停摆、AI 庄家永远不定主而整桌卡死。倒计时未结束则改为倒计时后再调度。
+  if (room.phase === "forcedSuit" && room.forceSpin) {
+    const spin = room.forceSpin;
+    const until = (spin.startedAt || 0) + (spin.count || 1) * (spin.intervalMs || 1000);
+    if (until > Date.now()) {
+      setTimeout(() => scheduleAi(room), Math.max(20, until - Date.now() + 50));
+      return;
+    }
+  }
   setTimeout(() => {
     let moved = false;
     try {
@@ -601,6 +628,7 @@ function disconnect(client) {
   sockets.delete(client.socket);
   const room = client.roomCode ? rooms.get(client.roomCode) : null;
   if (!room) return;
+  room.clients?.delete(client);
   for (const seat of room.seats) {
     if (seat.playerId === client.playerId) seat.connected = false;
   }

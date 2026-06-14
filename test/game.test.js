@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, buryKitty, callSixTrump, chooseAiFriendCard, chooseAiPlay, chooseForcedTrump, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, determineTrickWinner, evaluateBid, forceDealer, kickSeatByVote, makeBid, passBid, passSixTrump, playCards, publicState, recommendPlay, recomputeScores, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, takeoverAiSeat, upgradeResult, upgradeResultClassic4, upgradeResultSix, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, buryKitty, dominantThrowShape, callSixTrump, chooseAiFriendCard, chooseAiPlay, chooseForcedTrump, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, determineTrickWinner, evaluateBid, forceDealer, kickSeatByVote, makeBid, passBid, passSixTrump, playCards, publicState, recommendPlay, recomputeScores, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, takeoverAiSeat, upgradeResult, upgradeResultClassic4, upgradeResultSix, validatePlay } from "../src/game.js";
 import { buryMultiplierClassic4 } from "../src/rules/classic4.js";
 
 test("三副牌共 162 张", () => {
@@ -93,6 +93,7 @@ test("AI 可以补座并自动推进无人叫庄流程", () => {
   // No one bid → the server reveals the 7 kitty cards to force a dealer.
   let safety = 0;
   while (room.phase === "auction" && safety++ < 10) revealKittyCard(room);
+  if (room.forceSpin) room.forceSpin.startedAt = Date.now() - room.forceSpin.count * room.forceSpin.intervalMs - 1;
   // From here AI advances forcedSuit → burying → friend → playing on its own.
   let guard = 0;
   while (runAiStep(room) && guard < 80) guard += 1;
@@ -265,6 +266,20 @@ test("AI 抢庄只用手里真实的常主牌", () => {
     const c = seat.hand.find((x) => x.id === id);
     assert.ok(c && c.rank === "K" && c.suit === "spades"); // 只用手里的同花级牌
   }
+});
+
+test("弱 AI 为测试不主动亮主", () => {
+  const room = createRoom("EASYBID");
+  const deck = createDeck();
+  const seat = room.seats[0];
+  seat.playerId = "a"; seat.isAi = true; seat.aiLevel = "easy"; seat.level = "K";
+  seat.hand = [
+    ...deck.filter((c) => c.rank === "K" && c.suit === "spades").slice(0, 3),
+    ...deck.filter((c) => c.suit === "spades" && c.rank !== "K").slice(0, 20),
+    ...deck.filter((c) => c.suit === "joker").slice(0, 3)
+  ];
+
+  assert.equal(decideAiBid(room, seat), null);
 });
 
 test("AI 领牌会兑现确定的赢张（基础）", () => {
@@ -472,6 +487,7 @@ test("强制坐庄确认花色后，公开亮牌展示用的花色和牌数", ()
   room.starterSeat = 0;
   const lastKittyCard = deck.find((c) => c.rank === "A" && c.suit === "spades");
   forceDealer(room, lastKittyCard);
+  room.forceSpin.startedAt = Date.now() - room.forceSpin.count * room.forceSpin.intervalMs - 1;
   const dealer = room.seats[room.dealerSeat];
   dealer.hand = deck.filter((c) => c.rank === "7" && c.suit === "hearts").slice(0, 2);
   chooseForcedTrump(room, dealer.playerId, "hearts");
@@ -480,6 +496,74 @@ test("强制坐庄确认花色后，公开亮牌展示用的花色和牌数", ()
   assert.equal(state.currentBid.trumpSuit, "hearts");
   assert.equal(state.currentBid.cards.length, 2);
   assert.equal(state.currentBid.cards.every((c) => c.rank === "7" && c.suit === "hearts"), true);
+});
+
+test("翻底强制坐庄公开轮盘动画起点、步数和目标", () => {
+  const room = createRoom("FORCESPIN");
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) {
+    room.seats[i].playerId = `p${i}`;
+    room.seats[i].nickname = `P${i}`;
+    room.seats[i].level = "7";
+  }
+  room.starterSeat = 0;
+  const lastKittyCard = deck.find((c) => c.rank === "5" && c.suit === "clubs");
+  forceDealer(room, lastKittyCard);
+  const state = publicState(room, "p0");
+
+  assert.equal(room.dealerSeat, 4, "从首摸座位数 5 下应停在第 5 家");
+  assert.equal(state.forceSpin.startSeat, 0);
+  assert.equal(state.forceSpin.count, 5);
+  assert.equal(state.forceSpin.targetSeat, 4);
+  assert.equal(state.forceSpin.intervalMs, 1000);
+  assert.equal(state.forceSpin.holdMs, 5000);
+  assert.equal(state.forceSpin.card.rank, "5");
+  // 最后一张底牌只在中央轮盘面板（forceSpin.card）显示，不挂到被迫庄家头顶（seatBids），
+  // 以免被误解成他亮的花色牌。
+  assert.equal(state.seatBids["4"], undefined, "翻出的底牌不应显示在庄家座位上");
+});
+
+test("翻底轮盘倒计时结束前不能亮主或定主", () => {
+  const room = createRoom("FORCEWAIT");
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) {
+    room.seats[i].playerId = `p${i}`;
+    room.seats[i].nickname = `P${i}`;
+    room.seats[i].level = "7";
+  }
+  room.starterSeat = 0;
+  const lastKittyCard = deck.find((c) => c.rank === "5" && c.suit === "clubs");
+  forceDealer(room, lastKittyCard);
+  const bidCard = deck.find((c) => c.rank === "7" && c.suit === "hearts");
+  room.seats[1].hand = [bidCard];
+  assert.throws(() => makeBid(room, "p1", [bidCard.id]), /轮盘倒计时/);
+  assert.throws(() => chooseForcedTrump(room, room.seats[room.dealerSeat].playerId, null), /轮盘倒计时/);
+});
+
+test("强制定主阶段，其他玩家可在强制庄确认前亮庄接管", () => {
+  const room = createRoom("FORCEBID");
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) {
+    room.seats[i].playerId = `p${i}`;
+    room.seats[i].nickname = `P${i}`;
+    room.seats[i].level = "7";
+  }
+  room.starterSeat = 0;
+  room.kitty = deck.filter((c) => c.rank === "3").slice(0, 7);
+  const lastKittyCard = deck.find((c) => c.rank === "5" && c.suit === "clubs");
+  forceDealer(room, lastKittyCard);
+  room.forceSpin.startedAt = Date.now() - room.forceSpin.count * room.forceSpin.intervalMs - 1;
+  assert.equal(room.dealerSeat, 4);
+  const bidCard = deck.find((c) => c.rank === "7" && c.suit === "hearts");
+  room.seats[1].hand = [bidCard];
+
+  makeBid(room, "p1", [bidCard.id]);
+
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, 1);
+  assert.equal(room.trumpSuit, "hearts");
+  assert.equal(room.forceSpin, null);
+  assert.equal(room.seats[1].hand.length, 8, "新庄应拿起 7 张底牌");
 });
 
 test("甩牌失败罚分随朋友现身重算，并公开闲家扣分统计", () => {
@@ -577,6 +661,33 @@ test("发牌中亮主后，发完牌需重新等待其他玩家不抢", () => {
     if (seat.index !== bidder.index) passBid(room, seat.playerId);
   }
   assert.equal(room.phase, "burying");
+});
+
+test("发牌阶段有人亮主后，未确认庄前继续按本人等级理牌", () => {
+  const room = createRoom("DEALSORT");
+  const deck = createDeck();
+  const card = (rank, suit, copy = 1) => deck.find((c) => c.rank === rank && c.suit === suit && c.copy === copy);
+  for (let i = 0; i < 5; i += 1) {
+    const s = room.seats[i];
+    s.playerId = `p${i}`;
+    s.nickname = `P${i}`;
+    s.level = i === 0 ? "4" : "A";
+  }
+  room.phase = "dealing";
+  room.dealing = true;
+  room.dealCursor = 0;
+  room.kittySize = 0;
+  room.firstLevel = "A";
+  room.seats[0].hand = [card("4", "hearts", 1)];
+  room.seats[1].hand = [card("A", "spades", 1), card("4", "clubs", 1)];
+
+  makeBid(room, "p0", [card("4", "hearts", 1).id]);
+  room.deck = [
+    card("6", "spades", 1), card("7", "hearts", 1), card("8", "clubs", 1), card("9", "diamonds", 1), card("10", "spades", 1)
+  ];
+  dealRound(room);
+
+  assert.equal(room.seats[1].hand[0].rank, "A", "庄家未确认前，别人的 A 仍应按本人等级排在常主区");
 });
 
 test("跟超长副牌拖拉机时同门牌极多也不返回非法牌", () => {
@@ -1721,4 +1832,26 @@ test("通关判定：在 A 上还要升级才算越过 A 夺冠", () => {
   assert.equal(crossesChampion("A", 0), false, "没升级不算");
   assert.equal(crossesChampion("K", 1), false, "还没到 A 不算");
   assert.equal(crossesChampion("2", 2), false);
+});
+
+test("甩牌扣底倍率：只按其中最大的单一牌型计算", () => {
+  // 副花色甩牌（黑桃），主为红桃，级牌 2，便于用普通点数构造组件。
+  const room = createRoom("THROWMULT");
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  room.noTrump = false;
+  const deck = createDeck(3);
+  const pick = (rank, n) => deck.filter((c) => c.rank === rank && c.suit === "spades").slice(0, n);
+
+  // 复数对子 + 单张 → 只算一对（×4，即 pair）。3 与 8 不相连，不构成拖拉机。
+  const pairsPlusSingle = [...pick("3", 2), ...pick("8", 2), ...pick("K", 1)];
+  assert.deepEqual(dominantThrowShape(pairsPlusSingle, room), { type: "pair", unit: 2, count: 1 });
+
+  // 4 张拖拉机 + 单张 + 对子 + 三条 → 只算拖拉机（×16，即 4 张拖拉机）。
+  const big = [...pick("5", 2), ...pick("6", 2), ...pick("9", 1), ...pick("Q", 2), ...pick("J", 3)];
+  assert.deepEqual(dominantThrowShape(big, room), { type: "tractor", unit: 2, count: 2 });
+
+  // 三条 + 对子 → 三条（3 张）大于对子（2 张），取三条（×8）。10 与 K 不相连。
+  const triplePlusPair = [...pick("10", 3), ...pick("K", 2)];
+  assert.deepEqual(dominantThrowShape(triplePlusPair, room), { type: "triple", unit: 3, count: 1 });
 });

@@ -96,6 +96,7 @@ export function createRoom(code = randomRoomCode(), options = {}) {
     deck: [],
     kitty: [],
     revealedKitty: [],
+    forceSpin: null,
     friendCall: null,
     friendSeat: null,
     hiddenKitty: [],
@@ -277,6 +278,7 @@ export function startRound(room, random = Math.random, options = {}) {
   room.seatBids = {};
   room.bidResponses = {};
   room.revealedKitty = [];
+  room.forceSpin = null;
   room.friendCall = null;
   room.friendSeat = null;
   room.hiddenKitty = [];
@@ -362,9 +364,12 @@ function finishDealing(room) {
 }
 
 export function makeBid(room, playerId, cardIds) {
-  if (![PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION].includes(room.phase)) throw new Error("现在不能抢庄");
+  if (![PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION, PHASES.FORCED_SUIT].includes(room.phase)) throw new Error("现在不能抢庄");
   const seat = findSeatByPlayer(room, playerId);
   if (!seat) throw new Error("请先入座");
+  const forcedSuitBid = room.phase === PHASES.FORCED_SUIT;
+  if (forcedSuitBid && forceSpinCountdownActive(room)) throw new Error("翻底轮盘倒计时中，请稍候");
+  if (forcedSuitBid && seat.index === room.dealerSeat) throw new Error("强制庄家请直接确认主花色");
   const cards = pickCards(seat.hand, cardIds);
   const bid = evaluateBid(cards, seat.level);
   if (!bid) throw new Error("只能亮自己的常主牌，或任意 3 张王");
@@ -379,8 +384,15 @@ export function makeBid(room, playerId, cardIds) {
   room.levelRank = bid.levelRank;
   room.noTrump = bid.noTrump;
   room.trumpSuit = bid.trumpSuit;
-  for (const s of room.seats) sortHand(s.hand, room);
+  if (!room.dealing) {
+    for (const s of room.seats) sortHand(s.hand, room);
+  }
   room.tableLog.push(`${seat.nickname} 亮庄：${cards.map((c) => c.label).join("、")}`);
+  if (forcedSuitBid) {
+    room.forceSpin = null;
+    giveKittyToDealer(room);
+    return;
+  }
   // Never confirm immediately — always let broadcast fire first so the bid card
   // is visible on the table. confirmDealer will be triggered by _checkAllBidResponded
   // once everyone has responded, or by scheduleBidTimeout after the response window.
@@ -535,6 +547,7 @@ function redealSixSameRound(room, dealerSeat) {
   room.seatBids = {};
   room.bidResponses = {};
   room.revealedKitty = [];
+  room.forceSpin = null;
   room.friendCall = null;
   room.friendSeat = null;
   room.hiddenKitty = [];
@@ -611,15 +624,34 @@ export function forceDealer(room, lastKittyCard) {
   const isJoker = lastKittyCard.suit === "joker";
   room.noTrump = isJoker;
   room.trumpSuit = isJoker ? null : lastKittyCard.suit;
-  room.currentBid = { seat: seatIndex, playerId: dealer.playerId, strength: 0, levelRank: dealer.level, trumpSuit: room.trumpSuit, noTrump: room.noTrump };
-  if (!isJoker) room.currentBid.cards = [lastKittyCard];
+  room.currentBid = { seat: seatIndex, playerId: dealer.playerId, strength: 0, levelRank: dealer.level, trumpSuit: room.trumpSuit, noTrump: room.noTrump, cards: [lastKittyCard] };
+  // 不把翻出的最后一张底牌塞进 seatBids：否则它会显示在被迫坐庄者头顶，像是他“亮”的
+  // 花色牌，造成误解。这张牌仍保留在 currentBid（内部用）、forceSpin.card（中央轮盘
+  // 面板）和 revealedKitty（河牌上方）里。
   room.seatBids = {};
   room.bidResponses = {};
+  room.forceSpin = {
+    startSeat: room.starterSeat,
+    targetSeat: seatIndex,
+    count,
+    startedAt: Date.now(),
+    intervalMs: 1000,
+    holdMs: 5000,
+    card: { rank: lastKittyCard.rank, suit: lastKittyCard.suit, label: lastKittyCard.label }
+  };
   room.phase = PHASES.FORCED_SUIT;
   room.tableLog.push(`${dealer.nickname} 被强制坐庄，可选择是否亮自己的常主花色改主。`);
   for (const seat of room.seats) {
     sortHand(seat.hand, room);
   }
+}
+
+function forceSpinCountdownActive(room) {
+  const spin = room.forceSpin;
+  if (!spin) return false;
+  const interval = Math.max(0, Number(spin.intervalMs || 0));
+  const count = Math.max(1, Number(spin.count || 1));
+  return Date.now() < Number(spin.startedAt || 0) + count * interval;
 }
 
 function prevSeat(index, seatCount) {
@@ -628,6 +660,7 @@ function prevSeat(index, seatCount) {
 
 export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
   assertPhase(room, PHASES.FORCED_SUIT);
+  if (forceSpinCountdownActive(room)) throw new Error("翻底轮盘倒计时中，请稍候");
   const dealer = findSeatByPlayer(room, playerId);
   if (!dealer || dealer.index !== room.dealerSeat) throw new Error("只有强制庄家可以定主花色");
   if (options.noTrump) {
@@ -636,8 +669,11 @@ export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
     room.noTrump = true;
     room.trumpSuit = null;
     if (room.currentBid) { room.currentBid.noTrump = true; room.currentBid.trumpSuit = null; room.currentBid.cards = cards; room.currentBid.strength = cards.length; }
+    // 强制庄主动亮无主：当成一次真实亮主，挂到庄家座位旁（亮几张显示几张）。
+    room.seatBids = { [dealer.index]: { noTrump: true, trumpSuit: null, levelRank: room.levelRank, strength: cards.length, cards } };
     sortHand(dealer.hand, room);
     room.tableLog.push(`${dealer.nickname} 亮 3 张王，强制定为无主。`);
+    room.forceSpin = null;
     giveKittyToDealer(room);
     return;
   }
@@ -650,11 +686,15 @@ export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
     room.noTrump = false;
     const revealCards = dealer.hand.filter((card) => card.rank === room.levelRank && card.suit === suit).slice(0, 3);
     if (room.currentBid) { room.currentBid.trumpSuit = suit; room.currentBid.noTrump = false; room.currentBid.cards = revealCards; room.currentBid.strength = revealCards.length; }
+    // 强制庄亮自己的常主花色：当成一次真实亮主，挂到庄家座位旁（亮几张显示几张）。
+    room.seatBids = { [dealer.index]: { noTrump: false, trumpSuit: suit, levelRank: room.levelRank, strength: revealCards.length, cards: revealCards } };
   }
   // If suit is null: keep whatever noTrump/trumpSuit forceDealer already set
+  // （suit 为 null = 强制庄不亮，沿用底牌花色；seatBids 维持空，前端改显示“本局主花色为…”。）
   sortHand(dealer.hand, room);
   const suitLabel = room.noTrump ? "无主" : (room.trumpSuit || "未知");
   room.tableLog.push(`${dealer.nickname} 确认主花色：${suitLabel}`);
+  room.forceSpin = null;
   giveKittyToDealer(room);
 }
 
@@ -835,6 +875,7 @@ export function runAiStep(room) {
   }
 
   if (room.phase === PHASES.FORCED_SUIT && isAutoSeat(room, room.dealerSeat)) {
+    if (forceSpinCountdownActive(room)) return false;
     const dealer = room.seats[room.dealerSeat];
     chooseForcedTrump(room, dealer.playerId, chooseAiForcedTrump(room, dealer));
     return true;
@@ -1016,7 +1057,7 @@ function rankSuitGroups(cards) {
 //   riskAware   : avoid over-ruff, duck behind a teammate, use known voids
 //   temp        : softmax temperature — higher = looser/more mistakes (easy)
 export const AI_PROFILES = {
-  easy:   { contest: true, feed: true, pull: false, voidDiscard: false, riskAware: false, bidRatio: 0.62, temp: 1.6  },
+  easy:   { contest: true, feed: true, pull: false, voidDiscard: false, riskAware: false, autoBid: false, bidRatio: 0.62, temp: 1.6  },
   medium: { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: false, bidRatio: 0.50, temp: 0.55 },
   hard:   { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: true,  bidRatio: 0.42, temp: 0.12 },
   // 大师：叫牌/扣底/亮主等沿用 hard 启发式；出牌阶段由服务端接入 PIMC 搜索
@@ -1701,7 +1742,7 @@ function finishRound(room, lastWinner) {
   const kittyPoints = room.hiddenKitty.reduce((sum, card) => sum + cardScore(card), 0);
   let buriedBonus = 0;
   if (!isDealerTeam(room, lastWinner)) {
-    buriedBonus = kittyPoints * buryMultiplier(room, room.finishedTricks.at(-1)?.plays.find((play) => play.seat === lastWinner)?.shape);
+    buriedBonus = kittyPoints * buryMultiplier(room, room.finishedTricks.at(-1)?.plays.find((play) => play.seat === lastWinner));
     room.scores.attackers += buriedBonus;
   }
   const attackers = room.scores.attackers;
@@ -2838,6 +2879,7 @@ function chooseAiForcedTrump(room, dealer) {
 // bid, or null to not bid. Only ever returns cards the seat actually holds.
 export function decideAiBid(room, seat) {
   const profile = aiProfile(seat);
+  if (profile.autoBid === false) return null;
   const hand = seat.hand;
   const level = seat.level;
   const jokers = hand.filter((c) => c.suit === "joker").length;
@@ -2864,6 +2906,7 @@ export function decideAiBid(room, seat) {
 
 export function decideAiSixTrump(room, seat) {
   const profile = aiProfile(seat);
+  if (profile.autoBid === false) return null;
   const hand = seat.hand;
   const level = room.dealerSeat === null ? seat.level : room.levelRank;
   const levelBySuit = {};
@@ -3001,8 +3044,12 @@ export function isDealerTeam(room, seatIndex) {
   return dealerTeamSeats(room).includes(seatIndex);
 }
 
-function buryMultiplier(room, shape) {
+function buryMultiplier(room, winPlay) {
+  let shape = winPlay?.shape;
   if (!shape) return 2;
+  // 甩牌：扣底倍率只按其中“最大的单一牌型”（张数最多的组件）计算，不累加其余组件。
+  // 例：复数对子+单张 → 只算一对（×4）；4 张拖拉机+单张+对子+三条 → 只算拖拉机（×16）。
+  if (shape.type === "throw") shape = dominantThrowShape(winPlay.cards, room);
   if (isClassic4(room)) {
     return buryMultiplierClassic4(shape);
   }
@@ -3011,6 +3058,22 @@ function buryMultiplier(room, shape) {
   if (shape.type === "triple") return 8;
   if (shape.type === "tractor") return 2 ** (shape.unit * shape.count);
   return 2;
+}
+
+// 把一手甩牌拆成结构组件，取“张数最多”的那个组件，合成等价的单一牌型 shape。
+// 倍率随张数单调递增（2^张数），故张数最多 = 倍率最高，符合“只算最大牌型”的规则。
+export function dominantThrowShape(cards, room) {
+  const ledSuit = playSuit(cards[0], room);
+  const components = decomposeThrowComponents(cards, room, ledSuit);
+  let top = null;
+  for (const comp of components) {
+    if (!top || comp.cards.length > top.cards.length) top = comp;
+  }
+  if (!top) return { type: "single", unit: 1, count: 1 };
+  if (top.kind === "tractor") return { type: "tractor", unit: top.unit, count: top.count };
+  if (top.unit === 3) return { type: "triple", unit: 3, count: 1 };
+  if (top.unit === 2) return { type: "pair", unit: 2, count: 1 };
+  return { type: "single", unit: 1, count: 1 };
 }
 
 function trumpKillSeats(room, plays = room.currentTrick) {
@@ -3130,9 +3193,8 @@ export function sortHand(hand, room, overrideLevel = null) {
 
 function sortSeatHandForRound(room, seat) {
   const preDealerFindFriend = hasFriendMode(room)
-    && room.dealerSeat === null
-    && !room.currentBid
-    && [PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION].includes(room.phase);
+    && room.phase === PHASES.DEALING
+    && room.dealing;
   sortHand(seat.hand, room, preDealerFindFriend ? seat.level : null);
 }
 
@@ -3235,8 +3297,12 @@ function sanitizeBid(bid) {
   return { ...rest, cards: (cards || []).map((c) => ({ rank: c.rank, suit: c.suit, label: c.label })) };
 }
 
-export function publicState(room, viewerId = null) {
-  const viewerSeat = findSeatByPlayer(room, viewerId);
+// Viewer-independent slice of the room state. Computed ONCE per broadcast and
+// shared (by reference) across every viewer; projectStateForViewer() overlays
+// the cheap per-viewer bits (own hand, isYou, viewerSeat, isHost) on top. The
+// heavy parts — tricks history mapping, bid sanitising, tableLog slice — used to
+// run once per viewer; now they run once per broadcast.
+export function buildSharedState(room) {
   return {
     code: room.code,
     phase: room.phase,
@@ -3251,6 +3317,7 @@ export function publicState(room, viewerId = null) {
     bidResponses: room.bidResponses,
     dealing: room.dealing,
     revealedKitty: room.revealedKitty,
+    forceSpin: room.forceSpin || null,
     friendCall: room.friendCall,
     friendSeat: room.friendSeat,
     mode: room.mode,
@@ -3302,18 +3369,38 @@ export function publicState(room, viewerId = null) {
       trustee: seat.trustee === true,
       handCount: seat.hand.length,
       takenTrickPoints: seat.takenTrickPoints,
-      isYou: seat.playerId === viewerId,
-      lockedTriples: seat.playerId === viewerId ? (seat.lockedTriples || []) : [],
-      hand: seat.playerId === viewerId ? seat.hand : []
+      isYou: false,
+      lockedTriples: [],
+      hand: []
     })),
     hiddenKittyCount: room.hiddenKitty.length,
     kittyCount: room.kitty.length,
-    viewerSeat: viewerSeat?.index ?? null,
-    isHost: room.hostId === viewerId,
     spectators: [...room.spectators.values()]
       .filter((s) => s.connected)
       .map((s) => s.nickname || "游客")
   };
+}
+
+// Overlay the per-viewer fields onto a shared base. Cheap: non-viewer seats are
+// passed through by reference (never mutated — the result is serialised and sent),
+// only the viewer's own seat object is rebuilt with their hand/lockedTriples.
+export function projectStateForViewer(shared, room, viewerId = null) {
+  const viewerSeat = findSeatByPlayer(room, viewerId);
+  const seats = shared.seats.map((s) => {
+    const live = room.seats[s.index];
+    if (live.playerId !== viewerId) return s;
+    return { ...s, isYou: true, hand: live.hand, lockedTriples: live.lockedTriples || [] };
+  });
+  return {
+    ...shared,
+    seats,
+    viewerSeat: viewerSeat?.index ?? null,
+    isHost: room.hostId === viewerId
+  };
+}
+
+export function publicState(room, viewerId = null) {
+  return projectStateForViewer(buildSharedState(room), room, viewerId);
 }
 
 export const constants = { PHASES, DEFAULT_SEATS };

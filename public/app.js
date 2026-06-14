@@ -1,4 +1,4 @@
-import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, setMusicVol, setFxVol, setMusicPhase, selectTrack, musicTracks, currentTrackId, audioState } from "./audio.js";
+import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, previewVoice, setMusicVol, setFxVol, setMusicPhase, selectTrack, musicTracks, currentTrackId, audioState } from "./audio.js";
 
 /* ─── State ──────────────────────────────────────────────── */
 // Stable, client-owned player identity. Generated once and reused forever so we
@@ -29,6 +29,10 @@ const $ = (sel) => document.querySelector(sel);
 // Tracks the currently shown bid so the center reveal only re-animates on change
 let lastBidSig = "";
 let trickPauseRenderTimer = null;
+let forceSpinRenderTimer = null;
+let forceSpinClientSig = "";
+let forceSpinClientStartedAt = 0;
+let forceSpinLocal = null;
 let lastKillTrickSig = "";
 const animatedKillSeats = new Set();
 // Card ids that have already played their deal-in animation, so re-renders during
@@ -313,6 +317,91 @@ function scheduleTrickPauseRefresh(room) {
   }, remaining + 30);
 }
 
+function forceSpinSig(spin) {
+  if (!spin) return "";
+  return `${spin.startSeat}|${spin.targetSeat}|${spin.count}|${spin.card?.label || ""}`;
+}
+
+function activeForceSpin(room) {
+  const spin = room?.forceSpin;
+  if (spin) {
+    const sig = forceSpinSig(spin);
+    if (sig !== forceSpinClientSig || !forceSpinLocal) {
+      forceSpinClientSig = sig;
+      forceSpinClientStartedAt = Date.now();
+      forceSpinLocal = { ...spin };
+    }
+    return forceSpinLocal;
+  }
+  if (!forceSpinLocal) {
+    forceSpinClientSig = "";
+    forceSpinClientStartedAt = 0;
+    return null;
+  }
+  const interval = Math.max(120, Number(forceSpinLocal.intervalMs || 1000));
+  const count = Math.max(1, Number(forceSpinLocal.count || 1));
+  const hold = Math.max(0, Number(forceSpinLocal.holdMs || 5000));
+  const elapsed = Math.max(0, Date.now() - forceSpinClientStartedAt);
+  if (elapsed <= count * interval + hold) return forceSpinLocal;
+  forceSpinLocal = null;
+  forceSpinClientSig = "";
+  forceSpinClientStartedAt = 0;
+  return null;
+}
+
+// One snapshot of the roulette's current state: which seat the count has reached,
+// the running count number (1..total), and whether it has landed on the target.
+// Everything else (the highlight, per-seat badge, center panel) derives from this.
+function forceSpinInfo(room) {
+  const spin = activeForceSpin(room);
+  if (!spin) return null;
+  const interval = Math.max(120, Number(spin.intervalMs || 1000));
+  const total = Math.max(1, Number(spin.count || 1));
+  const elapsed = Math.max(0, Date.now() - forceSpinClientStartedAt);
+  const step = Math.min(total - 1, Math.floor(elapsed / interval));
+  const seatCount = room?.seatCount || 5;
+  const startSeat = Number(spin.startSeat || 0);
+  return {
+    spin,
+    total,
+    step,
+    current: step + 1,                 // 1-indexed running count shown on the seat
+    seatIndex: (startSeat + step) % seatCount,
+    startSeat,
+    landed: step + 1 >= total,         // highlight has reached the final (target) seat
+    card: spin.card || null
+  };
+}
+
+function forceSpinSeat(room) {
+  return forceSpinInfo(room)?.seatIndex ?? null;
+}
+
+function forceSpinRemaining(room) {
+  const info = forceSpinInfo(room);
+  return info ? Math.max(0, info.total - info.step) : null;
+}
+
+function scheduleForceSpinRefresh(room) {
+  if (forceSpinRenderTimer) {
+    clearTimeout(forceSpinRenderTimer);
+    forceSpinRenderTimer = null;
+  }
+  const spin = activeForceSpin(room);
+  if (!spin) return;
+  const interval = Math.max(120, Number(spin.intervalMs || 1000));
+  const count = Math.max(1, Number(spin.count || 1));
+  const hold = Math.max(0, Number(spin.holdMs || 5000));
+  const elapsed = Math.max(0, Date.now() - forceSpinClientStartedAt);
+  const total = count * interval + hold;
+  if (elapsed >= total + 80) return;
+  const nextTick = Math.max(60, interval - (elapsed % interval) + 8);
+  forceSpinRenderTimer = setTimeout(() => {
+    forceSpinRenderTimer = null;
+    if (state.room) render();
+  }, nextTick);
+}
+
 function startPingLoop() {
   stopPingLoop();
   sendPing();
@@ -386,11 +475,17 @@ function render() {
 
   const room = state.room;
   scheduleTrickPauseRefresh(room);
+  scheduleForceSpinRefresh(room);
+  const table = $(".table-felt");
+  if (table) table.dataset.phase = room.phase || "";
   $("#roomBadge").textContent = `房间 ${room.code}`;
   $("#phaseBadge").textContent = phaseText(room.phase);
 
   const trump = room.noTrump ? "无主" : (room.trumpSuit ? suitSymbolColored(room.trumpSuit) : "-");
-  $("#roundInfo").innerHTML = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}`;
+  const roundInfoHtml = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}`;
+  $("#roundInfo").innerHTML = roundInfoHtml;
+  const mobileRoundInfo = $("#mobileRoundInfo");
+  if (mobileRoundInfo) mobileRoundInfo.innerHTML = roundInfoHtml;
   const kickBtn = $("#kickBtn");
   if (kickBtn) {
     const seated = room.seats.some((s) => s.isYou);
@@ -660,6 +755,8 @@ function renderSeats(room) {
   const seatBids = room.seatBids || {};
   const bidResponses = room.bidResponses || {};
   const viewerSeatIndex = room.viewerSeat ?? 0;
+  const spinInfo = forceSpinInfo(room);
+  const spinningSeat = spinInfo?.seatIndex ?? null;
 
   seatsEl.innerHTML = room.seats.map((seat) => {
     const screenPos = seatToScreenPos(seat.index, viewerSeatIndex, room.seatCount || 5);
@@ -667,6 +764,18 @@ function renderSeats(room) {
     const isActive = room.phase === "playing" && room.turnSeat === seat.index;
     const youClass = seat.isYou ? "you" : "";
     const activeClass = isActive ? "active" : "";
+    const isSpinSeat = spinningSeat === seat.index;
+    const forceSpinClass = isSpinSeat ? (spinInfo.landed ? "force-spin-active force-spin-landed" : "force-spin-active") : "";
+    // 翻底数牌轮盘：当前数到的座位显示跳动的计数（1…X），落定时变金色爆裂；
+    // 首家始终挂一个“起”标记，让所有人看清“从第一个摸牌的人开始数”。
+    let forceCountBadge = "";
+    if (isSpinSeat) {
+      forceCountBadge = `<div class="force-count-badge${spinInfo.landed ? " landed" : ""}">${spinInfo.current}</div>`;
+    }
+    let forceStartBadge = "";
+    if (spinInfo && seat.index === spinInfo.startSeat) {
+      forceStartBadge = `<div class="force-start-badge">起</div>`;
+    }
 
     // Role badge
     let roleBadge = "";
@@ -760,10 +869,12 @@ function renderSeats(room) {
       ? `<div class="${playedClasses}">${sideCardsHTML}</div>`
       : "";
 
-    return `<div class="seat screen-pos-${screenPos} ${youClass} ${activeClass}">
+    return `<div class="seat screen-pos-${screenPos} ${youClass} ${activeClass} ${forceSpinClass}">
       ${playedAbove ? playedDiv : ""}
       <div class="seat-token-wrap">
         ${roleBadge}
+        ${forceStartBadge}
+        ${forceCountBadge}
         <div class="seat-token ${seat.avatar ? "has-avatar" : ""} ${seat.playerId && !seat.isYou ? "emote-target" : ""}"${seat.playerId && !seat.isYou ? ` data-emote="${seat.index}"` : ""}>${seat.avatar ? escapeHtml(seat.avatar) : initial}</div>
         ${personalScore}
       </div>
@@ -869,6 +980,29 @@ function renderCenter(room) {
   // animation whenever someone bids / counters (反主/加固).
   renderBidReveal(room);
 
+  let forceSpinEl = document.getElementById("forceSpinDisplay");
+  if (!forceSpinEl) {
+    forceSpinEl = document.createElement("div");
+    forceSpinEl.id = "forceSpinDisplay";
+    forceSpinEl.className = "force-spin-display";
+    document.querySelector(".table-center").appendChild(forceSpinEl);
+  }
+  const spinInfo = forceSpinInfo(room);
+  if (spinInfo) {
+    const cardLabel = spinInfo.card?.label || "";
+    forceSpinEl.innerHTML = `
+      <div class="force-spin-card">翻底牌 ${escapeHtml(cardLabel)}</div>
+      <div class="force-spin-number${spinInfo.landed ? " landed" : ""}">${spinInfo.current}</div>
+      <div class="force-spin-hint">从首家起数 ${spinInfo.total} 张 · ${spinInfo.landed ? "定庄！" : `第 ${spinInfo.current}/${spinInfo.total}`}</div>
+    `;
+    forceSpinEl.style.display = "flex";
+    forceSpinEl.classList.toggle("landed", spinInfo.landed);
+  } else {
+    forceSpinEl.innerHTML = "";
+    forceSpinEl.style.display = "none";
+    forceSpinEl.classList.remove("landed");
+  }
+
   // Friend announcement banner — shown after the dealer calls a friend and stays
   // until the friend is revealed (the matching card is played), then disappears.
   const friendBanner = $("#friendBanner");
@@ -889,11 +1023,11 @@ function renderCenter(room) {
   if (!kittyEl) {
     kittyEl = document.createElement("div");
     kittyEl.id = "revealedKittyDisplay";
-    kittyEl.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;justify-content:center;margin-top:6px;";
+    kittyEl.className = "revealed-kitty-display";
     document.querySelector(".table-center").appendChild(kittyEl);
   }
 
-  if (room.revealedKitty && room.revealedKitty.length > 0 && ["auction","auctionReady","forcedSuit"].includes(room.phase)) {
+  if (room.revealedKitty && room.revealedKitty.length > 0 && ["auction","auctionReady","forcedSuit","burying"].includes(room.phase)) {
     kittyEl.innerHTML = room.revealedKitty.map((card) => playedCardHTML(card)).join("");
     kittyEl.style.display = "flex";
   } else {
@@ -990,8 +1124,11 @@ function renderBidReveal(room) {
   const biddingPhases = ["dealing", "auctionReady", "auction", "forcedSuit", "sixTrump"];
   const bid = room.currentBid;
   const cards = bid?.cards || [];
+  // 真实亮主才显示（strength>0）。翻底强制坐庄自动生成的“庄”是 strength=0 的占位，
+  // 此刻花色尚未敲定（人人仍可亮、强制庄也可不亮），不能显示成“某人 亮主 方片6”。
+  const isRealCall = !!bid && Number(bid.strength || 0) > 0;
 
-  if (bid && cards.length > 0 && biddingPhases.includes(room.phase)) {
+  if (isRealCall && cards.length > 0 && biddingPhases.includes(room.phase)) {
     const who = seatName(room, bid.seat);
     const trumpLabel = bid.noTrump ? "无主" : (bid.trumpSuit ? suitSymbolColored(bid.trumpSuit) : "");
     const cardsHTML = cards.map((c) => playedCardHTML(c)).join("");
@@ -1007,11 +1144,30 @@ function renderBidReveal(room) {
       el.classList.add("reveal-pop");
       lastBidSig = sig;
     }
-  } else {
-    el.innerHTML = "";
-    el.style.display = "none";
-    lastBidSig = "";
+    return;
   }
+
+  // 强制坐庄且无人亮主、强制庄也选择沿用底牌花色：花色此时才敲定（底牌花色 + 庄家等级）。
+  // 没有亮主牌可挂，于是在中央给出文字提示，并随河牌一直保留到扣底完成。
+  const forcedDefault = !!bid && Number(bid.strength || 0) === 0
+    && room.dealerSeat != null && room.phase === "burying"
+    && (room.revealedKitty?.length || 0) > 0;
+  if (forcedDefault) {
+    const suitLabel = room.noTrump ? "无主" : (room.trumpSuit ? suitSymbolColored(room.trumpSuit) : "");
+    el.innerHTML = `<div class="bid-reveal-label">本局主花色为 ${suitLabel}${room.noTrump ? "" : (room.levelRank || "")}</div>`;
+    el.style.display = "flex";
+    if (lastBidSig !== "forced-default") {
+      el.classList.remove("reveal-pop");
+      void el.offsetWidth;
+      el.classList.add("reveal-pop");
+      lastBidSig = "forced-default";
+    }
+    return;
+  }
+
+  el.innerHTML = "";
+  el.style.display = "none";
+  lastBidSig = "";
 }
 
 /* ─── Controls ───────────────────────────────────────────── */
@@ -1067,7 +1223,10 @@ function renderControls(room) {
   }
 
   if (room.phase === "forcedSuit") {
-    if (room.viewerSeat === room.dealerSeat) {
+    const spinRemaining = forceSpinRemaining(room);
+    if (spinRemaining !== null && spinRemaining > 0) {
+      parts.push(`<span style="color:rgba(255,255,255,.68);font-size:13px">翻底轮盘倒计时 ${spinRemaining}，请稍候…</span>`);
+    } else if (room.viewerSeat === room.dealerSeat) {
       parts.push(`
         <select id="forcedSuit">
           <option value="">${room.fixedTeams ? "暂不定主（按无主打）" : `不亮，使用底牌花色（${room.trumpSuit ? suitSymbol(room.trumpSuit) : "无主"}）`}</option>
@@ -1080,7 +1239,8 @@ function renderControls(room) {
         <button data-action="chooseForcedTrump" class="primary-action">确认定主</button>`);
     } else {
       const dealerName = seatName(room, room.dealerSeat);
-      parts.push(`<span style="color:rgba(255,255,255,.6);font-size:13px">等待 ${dealerName} 确认主花色…</span>`);
+      parts.push(`<button data-action="bid" class="primary-action">亮庄</button>`);
+      parts.push(`<span style="color:rgba(255,255,255,.6);font-size:13px">等待 ${dealerName} 确认主花色，确认前可亮主抢庄…</span>`);
     }
   }
 
@@ -1460,7 +1620,12 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".audio-menu")) for (const panel of audioPanels) panel.classList.add("hidden");
 });
 musicChecks.forEach((chk) => chk.addEventListener("change", () => { unlock(); toggleMusic(); refreshAudioBtn(); }));
-voiceChecks.forEach((chk) => chk.addEventListener("change", () => { unlock(); toggleVoice(); refreshAudioBtn(); }));
+voiceChecks.forEach((chk) => chk.addEventListener("change", () => {
+  unlock();
+  const on = toggleVoice();
+  refreshAudioBtn();
+  if (on) previewVoice();
+}));
 musicRanges.forEach((range) => {
   const update = () => { unlock(); setMusicVol(Number(range.value) / 100); refreshAudioBtn(); };
   range.addEventListener("input", update);

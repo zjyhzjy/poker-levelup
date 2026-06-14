@@ -9,10 +9,11 @@
 let ctx = null;
 let master = null;
 let musicGain = null;
+let bgmGain = null;
 let musicTimer = null;
 let started = false;
-let musicOn = localStorage.getItem("szp.music") === "1"; // default off; players opt in
-let voiceOn = localStorage.getItem("szp.voice") === "1"; // default off; players opt in
+let musicOn = false; // default off each page load; players opt in per session
+let voiceOn = false; // default off each page load; players opt in per session
 // Separate volumes: music vs voice/effects (so you can balance them).
 let musicVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem("szp.musicVol") ?? "0.2")));
 let fxVol = Math.min(1, Math.max(0, parseFloat(localStorage.getItem("szp.fxVol") ?? "0.8")));
@@ -28,6 +29,9 @@ function ensureCtx() {
     musicGain = ctx.createGain();        // drives the synth music fallback → musicVol
     musicGain.gain.value = 0.0;
     musicGain.connect(ctx.destination);
+    bgmGain = ctx.createGain();          // drives file-based BGM → musicVol
+    bgmGain.gain.value = musicVol;
+    bgmGain.connect(ctx.destination);
   }
   if (ctx.state === "suspended") ctx.resume();
   return ctx;
@@ -66,6 +70,8 @@ const MUSIC = [
 let trackId = localStorage.getItem("szp.track") || "default";
 let musicPhase = "lobby";          // "lobby" (opening) | "game"
 let bgmEl = null;                  // HTMLAudioElement | null
+let bgmSource = null;              // MediaElementAudioSourceNode | null
+let bgmOutputVol = musicVol;
 let bgmFailed = false;             // bundled file failed → use synth
 let regionStart = 0, regionEnd = Infinity;
 let gapTimer = null;
@@ -73,6 +79,35 @@ let loopGapSec = Math.max(0, parseFloat(localStorage.getItem("szp.loopgap") ?? "
 const curTrack = () => MUSIC.find((t) => t.id === trackId) || MUSIC[0];
 
 function clearLoopGap() { if (gapTimer) { clearTimeout(gapTimer); gapTimer = null; } }
+function releaseBgmElement() {
+  if (bgmEl) {
+    try { bgmEl.pause(); } catch (_) {}
+    bgmEl = null;
+  }
+  if (bgmSource) {
+    try { bgmSource.disconnect(); } catch (_) {}
+    bgmSource = null;
+  }
+}
+function setBgmOutputVolume(value, smooth = true) {
+  bgmOutputVol = Math.min(1, Math.max(0, value));
+  if (bgmEl) bgmEl.volume = bgmSource ? 1 : bgmOutputVol;
+  if (!ctx || !bgmGain) return;
+  bgmGain.gain.cancelScheduledValues(ctx.currentTime);
+  if (smooth) bgmGain.gain.setTargetAtTime(bgmOutputVol, ctx.currentTime, 0.03);
+  else bgmGain.gain.setValueAtTime(bgmOutputVol, ctx.currentTime);
+}
+function routeBgmElement() {
+  if (!ensureCtx() || !bgmEl || bgmSource || !bgmGain) return;
+  try {
+    bgmSource = ctx.createMediaElementSource(bgmEl);
+    bgmSource.connect(bgmGain);
+    bgmEl.volume = 1;
+  } catch (_) {
+    bgmSource = null;
+    bgmEl.volume = bgmOutputVol;
+  }
+}
 function applyRegion() {
   const t = curTrack();
   const dur = (bgmEl && bgmEl.duration) || Infinity;
@@ -95,15 +130,16 @@ function startMusic() {
   if (!bgmEl) {
     bgmEl = new Audio(curTrack().src);
     bgmEl.loop = false;
-    bgmEl.volume = Math.min(1, musicVol);
+    setBgmOutputVolume(musicVol, false);
     bgmEl.addEventListener("loadedmetadata", () => { applyRegion(); if (bgmEl.currentTime < regionStart || bgmEl.currentTime >= regionEnd) bgmEl.currentTime = regionStart; });
     bgmEl.addEventListener("timeupdate", () => { if (!gapTimer && regionEnd !== Infinity && bgmEl.currentTime >= regionEnd - 0.06) loopBack(); });
     bgmEl.addEventListener("ended", () => { if (!gapTimer) loopBack(); });
-    bgmEl.addEventListener("error", () => { if (curTrack().id === "default") { bgmFailed = true; bgmEl = null; startSynthMusic(); } });
+    bgmEl.addEventListener("error", () => { if (curTrack().id === "default") { bgmFailed = true; releaseBgmElement(); startSynthMusic(); } });
   }
+  routeBgmElement();
   applyRegion();
   if (bgmEl.currentTime < regionStart || (regionEnd !== Infinity && bgmEl.currentTime >= regionEnd)) bgmEl.currentTime = regionStart;
-  bgmEl.volume = Math.min(1, musicVol);
+  setBgmOutputVolume(musicVol, false);
   bgmEl.play().catch(() => {});
 }
 function stopMusic() {
@@ -122,11 +158,15 @@ export function setMusicPhase(phase) {
   const tgt = Math.min(1, musicVol);
   const fadeOut = setInterval(() => {
     if (!bgmEl) { clearInterval(fadeOut); return; }
-    if (bgmEl.volume > 0.08) { bgmEl.volume = Math.max(0, bgmEl.volume - 0.12); return; }
+    if (bgmOutputVol > 0.08) { setBgmOutputVolume(Math.max(0, bgmOutputVol - 0.12), false); return; }
     clearInterval(fadeOut);
-    bgmEl.currentTime = regionStart; bgmEl.volume = 0;
+    bgmEl.currentTime = regionStart; setBgmOutputVolume(0, false);
     bgmEl.play().catch(() => {});
-    const fadeIn = setInterval(() => { if (!bgmEl) { clearInterval(fadeIn); return; } bgmEl.volume = Math.min(tgt, bgmEl.volume + 0.12); if (bgmEl.volume >= tgt) clearInterval(fadeIn); }, 45);
+    const fadeIn = setInterval(() => {
+      if (!bgmEl) { clearInterval(fadeIn); return; }
+      setBgmOutputVolume(Math.min(tgt, bgmOutputVol + 0.12), false);
+      if (bgmOutputVol >= tgt) clearInterval(fadeIn);
+    }, 45);
   }, 45);
 }
 export function selectTrack(id) {
@@ -134,7 +174,7 @@ export function selectTrack(id) {
   localStorage.setItem("szp.track", id);
   bgmFailed = false;
   clearLoopGap();
-  if (bgmEl) { try { bgmEl.pause(); } catch (_) {} bgmEl = null; }
+  releaseBgmElement();
   stopSynthMusic();
   if (started && musicOn && id !== "off") startMusic();
   return id;
@@ -301,6 +341,7 @@ async function playBufferedVoiceByKey(key) {
     }
     const buffer = await voiceBuffers[key];
     if (!voiceOn || fxVol <= 0 || !buffer) return false;
+    if (!ensureCtx()) return false;
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.connect(master);
@@ -315,26 +356,31 @@ function playClipByKey(keys, text, options, index = 0) {
   if (index >= keys.length) return false;
   const key = keys[index];
   if (clips[key] === "missing") return playClipByKey(keys, text, options, index + 1);
-  if (isTouchDevice()) {
-    playBufferedVoiceByKey(key).then((ok) => {
-      if (!ok && !playClipByKey(keys, text, options, index + 1)) ttsSpeak(text, options);
-    });
-    return true;
-  }
   let c = clips[key];
-  if (!c) { c = new Audio(`/voice/${encodeURIComponent(key)}.wav?v=3`); clips[key] = c; }
+  if (!c) {
+    c = new Audio(`/voice/${encodeURIComponent(key)}.wav?v=3`);
+    c.preload = "auto";
+    clips[key] = c;
+  }
   try {
     c.volume = Math.min(1, fxVol);
     c.currentTime = 0;
     const p = c.play();
     if (p && p.catch) p.catch(() => {
+      playBufferedVoiceByKey(key).then((ok) => {
+        if (ok) return;
+        clips[key] = "missing";
+        if (!playClipByKey(keys, text, options, index + 1)) ttsSpeak(text, options);
+      });
+    });
+    return true;
+  } catch (_) {
+    playBufferedVoiceByKey(key).then((ok) => {
+      if (ok) return;
       clips[key] = "missing";
       if (!playClipByKey(keys, text, options, index + 1)) ttsSpeak(text, options);
     });
     return true;
-  } catch (_) {
-    clips[key] = "missing";
-    return playClipByKey(keys, text, options, index + 1);
   }
 }
 function ttsSpeak(text, options = {}) {
@@ -361,7 +407,7 @@ export function speak(text, options = {}) {
   // 别打断上一句：事件密集时跳过新台词，避免被掐断、重叠成"瘆人"的乱响。
   const now = Date.now();
   const minGap = options.minGap ?? 1500;
-  if (now - lastSpeakAt < minGap) return;
+  if (minGap > 0 && now - lastSpeakAt < minGap) return;
   lastSpeakAt = now;
   const playVoice = () => {
     if (!voiceOn || fxVol <= 0) return;
@@ -394,13 +440,18 @@ export function toggleMusic() {
 export function toggleVoice() {
   voiceOn = !voiceOn;
   localStorage.setItem("szp.voice", voiceOn ? "1" : "0");
+  if (voiceOn && fxVol <= 0.01) setFxVol(0.8);
   if (!voiceOn && "speechSynthesis" in window) speechSynthesis.cancel();
   return voiceOn;
+}
+export function previewVoice() {
+  if (!voiceOn || fxVol <= 0) return;
+  speak("语音已开", { forceTts: true, voice: "female", rate: 1.1, minGap: 0 });
 }
 export function setMusicVol(v) {
   musicVol = Math.min(1, Math.max(0, v));
   localStorage.setItem("szp.musicVol", String(musicVol));
-  if (bgmEl) bgmEl.volume = Math.min(1, musicVol);
+  setBgmOutputVolume(musicVol);
   if (musicGain && ctx) musicGain.gain.setTargetAtTime(0.5 * musicVol, ctx.currentTime, 0.03);
   return musicVol;
 }
