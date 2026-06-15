@@ -12,7 +12,26 @@ function getMyId() {
   return id;
 }
 
-const AVATARS = ["😀","😎","🤠","😺","🦊","🐼","🦁","🐯","🐸","🐵","🦄","🐲","👑","🎩","👻","🐰"];
+const AVATARS = [
+  "😀","😎","🤠","😺","🦊","🐼","🦁","🐯","🐸","🐵","🦄","🐲","👑","🎩","👻","🐰",
+  // 追加的免费 emoji 头像
+  "🐧","🐨","🐺","🦝","🐷","🐔","🦉","🦖","🐙","🦈","🤖","👽","🤡","🥷","🧙","🧛","🃏","🎰"
+];
+
+// 头像可以是 emoji 字符串，或指向 public/avatars/ 里图片的 "img:avatars/xxx.png"。
+// 自定义图片头像由 /api/avatars 列目录得到，在启动时异步追加进 AVATARS。
+function isImageAvatar(a) {
+  return typeof a === "string" && a.startsWith("img:");
+}
+function avatarHTML(a) {
+  if (isImageAvatar(a)) {
+    const src = a.slice(4);
+    // 优先用规整后的 data URL（居中正方形 + 缩小压缩）；未就绪时退回原图。
+    const shown = (typeof avatarImgCache !== "undefined" && avatarImgCache.get(src)) || src;
+    return `<img class="avatar-img" src="${escapeHtml(shown)}" alt="" draggable="false">`;
+  }
+  return escapeHtml(a || "");
+}
 
 const state = {
   ws: null,
@@ -63,10 +82,58 @@ function buildAvatarPicker() {
   const picker = $("#avatarPicker");
   if (!picker) return;
   picker.innerHTML = AVATARS.map((a) =>
-    `<button type="button" class="avatar-option ${a === state.avatar ? "selected" : ""}" data-avatar="${a}">${a}</button>`
+    `<button type="button" class="avatar-option ${isImageAvatar(a) ? "avatar-option-img " : ""}${a === state.avatar ? "selected" : ""}" data-avatar="${escapeHtml(a)}">${avatarHTML(a)}</button>`
   ).join("");
 }
 buildAvatarPicker();
+
+// 自定义图片头像：放进 public/avatars/ 的图片在读取时自动规整——非正方形居中裁剪成
+// 正方形，过大则缩小到 256px 并压缩画质。结果缓存为 data URL，picker 和座位头像都用它。
+const AVATAR_MAX_PX = 256;
+const avatarImgCache = new Map(); // 原始路径 src → 规整后的 data URL
+
+function normalizeAvatarImage(src) {
+  if (avatarImgCache.has(src)) return Promise.resolve(avatarImgCache.get(src));
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth, h = img.naturalHeight;
+        if (!w || !h) { resolve(src); return; }
+        // 居中裁出最大正方形
+        const crop = Math.min(w, h);
+        const sx = (w - crop) / 2, sy = (h - crop) / 2;
+        // 过大则缩小到 AVATAR_MAX_PX（小图保持原尺寸，不放大）
+        const size = Math.min(crop, AVATAR_MAX_PX);
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, sx, sy, crop, crop, 0, 0, size, size);
+        // 太大缩小画质：webp 有损压缩（不支持则回退 png）
+        let out;
+        try { out = canvas.toDataURL("image/webp", 0.85); } catch (_) { out = ""; }
+        if (!out || out.indexOf("data:image/webp") !== 0) out = canvas.toDataURL("image/png");
+        avatarImgCache.set(src, out);
+        resolve(out);
+      } catch (_) { resolve(src); } // 跨域等失败时退回原图
+    };
+    img.onerror = () => reject(new Error("load failed"));
+    img.src = src;
+  });
+}
+
+// 异步追加自定义图片头像（放在 public/avatars/ 里的图片），逐张规整后刷新 picker。
+fetch("/api/avatars").then((r) => r.json()).then((data) => {
+  const files = (data && data.avatars) || [];
+  const jobs = files.map((f) => {
+    const entry = `img:avatars/${f}`;
+    if (!AVATARS.includes(entry)) AVATARS.push(entry);
+    return normalizeAvatarImage(`avatars/${f}`).catch(() => {});
+  });
+  Promise.all(jobs).then(() => { if (files.length) { buildAvatarPicker(); if (state.room) render(); } });
+}).catch(() => {});
 
 function chooseAvatarFromEvent(event) {
   const btn = event.target.closest?.("[data-avatar]");
@@ -349,6 +416,20 @@ function activeForceSpin(room) {
   return null;
 }
 
+// The felt-anchored container that holds the revealed kitty row plus the
+// roulette countdown floating above it. Anchored to the felt (not the stacked
+// center text) so it stays at a stable upper-center spot.
+function ensureRevealStack() {
+  let stack = document.getElementById("feltRevealStack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.id = "feltRevealStack";
+    stack.className = "felt-reveal-stack";
+    (document.querySelector(".table-felt") || document.querySelector(".table-center")).appendChild(stack);
+  }
+  return stack;
+}
+
 // One snapshot of the roulette's current state: which seat the count has reached,
 // the running count number (1..total), and whether it has landed on the target.
 // Everything else (the highlight, per-seat badge, center panel) derives from this.
@@ -377,9 +458,15 @@ function forceSpinSeat(room) {
   return forceSpinInfo(room)?.seatIndex ?? null;
 }
 
-function forceSpinRemaining(room) {
-  const info = forceSpinInfo(room);
-  return info ? Math.max(0, info.total - info.step) : null;
+// Is the roulette still physically spinning? Gates the open-亮 controls. Uses the
+// server's raw room.forceSpin window (count*interval, no landing hold) so controls
+// open the instant the wheel lands — matching the server's forceSpinCountdownActive.
+function forceSpinSpinning(room) {
+  const spin = room?.forceSpin;
+  if (!spin) return false;
+  const interval = Math.max(120, Number(spin.intervalMs || 1000));
+  const count = Math.max(0, Number(spin.count ?? 1));
+  return Date.now() < Number(spin.startedAt || 0) + count * interval;
 }
 
 function scheduleForceSpinRefresh(room) {
@@ -875,7 +962,7 @@ function renderSeats(room) {
         ${roleBadge}
         ${forceStartBadge}
         ${forceCountBadge}
-        <div class="seat-token ${seat.avatar ? "has-avatar" : ""} ${seat.playerId && !seat.isYou ? "emote-target" : ""}"${seat.playerId && !seat.isYou ? ` data-emote="${seat.index}"` : ""}>${seat.avatar ? escapeHtml(seat.avatar) : initial}</div>
+        <div class="seat-token ${seat.avatar ? "has-avatar" : ""} ${isImageAvatar(seat.avatar) ? "has-avatar-img" : ""} ${seat.playerId && !seat.isYou ? "emote-target" : ""}"${seat.playerId && !seat.isYou ? ` data-emote="${seat.index}"` : ""}>${seat.avatar ? avatarHTML(seat.avatar) : initial}</div>
         ${personalScore}
       </div>
       <div class="seat-name">${escapeHtml(seat.nickname || `座位${seat.index + 1}`)}</div>
@@ -985,7 +1072,8 @@ function renderCenter(room) {
     forceSpinEl = document.createElement("div");
     forceSpinEl.id = "forceSpinDisplay";
     forceSpinEl.className = "force-spin-display";
-    document.querySelector(".table-center").appendChild(forceSpinEl);
+    // Sits inside the felt reveal stack, pinned just above the kitty row.
+    ensureRevealStack().appendChild(forceSpinEl);
   }
   const spinInfo = forceSpinInfo(room);
   if (spinInfo) {
@@ -993,7 +1081,7 @@ function renderCenter(room) {
     forceSpinEl.innerHTML = `
       <div class="force-spin-card">翻底牌 ${escapeHtml(cardLabel)}</div>
       <div class="force-spin-number${spinInfo.landed ? " landed" : ""}">${spinInfo.current}</div>
-      <div class="force-spin-hint">从首家起数 ${spinInfo.total} 张 · ${spinInfo.landed ? "定庄！" : `第 ${spinInfo.current}/${spinInfo.total}`}</div>
+      <div class="force-spin-hint">从首家起数 ${spinInfo.total} 张 · ${spinInfo.landed ? "强制坐庄，开放亮主" : `第 ${spinInfo.current}/${spinInfo.total}`}</div>
     `;
     forceSpinEl.style.display = "flex";
     forceSpinEl.classList.toggle("landed", spinInfo.landed);
@@ -1024,7 +1112,9 @@ function renderCenter(room) {
     kittyEl = document.createElement("div");
     kittyEl.id = "revealedKittyDisplay";
     kittyEl.className = "revealed-kitty-display";
-    document.querySelector(".table-center").appendChild(kittyEl);
+    // Lives in the felt reveal stack so it sits at a stable upper-center spot
+    // (clear of the bottom avatar) with the countdown floating above it.
+    ensureRevealStack().appendChild(kittyEl);
   }
 
   if (room.revealedKitty && room.revealedKitty.length > 0 && ["auction","auctionReady","forcedSuit","burying"].includes(room.phase)) {
@@ -1223,10 +1313,12 @@ function renderControls(room) {
   }
 
   if (room.phase === "forcedSuit") {
-    const spinRemaining = forceSpinRemaining(room);
-    if (spinRemaining !== null && spinRemaining > 0) {
-      parts.push(`<span style="color:rgba(255,255,255,.68);font-size:13px">翻底轮盘倒计时 ${spinRemaining}，请稍候…</span>`);
-    } else if (room.viewerSeat === room.dealerSeat) {
+    const myResponse = (room.bidResponses || {})[room.viewerSeat];
+    if (forceSpinSpinning(room)) {
+      // 轮盘还在转：等它落定，谁也不能先亮。
+      parts.push(`<span style="color:rgba(255,255,255,.68);font-size:13px">翻底轮盘进行中…</span>`);
+    } else if (room.viewerSeat === room.dealerSeat && !myResponse) {
+      // 强制庄家的首次决定：亮自己的常主 / 亮无主 / 不亮（沿用底牌花色）。
       parts.push(`
         <select id="forcedSuit">
           <option value="">${room.fixedTeams ? "暂不定主（按无主打）" : `不亮，使用底牌花色（${room.trumpSuit ? suitSymbol(room.trumpSuit) : "无主"}）`}</option>
@@ -1237,10 +1329,12 @@ function renderControls(room) {
           <option value="diamonds">♦ 方片</option>
         </select>
         <button data-action="chooseForcedTrump" class="primary-action">确认定主</button>`);
+    } else if (!myResponse) {
+      // 其他人（含被盖庄后的原强制庄）：选自己的级牌亮主，或不亮。
+      parts.push(`<button data-action="bid" class="primary-action">亮主</button>`);
+      parts.push(`<button data-action="passBid">不亮</button>`);
     } else {
-      const dealerName = seatName(room, room.dealerSeat);
-      parts.push(`<button data-action="bid" class="primary-action">亮庄</button>`);
-      parts.push(`<span style="color:rgba(255,255,255,.6);font-size:13px">等待 ${dealerName} 确认主花色，确认前可亮主抢庄…</span>`);
+      parts.push(`<span style="color:rgba(255,255,255,.6);font-size:13px">等待其他玩家表态…</span>`);
     }
   }
 
@@ -1366,9 +1460,11 @@ function renderHand(room) {
     const half = Math.ceil(hand.length / 2);
     const row1 = hand.slice(0, half);
     const row2 = hand.slice(half);
-    container.style.height = `${Math.round(160 * UI)}px`;
-    renderHandRow(container, row1, containerWidth, cardW, 78);  // bottom row
-    renderHandRow(container, row2, containerWidth, cardW, 2);   // top row
+    // Height = top row offset (78) + card height (74); no dead space above the
+    // top row so the action buttons sit close to the cards.
+    container.style.height = `${Math.round(152 * UI)}px`;
+    renderHandRow(container, row1, containerWidth, cardW, 78);  // top row
+    renderHandRow(container, row2, containerWidth, cardW, 2);   // bottom row
   } else {
     container.style.height = `${Math.round(86 * UI)}px`;
     renderHandRow(container, hand, containerWidth, cardW, 2);

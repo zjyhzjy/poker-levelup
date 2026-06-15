@@ -389,8 +389,10 @@ export function makeBid(room, playerId, cardIds) {
   }
   room.tableLog.push(`${seat.nickname} 亮庄：${cards.map((c) => c.label).join("、")}`);
   if (forcedSuitBid) {
+    // 翻底后开放亮主：盖庄者成为新庄家（makeBid 上方已把 dealerSeat 指向他），
+    // 但不立即定庄——给其他人一个盖更高/不亮的响应窗口，全部表态后才确定庄家。
     room.forceSpin = null;
-    giveKittyToDealer(room);
+    _openForcedResponseWindow(room);
     return;
   }
   // Never confirm immediately — always let broadcast fire first so the bid card
@@ -400,13 +402,14 @@ export function makeBid(room, playerId, cardIds) {
 }
 
 export function passBid(room, playerId) {
-  if (![PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION].includes(room.phase)) throw new Error("现在不能操作");
+  if (![PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION, PHASES.FORCED_SUIT].includes(room.phase)) throw new Error("现在不能操作");
+  if (room.phase === PHASES.FORCED_SUIT && forceSpinCountdownActive(room)) throw new Error("翻底轮盘倒计时中，请稍候");
   if (!room.currentBid) throw new Error("还没有人亮庄，无需操作");
   const seat = findSeatByPlayer(room, playerId);
   if (!seat) throw new Error("请先入座");
   if (room.bidResponses[seat.index]) throw new Error("你已经响应过了");
   room.bidResponses[seat.index] = "pass";
-  room.tableLog.push(`${seat.nickname} 不抢。`);
+  room.tableLog.push(`${seat.nickname} 不亮。`);
   _checkAllBidResponded(room);
 }
 
@@ -602,8 +605,9 @@ export function confirmDealer(room) {
   if (!room.currentBid) throw new Error("还没有庄家");
   // 幂等：仅抢庄阶段可确认。giveKittyToDealer 后 phase 进入 burying，重复调用
   // 会再次把底牌并入庄家手牌、破坏牌堆完整性，故非抢庄阶段直接早退。
-  if (![PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION].includes(room.phase)) return;
+  if (![PHASES.DEALING, PHASES.AUCTION_READY, PHASES.AUCTION, PHASES.FORCED_SUIT].includes(room.phase)) return;
   if (room.dealing) return; // cards still being dealt; kitty not ready yet
+  room.forceSpin = null;
   room.dealerSeat = room.currentBid.seat;
   room.levelRank = room.currentBid.levelRank;
   room.trumpSuit = room.currentBid.trumpSuit;
@@ -636,7 +640,7 @@ export function forceDealer(room, lastKittyCard) {
     count,
     startedAt: Date.now(),
     intervalMs: 1000,
-    holdMs: 5000,
+    holdMs: 1500,
     card: { rank: lastKittyCard.rank, suit: lastKittyCard.suit, label: lastKittyCard.label }
   };
   room.phase = PHASES.FORCED_SUIT;
@@ -658,23 +662,31 @@ function prevSeat(index, seatCount) {
   return (index + seatCount - 1) % seatCount;
 }
 
+// 翻底轮盘落定后开放亮主：强制庄家先决定（亮自己的常主 / 亮无主 / 不亮沿用底牌花色），
+// 任何一种都不立即定庄，而是开一个响应窗口让其他人盖更高或不亮，全部表态后才确定庄家。
+function _openForcedResponseWindow(room) {
+  if (!room.dealing) room.bidResponseReadyAt = Date.now() + BID_RESPONSE_TIMEOUT_MS;
+  _checkAllBidResponded(room);
+}
+
 export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
   assertPhase(room, PHASES.FORCED_SUIT);
   if (forceSpinCountdownActive(room)) throw new Error("翻底轮盘倒计时中，请稍候");
   const dealer = findSeatByPlayer(room, playerId);
   if (!dealer || dealer.index !== room.dealerSeat) throw new Error("只有强制庄家可以定主花色");
+  room.forceSpin = null;
   if (options.noTrump) {
     const cards = pickCards(dealer.hand, options.cardIds || []);
     if (cards.length !== 3 || !cards.every((card) => card.suit === "joker")) throw new Error("亮无主需要选择 3 张王");
     room.noTrump = true;
     room.trumpSuit = null;
-    if (room.currentBid) { room.currentBid.noTrump = true; room.currentBid.trumpSuit = null; room.currentBid.cards = cards; room.currentBid.strength = cards.length; }
+    room.currentBid = { seat: dealer.index, playerId, strength: cards.length, levelRank: room.levelRank, trumpSuit: null, noTrump: true, cards };
     // 强制庄主动亮无主：当成一次真实亮主，挂到庄家座位旁（亮几张显示几张）。
     room.seatBids = { [dealer.index]: { noTrump: true, trumpSuit: null, levelRank: room.levelRank, strength: cards.length, cards } };
+    room.bidResponses = { [dealer.index]: "bid" };
     sortHand(dealer.hand, room);
-    room.tableLog.push(`${dealer.nickname} 亮 3 张王，强制定为无主。`);
-    room.forceSpin = null;
-    giveKittyToDealer(room);
+    room.tableLog.push(`${dealer.nickname} 亮 3 张王，定为无主。`);
+    _openForcedResponseWindow(room);
     return;
   }
   if (suit && !SUITS.includes(suit)) throw new Error("花色不存在");
@@ -685,17 +697,21 @@ export function chooseForcedTrump(room, playerId, suit = null, options = {}) {
     room.trumpSuit = suit;
     room.noTrump = false;
     const revealCards = dealer.hand.filter((card) => card.rank === room.levelRank && card.suit === suit).slice(0, 3);
-    if (room.currentBid) { room.currentBid.trumpSuit = suit; room.currentBid.noTrump = false; room.currentBid.cards = revealCards; room.currentBid.strength = revealCards.length; }
+    room.currentBid = { seat: dealer.index, playerId, strength: revealCards.length, levelRank: room.levelRank, trumpSuit: suit, noTrump: false, cards: revealCards };
     // 强制庄亮自己的常主花色：当成一次真实亮主，挂到庄家座位旁（亮几张显示几张）。
     room.seatBids = { [dealer.index]: { noTrump: false, trumpSuit: suit, levelRank: room.levelRank, strength: revealCards.length, cards: revealCards } };
+    room.bidResponses = { [dealer.index]: "bid" };
+    sortHand(dealer.hand, room);
+    room.tableLog.push(`${dealer.nickname} 亮主：${suit}`);
+    _openForcedResponseWindow(room);
+    return;
   }
-  // If suit is null: keep whatever noTrump/trumpSuit forceDealer already set
-  // （suit 为 null = 强制庄不亮，沿用底牌花色；seatBids 维持空，前端改显示“本局主花色为…”。）
+  // suit === null：强制庄不亮，沿用底牌花色。保留 forceDealer 设的 strength=0 占位 currentBid，
+  // 只把庄家自己标记为已表态（不亮）；其他人仍可亮主抢庄，都不亮则强制庄以底牌花色坐庄。
+  room.bidResponses = { ...(room.bidResponses || {}), [dealer.index]: "pass" };
   sortHand(dealer.hand, room);
-  const suitLabel = room.noTrump ? "无主" : (room.trumpSuit || "未知");
-  room.tableLog.push(`${dealer.nickname} 确认主花色：${suitLabel}`);
-  room.forceSpin = null;
-  giveKittyToDealer(room);
+  room.tableLog.push(`${dealer.nickname} 不亮，沿用底牌花色。`);
+  _openForcedResponseWindow(room);
 }
 
 function giveKittyToDealer(room) {
@@ -874,7 +890,7 @@ export function runAiStep(room) {
     return false;
   }
 
-  if (room.phase === PHASES.FORCED_SUIT && isAutoSeat(room, room.dealerSeat)) {
+  if (room.phase === PHASES.FORCED_SUIT && isAutoSeat(room, room.dealerSeat) && !room.bidResponses[room.dealerSeat]) {
     if (forceSpinCountdownActive(room)) return false;
     const dealer = room.seats[room.dealerSeat];
     chooseForcedTrump(room, dealer.playerId, chooseAiForcedTrump(room, dealer));

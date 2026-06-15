@@ -94,9 +94,24 @@ test("AI 可以补座并自动推进无人叫庄流程", () => {
   let safety = 0;
   while (room.phase === "auction" && safety++ < 10) revealKittyCard(room);
   if (room.forceSpin) room.forceSpin.startedAt = Date.now() - room.forceSpin.count * room.forceSpin.intervalMs - 1;
-  // From here AI advances forcedSuit → burying → friend → playing on its own.
+  // From here AI advances forcedSuit → burying → friend → playing. The forced
+  // dealer's decision is via runAiStep; the open-亮 responses from the other
+  // seats are server-paced (scheduleAiBids), so drive those declines explicitly.
   let guard = 0;
-  while (runAiStep(room) && guard < 80) guard += 1;
+  while (guard++ < 200) {
+    if (runAiStep(room)) continue;
+    if (room.phase === "forcedSuit") {
+      let acted = false;
+      for (const seat of room.seats) {
+        if (seat.index !== room.dealerSeat && !room.bidResponses[seat.index]) {
+          passBid(room, seat.playerId);
+          acted = true;
+        }
+      }
+      if (acted) continue;
+    }
+    break;
+  }
   assert.ok(["burying", "friend", "playing", "roundOver"].includes(room.phase));
 });
 
@@ -603,7 +618,7 @@ test("翻底强制坐庄公开轮盘动画起点、步数和目标", () => {
   assert.equal(state.forceSpin.count, 5);
   assert.equal(state.forceSpin.targetSeat, 4);
   assert.equal(state.forceSpin.intervalMs, 1000);
-  assert.equal(state.forceSpin.holdMs, 5000);
+  assert.equal(state.forceSpin.holdMs, 1500);
   assert.equal(state.forceSpin.card.rank, "5");
   // 最后一张底牌只在中央轮盘面板（forceSpin.card）显示，不挂到被迫庄家头顶（seatBids），
   // 以免被误解成他亮的花色牌。
@@ -650,7 +665,7 @@ test("翻底轮盘倒计时结束前不能亮主或定主", () => {
   assert.throws(() => chooseForcedTrump(room, room.seats[room.dealerSeat].playerId, null), /轮盘倒计时/);
 });
 
-test("强制定主阶段，其他玩家可在强制庄确认前亮庄接管", () => {
+test("强制定主阶段：其他玩家亮主接管后需全员表态才定庄", () => {
   const room = createRoom("FORCEBID");
   const deck = createDeck();
   for (let i = 0; i < 5; i += 1) {
@@ -669,11 +684,123 @@ test("强制定主阶段，其他玩家可在强制庄确认前亮庄接管", ()
 
   makeBid(room, "p1", [bidCard.id]);
 
-  assert.equal(room.phase, "burying");
+  // 盖庄者成为新庄家，但开放亮主响应窗口，尚未定庄
+  assert.equal(room.phase, "forcedSuit");
   assert.equal(room.dealerSeat, 1);
   assert.equal(room.trumpSuit, "hearts");
   assert.equal(room.forceSpin, null);
+
+  // 其他人都不亮 → 定庄进入扣底
+  for (const pid of ["p0", "p2", "p3", "p4"]) passBid(room, pid);
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, 1);
   assert.equal(room.seats[1].hand.length, 8, "新庄应拿起 7 张底牌");
+});
+
+test("强制定主阶段：强制庄不亮且无人亮主，按底牌花色定庄", () => {
+  const room = createRoom("FORCEKEEP");
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) {
+    room.seats[i].playerId = `p${i}`;
+    room.seats[i].nickname = `P${i}`;
+    room.seats[i].level = "7";
+  }
+  room.starterSeat = 0;
+  room.kitty = deck.filter((c) => c.rank === "3").slice(0, 7);
+  const lastKittyCard = deck.find((c) => c.rank === "5" && c.suit === "clubs");
+  forceDealer(room, lastKittyCard);
+  room.forceSpin.startedAt = Date.now() - room.forceSpin.count * room.forceSpin.intervalMs - 1;
+  const dealerId = room.seats[room.dealerSeat].playerId;
+
+  // 强制庄选择不亮（沿用底牌花色），其余人不亮
+  chooseForcedTrump(room, dealerId, null);
+  assert.equal(room.phase, "forcedSuit", "庄家不亮后仍开放窗口给其他人");
+  for (const seat of room.seats) {
+    if (seat.index !== room.dealerSeat) passBid(room, seat.playerId);
+  }
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, 4, "无人亮主则强制庄保留庄家");
+  assert.equal(room.trumpSuit, "clubs", "沿用底牌花色");
+});
+
+test("强制定主阶段：强制庄亮主后可被更高亮主盖过", () => {
+  const room = createRoom("FORCEOVER");
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) {
+    room.seats[i].playerId = `p${i}`;
+    room.seats[i].nickname = `P${i}`;
+    room.seats[i].level = "7";
+  }
+  room.starterSeat = 0;
+  room.kitty = deck.filter((c) => c.rank === "3").slice(0, 7);
+  const lastKittyCard = deck.find((c) => c.rank === "5" && c.suit === "clubs");
+  forceDealer(room, lastKittyCard);
+  room.forceSpin.startedAt = Date.now() - room.forceSpin.count * room.forceSpin.intervalMs - 1;
+  const dealerSeat = room.dealerSeat;
+  const dealerId = room.seats[dealerSeat].playerId;
+
+  // 强制庄亮 1 张红桃 7
+  room.seats[dealerSeat].hand = [deck.find((c) => c.rank === "7" && c.suit === "hearts")];
+  chooseForcedTrump(room, dealerId, "hearts");
+  assert.equal(room.dealerSeat, dealerSeat);
+  assert.equal(room.trumpSuit, "hearts");
+
+  // 另一人用 2 张红桃 7 盖更高（同花色更多张，两副牌各一张）
+  const overSeat = (dealerSeat + 1) % 5;
+  const hearts7 = deck.filter((c) => c.rank === "7" && c.suit === "hearts");
+  room.seats[overSeat].hand = hearts7.slice(0, 2);
+  makeBid(room, room.seats[overSeat].playerId, hearts7.slice(0, 2).map((c) => c.id));
+  assert.equal(room.dealerSeat, overSeat, "更高亮主者接管庄家");
+
+  for (const seat of room.seats) {
+    if (seat.index !== overSeat && !room.bidResponses[seat.index]) passBid(room, seat.playerId);
+  }
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, overSeat);
+});
+
+test("5人翻底定红桃后，他人可用3张王亮无主盖过并夺庄", () => {
+  const room = createRoom("FORCENT");
+  const deck = createDeck();
+  assert.equal(room.seatCount, 5, "默认即 5 人找朋友");
+  for (let i = 0; i < 5; i += 1) {
+    room.seats[i].playerId = `p${i}`;
+    room.seats[i].nickname = `P${i}`;
+    room.seats[i].level = "7";
+  }
+  room.starterSeat = 0;
+  room.kitty = deck.filter((c) => c.rank === "3").slice(0, 7);
+  // 底牌最后一张是红桃 → 主花色默认红桃
+  const lastKittyCard = deck.find((c) => c.rank === "5" && c.suit === "hearts");
+  forceDealer(room, lastKittyCard);
+  room.forceSpin.startedAt = Date.now() - room.forceSpin.count * room.forceSpin.intervalMs - 1;
+  const forcedDealer = room.dealerSeat;
+  assert.equal(room.trumpSuit, "hearts", "翻底默认主花色为红桃");
+
+  // 强制庄不亮，沿用红桃
+  chooseForcedTrump(room, room.seats[forcedDealer].playerId, null);
+  assert.equal(room.trumpSuit, "hearts");
+
+  // 另一人看见红桃后，用 3 张王亮无主（强度 4/5 > 任何花色 ≤3）盖过并夺庄
+  const ntSeat = (forcedDealer + 2) % 5;
+  const jokers = [
+    ...deck.filter((c) => c.rank === "bigJoker"),
+    ...deck.filter((c) => c.rank === "smallJoker")
+  ].slice(0, 3);
+  assert.equal(jokers.length, 3, "两副牌足够凑 3 张王");
+  room.seats[ntSeat].hand = jokers;
+  makeBid(room, room.seats[ntSeat].playerId, jokers.map((c) => c.id));
+  assert.equal(room.dealerSeat, ntSeat, "亮无主者夺庄");
+  assert.equal(room.noTrump, true, "改打无主");
+  assert.equal(room.trumpSuit, null);
+
+  // 其余人都不亮 → 定庄进入扣底，庄已易主、主为无主
+  for (const seat of room.seats) {
+    if (seat.index !== ntSeat && !room.bidResponses[seat.index]) passBid(room, seat.playerId);
+  }
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, ntSeat);
+  assert.equal(room.noTrump, true);
 });
 
 test("甩牌失败罚分随朋友现身重算，并公开闲家扣分统计", () => {

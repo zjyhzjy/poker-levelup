@@ -77,6 +77,18 @@ const server = http.createServer((req, res) => {
     sendJson(res, { code: room.code });
     return;
   }
+  // 自定义图片头像：列出 public/avatars/ 里的图片文件，前端据此追加为可选头像。
+  // 把你自己拥有版权/使用权的图片丢进该文件夹即可，无需改代码。
+  if (url.pathname === "/api/avatars" && req.method === "GET") {
+    let files = [];
+    try {
+      files = fs.readdirSync(path.join(publicDir, "avatars"))
+        .filter((f) => /\.(png|jpe?g|gif|webp|svg)$/i.test(f))
+        .sort();
+    } catch (_) { files = []; }
+    sendJson(res, { avatars: files });
+    return;
+  }
   serveStatic(url.pathname, res);
 });
 
@@ -308,7 +320,7 @@ function handleMessage(client, message) {
     }
 
     // After a bid is placed, schedule timeout for others to respond
-    if ((type === "bid" || type === "sixCallTrump") && room.currentBid && room.phase !== "burying") {
+    if ((type === "bid" || type === "sixCallTrump" || type === "chooseForcedTrump") && room.currentBid && room.phase !== "burying") {
       scheduleBidTimeout(room);
     }
 
@@ -316,8 +328,9 @@ function handleMessage(client, message) {
       scheduleBuryTimeout(room);
     }
 
-    // Let AI seats open/contest the bidding once a human acts in the auction.
-    if (["bid", "passBid", "startAuction", "revealKitty", "sixCallTrump", "sixPassTrump"].includes(type)) {
+    // Let AI seats open/contest the bidding once a human acts in the auction
+    // (including the 翻底 open-亮 window after the roulette lands).
+    if (["bid", "passBid", "startAuction", "revealKitty", "sixCallTrump", "sixPassTrump", "chooseForcedTrump"].includes(type)) {
       scheduleAiBids(room);
     }
 
@@ -456,7 +469,9 @@ function scheduleAiBids(room) {
   aiSeats.forEach((seat, i) => {
     setTimeout(() => {
       if (room.dealing) return;
-      if (!["auctionReady", "auction", "sixTrump"].includes(room.phase)) return;
+      if (!["auctionReady", "auction", "sixTrump", "forcedSuit"].includes(room.phase)) return;
+      // 翻底轮盘还在转时不抢答（落定后 room.forceSpin 被置空才开放）
+      if (room.phase === "forcedSuit" && room.forceSpin) return;
       if (room.bidResponses[seat.index]) return;                       // already acted
       if (room.currentBid && room.currentBid.seat === seat.index) return;
       try {
@@ -489,7 +504,12 @@ function scheduleBidTimeout(room, delay = BID_RESPONSE_TIMEOUT_MS) {
   if (!bidAtSchedule) return;
   setTimeout(() => {
     if (room.currentBid !== bidAtSchedule) return;
-    if (!["dealing", "auctionReady", "auction", "sixTrump"].includes(room.phase)) return;
+    if (!["dealing", "auctionReady", "auction", "sixTrump", "forcedSuit"].includes(room.phase)) return;
+    // 翻底轮盘转动期间不结算响应窗口
+    if (room.phase === "forcedSuit" && room.forceSpin) {
+      scheduleBidTimeout(room);
+      return;
+    }
     if (room.dealing) {
       scheduleBidTimeout(room);
       return;
@@ -549,8 +569,7 @@ function scheduleAi(room) {
     setTimeout(() => scheduleAi(room), Math.max(20, room.trickPauseUntil - Date.now() + 20));
     return;
   }
-  // 翻底强制坐庄：runAiStep 在轮盘倒计时内会拒绝定主（返回 false），若此刻 tick 到就
-  // 会让 AI 循环停摆、AI 庄家永远不定主而整桌卡死。倒计时未结束则改为倒计时后再调度。
+  // 翻底强制坐庄：轮盘转动期间不行动；落定（count*interval 到点）即开放亮主窗口。
   if (room.phase === "forcedSuit" && room.forceSpin) {
     const spin = room.forceSpin;
     const until = (spin.startedAt || 0) + Math.max(0, Number(spin.count ?? 1)) * (spin.intervalMs || 1000);
@@ -558,6 +577,12 @@ function scheduleAi(room) {
       setTimeout(() => scheduleAi(room), Math.max(20, until - Date.now() + 50));
       return;
     }
+    // 轮盘落定：清空 forceSpin，开一次开放亮主窗口（所有人可亮主/不亮，强制庄家可亮或沿用底牌花色）。
+    room.forceSpin = null;
+    room.bidResponseReadyAt = Date.now() + BID_RESPONSE_TIMEOUT_MS;
+    broadcast(room);
+    scheduleAiBids(room);     // 非庄家 AI 亮主/不亮
+    scheduleBidTimeout(room); // 都不亮 / 庄家不定则超时按底牌花色定庄
   }
   setTimeout(() => {
     let moved = false;
@@ -571,6 +596,10 @@ function scheduleAi(room) {
     }
     if (moved) {
       broadcast(room);
+      if (room.phase === "forcedSuit") {
+        scheduleBidTimeout(room);
+        scheduleAiBids(room); // let other seats respond to the dealer's 亮/不亮
+      }
       scheduleAi(room);
     }
   }, 350);
@@ -597,31 +626,43 @@ function scheduleBuryTimeout(room) {
   }, BURY_TIMEOUT_MS);
 }
 
-// ── 掉线自动托管：轮到当前该行动的座位却是掉线真人时，宽限若干秒后自动托管，
-// 交给 runAiStep 接管，避免整桌无限等待。玩家重连后可手动取消托管。
+// ── 自动托管：轮到某座位却迟迟不行动时，宽限若干秒后自动托管，交给 runAiStep 接管，
+// 避免整桌无限等待。玩家重连/手动取消托管即可收回。
+//   · 掉线真人：任何阶段 20s 后托管。
+//   · 在线但挂机：仅出牌 / 叫朋友阶段 90s 后托管（强制定主有 10s 响应超时、扣底有 2 分钟
+//     超时各自兜底，这里不重复接管，以免压缩玩家思考时间）。
 const DISCONNECT_TRUSTEE_MS = 20000;
+const CONNECTED_IDLE_MS = 90000;
 function actorSeat(room) {
   if (room.phase === "playing") return room.turnSeat;
   if (["forcedSuit", "burying", "friend"].includes(room.phase)) return room.dealerSeat;
   return null; // 抢庄阶段由 scheduleBidTimeout 兜底
 }
 function scheduleAutoTrustee(room) {
+  room.trusteeTimers = room.trusteeTimers || {};
   const idx = actorSeat(room);
+  // 当前等待的座位变了（有人行动 / 阶段切换）就清掉旧计时，避免对已行动的玩家误托管。
+  for (const key of Object.keys(room.trusteeTimers)) {
+    if (Number(key) !== idx) { clearTimeout(room.trusteeTimers[key]); delete room.trusteeTimers[key]; }
+  }
   if (idx == null) return;
   const seat = room.seats[idx];
-  if (!seat || !seat.playerId || seat.isAi || seat.trustee || seat.connected) return;
-  room.trusteeTimers = room.trusteeTimers || {};
+  if (!seat || !seat.playerId || seat.isAi || seat.trustee) return;
+  let grace = null;
+  if (!seat.connected) grace = DISCONNECT_TRUSTEE_MS;
+  else if (room.phase === "playing" || room.phase === "friend") grace = CONNECTED_IDLE_MS;
+  if (grace == null) return; // 在线 + 扣底/强制定主：交给各自的超时兜底
   if (room.trusteeTimers[idx]) return; // 已在计时
   room.trusteeTimers[idx] = setTimeout(() => {
     delete room.trusteeTimers[idx];
     const s = room.seats[idx];
-    if (s && s.playerId && !s.isAi && !s.connected && actorSeat(room) === idx) {
+    if (s && s.playerId && !s.isAi && !s.trustee && actorSeat(room) === idx) {
       try { setTrustee(room, s.playerId, true); } catch (_) { return; }
-      room.tableLog.push(`${s.nickname} 掉线，已自动托管。`);
+      room.tableLog.push(`${s.nickname} ${s.connected ? "长时间未操作" : "掉线"}，已自动托管。`);
       broadcast(room);
       scheduleAi(room);
     }
-  }, DISCONNECT_TRUSTEE_MS);
+  }, grace);
 }
 
 function disconnect(client) {
