@@ -54,6 +54,16 @@ if (process.env.USE_TUNED_WEIGHTS === "1") {
   console.log("AI 权重：使用出厂手调权重（调参权重默认关闭——过拟合，实战偏笨）");
 }
 const publicDir = path.join(__dirname, "public");
+
+// 最后一道防线：任何未捕获的异常/Promise 拒绝都只记录、不让进程退出，
+// 避免单个 bug（如某次广播/定时器回调抛错）把整台服务器拖垮、所有人同时掉线。
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err && err.stack ? err.stack : err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason && reason.stack ? reason.stack : reason);
+});
+
 const port = Number(process.env.PORT || 3000);
 const rooms = new Map();
 const sockets = new Map();

@@ -3437,7 +3437,7 @@ export function buildSharedState(room) {
     })),
     hiddenKittyCount: room.hiddenKitty.length,
     kittyCount: room.kitty.length,
-    spectators: [...room.spectators.values()]
+    spectators: [...(room.spectators?.values() ?? [])]
       .filter((s) => s.connected)
       .map((s) => s.nickname || "游客")
   };
