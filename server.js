@@ -690,30 +690,76 @@ function disconnect(client) {
 
 function send(client, type, payload) {
   const data = Buffer.from(JSON.stringify({ type, payload }));
-  const header = data.length < 126
-    ? Buffer.from([0x81, data.length])
-    : Buffer.from([0x81, 126, data.length >> 8, data.length & 255]);
+  const len = data.length;
+  let header;
+  if (len < 126) {
+    header = Buffer.from([0x81, len]);
+  } else if (len < 65536) {
+    header = Buffer.from([0x81, 126, (len >> 8) & 0xff, len & 0xff]);
+  } else {
+    // ≥64KB 必须用 64-bit(127) 长度，否则 16-bit 会溢出截断、整帧损坏、连接错位。
+    // 6 人长局的 state 广播确实可能破 64KB。
+    header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(len), 2);
+  }
   client.socket.write(Buffer.concat([header, data]));
 }
 
-function handleFrame(client, buffer) {
+// 累积每个连接的接收缓冲，只解析“完整”的帧——一个帧被 TCP 拆到多个 data 段时
+// （弱网/隧道很常见）保留残片等待续传，避免长度读错导致此后所有消息全部错位。
+// 同时支持分片帧（opcode 0x0 续帧 + FIN 位）。
+function handleFrame(client, chunk) {
+  client.recvBuffer = client.recvBuffer ? Buffer.concat([client.recvBuffer, chunk]) : chunk;
+  let buf = client.recvBuffer;
   let offset = 0;
-  while (offset < buffer.length) {
-    const byte1 = buffer[offset++];
-    const byte2 = buffer[offset++];
+  while (true) {
+    if (buf.length - offset < 2) break;                 // 连帧头都不够
+    const byte1 = buf[offset];
+    const byte2 = buf[offset + 1];
+    const fin = (byte1 & 0x80) !== 0;
     const opcode = byte1 & 0x0f;
-    if (opcode === 0x8) { client.socket.end(); return; }
-    let length = byte2 & 0x7f;
-    if (length === 126) { length = buffer.readUInt16BE(offset); offset += 2; }
-    else if (length === 127) { length = Number(buffer.readBigUInt64BE(offset)); offset += 8; }
     const masked = (byte2 & 0x80) !== 0;
-    const mask = masked ? buffer.subarray(offset, offset + 4) : null;
-    if (masked) offset += 4;
-    const payload = buffer.subarray(offset, offset + length);
-    offset += length;
-    if (masked) { for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4]; }
-    if (opcode === 0x1) handleMessage(client, payload.toString("utf8"));
+    let len = byte2 & 0x7f;
+    let headerLen = 2;
+    if (len === 126) {
+      if (buf.length - offset < 4) break;
+      len = buf.readUInt16BE(offset + 2);
+      headerLen = 4;
+    } else if (len === 127) {
+      if (buf.length - offset < 10) break;
+      len = Number(buf.readBigUInt64BE(offset + 2));
+      headerLen = 10;
+    }
+    const maskLen = masked ? 4 : 0;
+    if (buf.length - offset < headerLen + maskLen + len) break; // 整帧未到齐，等续传
+    const maskStart = offset + headerLen;
+    const payloadStart = maskStart + maskLen;
+    const payload = buf.subarray(payloadStart, payloadStart + len);
+    if (masked) {
+      const mask = buf.subarray(maskStart, maskStart + 4);
+      for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
+    }
+    offset = payloadStart + len;
+
+    if (opcode === 0x8) { client.socket.end(); client.recvBuffer = null; return; } // close
+    if (opcode === 0x9) { continue; } // ping：忽略（如需可回 pong）
+    if (opcode === 0xA) { continue; } // pong
+    // 文本/二进制（0x1/0x2）与续帧（0x0）：按 FIN 组装后再分发
+    if (opcode === 0x0) {
+      if (!client.fragments) continue; // 没有进行中的分片，丢弃异常续帧
+      client.fragments.push(Buffer.from(payload));
+    } else {
+      client.fragments = [Buffer.from(payload)];
+    }
+    if (fin) {
+      const full = client.fragments.length === 1 ? client.fragments[0] : Buffer.concat(client.fragments);
+      client.fragments = null;
+      handleMessage(client, full.toString("utf8"));
+    }
   }
+  client.recvBuffer = offset >= buf.length ? null : buf.subarray(offset); // 保留未解析残片
 }
 
 function contentType(filePath) {
