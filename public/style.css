@@ -47,10 +47,16 @@ button, input, select { font: inherit; }
   height: 100vh;
   height: 100dvh;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  overflow: hidden;
+  /* 内容比屏幕高时（如 iPhone 刘海/灵动岛挤占可用高度 + 头像变多）允许滚动，
+     而不是居中后把顶部标题裁掉。配合 .join-content 的 margin:auto 实现
+     “放得下就居中、放不下则从顶部可滚动”。 */
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: calc(env(safe-area-inset-top) + 8px) 0 calc(env(safe-area-inset-bottom) + 8px);
 }
+.join-content { margin: auto 0; }
 
 .join-bg {
   position: absolute; inset: 0;
