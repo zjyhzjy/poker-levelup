@@ -347,10 +347,10 @@ function finishDealing(room) {
   if (room.currentBid) {
     // Someone bid during the deal. Once everyone has a complete hand, earlier
     // pass responses no longer count; players must react again with full info.
-    room.phase = PHASES.AUCTION_READY;
+    room.phase = isFixedTeamMode(room) ? PHASES.SIX_TRUMP : PHASES.AUCTION_READY;
     room.bidResponses = { [room.currentBid.seat]: "bid" };
     room.bidResponseReadyAt = Date.now() + BID_RESPONSE_TIMEOUT_MS;
-    room.tableLog.push("摸牌结束，请其他玩家确认是否继续抢庄。");
+    room.tableLog.push(isFixedTeamMode(room) ? "摸牌结束，请其他玩家确认是否继续亮主。" : "摸牌结束，请其他玩家确认是否继续抢庄。");
     return;
   }
   if (room.phase === PHASES.DEALING) {
@@ -368,11 +368,20 @@ export function makeBid(room, playerId, cardIds) {
   const seat = findSeatByPlayer(room, playerId);
   if (!seat) throw new Error("请先入座");
   const forcedSuitBid = room.phase === PHASES.FORCED_SUIT;
+  const fixedTeamBid = isFixedTeamMode(room) && [PHASES.DEALING, PHASES.AUCTION_READY, PHASES.FORCED_SUIT].includes(room.phase);
+  const fixedOpeningAuction = fixedTeamBid && room.sixFirstAuction === true && room.round === 1;
   if (forcedSuitBid && forceSpinCountdownActive(room)) throw new Error("翻底轮盘倒计时中，请稍候");
   if (forcedSuitBid && seat.index === room.dealerSeat) throw new Error("强制庄家请直接确认主花色");
   const cards = pickCards(seat.hand, cardIds);
-  const bid = evaluateBid(cards, seat.level);
-  if (!bid) throw new Error("只能亮自己的常主牌，或任意 3 张王");
+  const fixedLevelRank = fixedOpeningAuction && room.dealerSeat === null ? seat.level : room.levelRank;
+  const bid = fixedTeamBid
+    ? evaluateSixTrumpCall(cards, fixedLevelRank, { allowNoTrump: isClassic4(room) })
+    : evaluateBid(cards, seat.level);
+  if (!bid) {
+    throw new Error(fixedTeamBid
+      ? (isClassic4(room) ? `只能亮当前等级 ${fixedLevelRank} 的同花色牌，或选择至少 2 张王亮无主` : `只能亮当前等级 ${fixedLevelRank} 的同花色牌`)
+      : "只能亮自己的常主牌，或任意 3 张王");
+  }
   if (room.currentBid && compareBid(bid, room.currentBid) <= 0) throw new Error("必须用更高强度抢庄");
   room.currentBid = { ...bid, seat: seat.index, playerId, cards };
   // 盖庄后其他座位需对更高的庄重新表态：清空旧的亮牌与响应，只保留本次亮庄者。
@@ -380,14 +389,22 @@ export function makeBid(room, playerId, cardIds) {
   room.seatBids = { [seat.index]: { ...bid, cards } };
   room.bidResponses = { [seat.index]: "bid" };
   if (!room.dealing) room.bidResponseReadyAt = Date.now() + BID_RESPONSE_TIMEOUT_MS;
-  room.dealerSeat = seat.index;
-  room.levelRank = bid.levelRank;
+  if (!fixedTeamBid || room.dealerSeat === null || fixedOpeningAuction) {
+    room.dealerSeat = seat.index;
+    room.levelRank = bid.levelRank;
+    if (fixedTeamBid) {
+      room.sixOriginalDealerSeat = seat.index;
+      room.starterSeat = seat.index;
+      room.currentLeader = seat.index;
+      room.turnSeat = seat.index;
+    }
+  }
   room.noTrump = bid.noTrump;
   room.trumpSuit = bid.trumpSuit;
   if (!room.dealing) {
     for (const s of room.seats) sortHand(s.hand, room);
   }
-  room.tableLog.push(`${seat.nickname} 亮庄：${cards.map((c) => c.label).join("、")}`);
+  room.tableLog.push(`${seat.nickname} ${fixedTeamBid ? "亮主" : "亮庄"}：${cards.map((c) => c.label).join("、")}`);
   if (forcedSuitBid) {
     // 翻底后开放亮主：盖庄者成为新庄家（makeBid 上方已把 dealerSeat 指向他），
     // 但不立即定庄——给其他人一个盖更高/不亮的响应窗口，全部表态后才确定庄家。
@@ -419,6 +436,14 @@ function _checkAllBidResponded(room) {
   const totalSeats = room.seats.filter((s) => s.playerId).length;
   const responded = Object.keys(room.bidResponses).length;
   if (responded >= totalSeats) {
+    if (room.phase === PHASES.FORCED_SUIT && isFixedTeamMode(room)) {
+      room.forceSpin = null;
+      room.levelRank = room.currentBid.levelRank;
+      room.trumpSuit = room.currentBid.trumpSuit;
+      room.noTrump = room.currentBid.noTrump;
+      giveKittyToDealer(room);
+      return;
+    }
     confirmDealer(room);
   }
 }
@@ -2176,18 +2201,23 @@ function decomposeThrowComponents(cards, room, ledSuit) {
 
 // Does an opponent's same-suit hand hold a tractor of unit≥`unit`, length≥`count`,
 // whose head outranks `headValue`? Only such a tractor can block a thrown tractor.
-function opponentHasBetterTractor(otherSameSuit, room, unit, count, headValue, ledSuit) {
+function opponentHasBetterTractor(otherSameSuit, room, unit, count, headValue, ledSuit, lockedTriples = []) {
+  const lockedSet = new Set(lockedTriples || []);
   const oGroups = groupCards(
     [...otherSameSuit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room))
   );
+  const canUseGroup = (g) => {
+    if (g.length < unit) return false;
+    return unit !== 2 || !lockedSet.has(`${g[0].rank}|${g[0].suit}`);
+  };
   let i = 0;
   while (i < oGroups.length) {
-    if (oGroups[i].length >= unit) {
+    if (canUseGroup(oGroups[i])) {
       let j = i;
       const run = [oGroups[i]];
       while (
         j + 1 < oGroups.length &&
-        oGroups[j + 1].length >= unit &&
+        canUseGroup(oGroups[j + 1]) &&
         isConsecutiveInRules(oGroups[j][0], oGroups[j + 1][0], ledSuit, room)
       ) {
         run.push(oGroups[j + 1]);
@@ -2214,6 +2244,7 @@ function validateThrow(room, throwerSeat, cards) {
     if (otherSeat.index === throwerSeat.index) continue;
     const otherSameSuit = otherSeat.hand.filter((c) => playSuit(c, room) === ledSuit);
     if (otherSameSuit.length === 0) continue;
+    const lockedSet = new Set(otherSeat.lockedTriples || []);
     const oGroups = groupCards(
       [...otherSameSuit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room))
     );
@@ -2222,7 +2253,7 @@ function validateThrow(room, throwerSeat, cards) {
       const headValue = cardOrderValue(comp.cards[0], room);
 
       if (comp.kind === "tractor") {
-        if (opponentHasBetterTractor(otherSameSuit, room, comp.unit, comp.count, headValue, ledSuit)) {
+        if (opponentHasBetterTractor(otherSameSuit, room, comp.unit, comp.count, headValue, ledSuit, otherSeat.lockedTriples || [])) {
           allBlocked.push({
             cards: comp.cards,
             headValue,
@@ -2235,7 +2266,9 @@ function validateThrow(room, throwerSeat, cards) {
       // single / standalone pair / triple: beaten by a same-suit group of
       // equal-or-greater size whose top card is higher.
       const blocker = oGroups.find(
-        (oGroup) => oGroup.length >= comp.unit && cardOrderValue(oGroup[0], room) > headValue
+        (oGroup) => oGroup.length >= comp.unit
+          && (comp.unit !== 2 || !lockedSet.has(`${oGroup[0].rank}|${oGroup[0].suit}`))
+          && cardOrderValue(oGroup[0], room) > headValue
       );
       if (blocker) {
         allBlocked.push({

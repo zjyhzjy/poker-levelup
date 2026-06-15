@@ -1521,6 +1521,37 @@ test("跟对子加单张甩牌时，只有三条不强制拆对子", () => {
   assert.equal(validatePlay(room, follower, [triple2[0], ...singles.slice(0, 2)], lead).ok, true);
 });
 
+for (const seatCount of [5, 6]) {
+test(`${seatCount} 人甩牌失败判定：未锁定三条可当对子阻挡，锁定三条不可当对子阻挡`, () => {
+  const build = (locked) => {
+    const room = createRoom(`${seatCount}${locked ? "LOCKEDTHROW" : "UNLOCKEDTHROW"}`, { seatCount });
+    for (let i = 0; i < seatCount; i += 1) { room.seats[i].playerId = `p${i}`; room.seats[i].nickname = `P${i}`; }
+    room.phase = "playing";
+    room.levelRank = "2";
+    room.trumpSuit = "hearts";
+    room.dealerSeat = 0;
+    room.currentLeader = 0;
+    room.turnSeat = 0;
+    const deck = createDeck();
+    const cardsOf = (rank, suit, n = 1) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+    const throwCards = [...cardsOf("9", "clubs", 2), ...cardsOf("7", "clubs", 2)];
+    room.seats[0].hand = [...throwCards];
+    room.seats[1].hand = cardsOf("J", "clubs", 3);
+    room.seats[1].lockedTriples = locked ? ["J|clubs"] : [];
+    return { room, throwCards };
+  };
+
+  const unlocked = build(false);
+  playCards(unlocked.room, "p0", unlocked.throwCards.map((card) => card.id));
+  assert.equal(unlocked.room.throwResult?.failed, true, "未锁定 JJJ 可以拆成对子，能阻挡对子甩牌");
+
+  const locked = build(true);
+  playCards(locked.room, "p0", locked.throwCards.map((card) => card.id));
+  assert.equal(locked.room.throwResult?.failed, false, "已锁定 JJJ 不能再当对子阻挡甩牌");
+  assert.equal(locked.room.currentTrick[0].cards.length, 4);
+});
+}
+
 function trumpTwoTripleThrowSetup(handCards) {
   const room = createRoom("TRUMP2TRI");
   room.levelRank = "2"; room.trumpSuit = "hearts";
@@ -1815,6 +1846,92 @@ test("6 人已有庄家叫主：闲家盖主只改花色不改庄家", () => {
 
   assert.equal(room.phase, "burying");
   assert.equal(room.dealerSeat, 0, "已有庄家时盖主不能改变庄家");
+  assert.equal(room.levelRank, "3");
+  assert.equal(room.trumpSuit, "clubs");
+  assert.equal(room.starterSeat, 0);
+});
+
+test("6 人发牌阶段已有庄家：闲家按庄家等级亮主，不按自己等级", () => {
+  const room = createRoom("FIXED6DEALBID", { seatCount: 6 });
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  room.phase = "dealing";
+  room.dealing = true;
+  room.round = 2;
+  room.teamLevels = { 0: "5", 1: "3" };
+  room.dealerSeat = 0;
+  room.sixOriginalDealerSeat = 0;
+  room.levelRank = "5";
+  room.starterSeat = 0;
+  room.seats[0].level = "5";
+  room.seats[1].level = "3";
+
+  const deck = createDeck();
+  const spade5 = deck.find((card) => card.rank === "5" && card.suit === "spades");
+  const club5s = deck.filter((card) => card.rank === "5" && card.suit === "clubs").slice(0, 2);
+  const club3s = deck.filter((card) => card.rank === "3" && card.suit === "clubs").slice(0, 2);
+  room.seats[0].hand.push(spade5);
+  room.seats[1].hand.push(...club5s, ...club3s);
+
+  makeBid(room, "p0", [spade5.id]);
+  assert.throws(() => makeBid(room, "p1", club3s.map((card) => card.id)), /当前等级 5/);
+  makeBid(room, "p1", club5s.map((card) => card.id));
+
+  assert.equal(room.dealerSeat, 0, "已有庄家时发牌阶段反主不改庄家");
+  assert.equal(room.levelRank, "5");
+  assert.equal(room.trumpSuit, "clubs");
+});
+
+test("6 人发牌阶段首轮：更高亮主仍可抢庄", () => {
+  const room = createRoom("FIXED6OPENDEALCOVER", { seatCount: 6 });
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; s.level = "2"; }
+  room.phase = "dealing";
+  room.dealing = true;
+  room.round = 1;
+  room.teamLevels = { 0: "2", 1: "2" };
+  room.dealerSeat = null;
+  room.sixOriginalDealerSeat = null;
+  room.sixFirstAuction = true;
+  room.levelRank = "2";
+
+  const deck = createDeck();
+  const spade2 = deck.find((card) => card.rank === "2" && card.suit === "spades");
+  const club2s = deck.filter((card) => card.rank === "2" && card.suit === "clubs").slice(0, 2);
+  room.seats[0].hand.push(spade2);
+  room.seats[1].hand.push(...club2s);
+
+  makeBid(room, "p0", [spade2.id]);
+  makeBid(room, "p1", club2s.map((card) => card.id));
+
+  assert.equal(room.dealerSeat, 1, "只有首轮抢庄窗口里，更高亮主才可以改庄家");
+  assert.equal(room.levelRank, "2");
+  assert.equal(room.trumpSuit, "clubs");
+});
+
+test("6 人强制定主后：闲家可用同等级更多张反主但不改庄家", () => {
+  const room = createRoom("FIXED6FORCEDCOVER", { seatCount: 6 });
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  room.phase = "forcedSuit";
+  room.round = 2;
+  room.teamLevels = { 0: "3", 1: "4" };
+  room.dealerSeat = 0;
+  room.sixOriginalDealerSeat = 0;
+  room.levelRank = "3";
+  room.starterSeat = 0;
+
+  const deck = createDeck();
+  const spade3 = deck.find((card) => card.rank === "3" && card.suit === "spades");
+  const club3s = deck.filter((card) => card.rank === "3" && card.suit === "clubs").slice(0, 2);
+  const club4s = deck.filter((card) => card.rank === "4" && card.suit === "clubs").slice(0, 2);
+  room.seats[0].hand.push(spade3);
+  room.seats[1].hand.push(...club3s, ...club4s);
+
+  chooseForcedTrump(room, "p0", "spades");
+  assert.throws(() => makeBid(room, "p1", club4s.map((card) => card.id)), /当前等级 3/);
+  makeBid(room, "p1", club3s.map((card) => card.id));
+  for (const i of [0, 2, 3, 4, 5]) passBid(room, `p${i}`);
+
+  assert.equal(room.phase, "burying");
+  assert.equal(room.dealerSeat, 0, "6 人强制定主后闲家反主只改花色，不抢庄");
   assert.equal(room.levelRank, "3");
   assert.equal(room.trumpSuit, "clubs");
   assert.equal(room.starterSeat, 0);

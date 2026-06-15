@@ -1279,18 +1279,19 @@ function renderControls(room) {
     const hasBid = !!room.currentBid;
     const revealed = (room.revealedKitty || []).length;
     const allRevealed = revealed >= 7;
+    const fixedTeams = room.fixedTeams === true;
 
-    parts.push(`<button data-action="bid">亮庄</button>`);
+    parts.push(`<button data-action="bid">${fixedTeams ? "亮主" : "亮庄"}</button>`);
 
     if (hasBid && !myResponse && room.currentBid.seat !== myIndex) {
-      parts.push(`<button data-action="passBid">不抢</button>`);
+      parts.push(`<button data-action="passBid">${fixedTeams ? "不亮" : "不抢"}</button>`);
     }
 
-    if (room.phase === "auctionReady" && !hasBid) {
+    if (!fixedTeams && room.phase === "auctionReady" && !hasBid) {
       parts.push(`<button data-action="startAuction">开始翻底</button>`);
     }
 
-    if (room.phase === "auction" && !hasBid) {
+    if (!fixedTeams && room.phase === "auction" && !hasBid) {
       if (!allRevealed) {
         parts.push(`<button data-action="revealKitty" class="primary-action">翻下一张 (${revealed}/7)</button>`);
       } else {
