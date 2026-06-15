@@ -369,7 +369,7 @@ export function makeBid(room, playerId, cardIds) {
   if (!seat) throw new Error("请先入座");
   const forcedSuitBid = room.phase === PHASES.FORCED_SUIT;
   const fixedTeamBid = isFixedTeamMode(room) && [PHASES.DEALING, PHASES.AUCTION_READY, PHASES.FORCED_SUIT].includes(room.phase);
-  const fixedOpeningAuction = fixedTeamBid && room.sixFirstAuction === true && room.round === 1;
+  const fixedOpeningAuction = fixedTeamBid && isSixOpeningAuction(room);
   if (forcedSuitBid && forceSpinCountdownActive(room)) throw new Error("翻底轮盘倒计时中，请稍候");
   if (forcedSuitBid && seat.index === room.dealerSeat) throw new Error("强制庄家请直接确认主花色");
   const cards = pickCards(seat.hand, cardIds);
@@ -463,6 +463,13 @@ function startSixTrumpCalling(room) {
   }
 }
 
+function isSixOpeningAuction(room) {
+  return room.sixFirstAuction === true
+    && room.round === 1
+    && room.teamLevels?.[0] === "2"
+    && room.teamLevels?.[1] === "2";
+}
+
 function evaluateSixTrumpCall(cards, levelRank, options = {}) {
   if (!cards.length) return null;
   if (options.allowNoTrump && cards.length >= 2 && cards.every((card) => card.suit === "joker")) {
@@ -485,7 +492,7 @@ export function callSixTrump(room, playerId, cardIds) {
   const seat = findSeatByPlayer(room, playerId);
   if (!seat) throw new Error("请先入座");
   if (room.bidResponses[seat.index]) throw new Error("你已经响应过了");
-  const openingAuction = room.sixFirstAuction === true && room.round === 1;
+  const openingAuction = isSixOpeningAuction(room);
   const levelRank = openingAuction ? seat.level : room.levelRank;
   const cards = pickCards(seat.hand, cardIds);
   const bid = evaluateSixTrumpCall(cards, levelRank, { allowNoTrump: isClassic4(room) });

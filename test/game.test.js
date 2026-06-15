@@ -1822,6 +1822,35 @@ test("6 人已有庄家叫主：只能亮庄家当前等级，闲家队等级不
   assert.equal(room.trumpSuit, "spades");
 });
 
+test("6 人已有庄家叫主：即使首轮标记残留，也不能亮自己的队伍等级", () => {
+  const room = createRoom("FIXED6STALEFIRST", { seatCount: 6 });
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  room.phase = "sixTrump";
+  room.round = 1;
+  room.teamLevels = { 0: "5", 1: "3" };
+  room.dealerSeat = 0;
+  room.sixOriginalDealerSeat = 0;
+  room.sixFirstAuction = true;
+  room.levelRank = "5";
+  room.seats[0].level = "5";
+  room.seats[1].level = "3";
+
+  const deck = createDeck();
+  const spade5 = deck.find((card) => card.rank === "5" && card.suit === "spades");
+  const club5s = deck.filter((card) => card.rank === "5" && card.suit === "clubs").slice(0, 2);
+  const club3s = deck.filter((card) => card.rank === "3" && card.suit === "clubs").slice(0, 2);
+  room.seats[0].hand.push(spade5);
+  room.seats[1].hand.push(...club5s, ...club3s);
+
+  callSixTrump(room, "p0", [spade5.id]);
+  assert.throws(() => callSixTrump(room, "p1", club3s.map((card) => card.id)), /当前等级 5/);
+  callSixTrump(room, "p1", club5s.map((card) => card.id));
+
+  assert.equal(room.dealerSeat, 0);
+  assert.equal(room.levelRank, "5");
+  assert.equal(room.trumpSuit, "clubs");
+});
+
 test("6 人已有庄家叫主：闲家盖主只改花色不改庄家", () => {
   const room = createRoom("FIXED6COVER", { seatCount: 6 });
   for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
