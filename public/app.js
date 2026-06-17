@@ -13,9 +13,9 @@ function getMyId() {
 }
 
 const AVATARS = [
-  "😀","😎","🤠","😺","🦊","🐼","🦁","🐯","🐸","🐵","🦄","🐲","👑","🎩","👻","🐰",
+  "😀","😎","🤠","😺","🦊","🐼","🦁","🐯","🐸","🐵","🦄","🐲","👑","👻","🐰",
   // 追加的免费 emoji 头像
-  "🐧","🐨","🐺","🦝","🐷","🐔","🦉","🦖","🐙","🦈","🤖","👽","🤡","🥷","🧙","🧛","🃏","🎰"
+  "🐧","🐨","🐺","🐷","🐔","🦖","🐙","🤖","👽","🤡","🥷","🧙","🃏"
 ];
 
 // 头像可以是 emoji 字符串，或指向 public/avatars/ 里图片的 "img:avatars/xxx.png"。
@@ -53,6 +53,8 @@ let forceSpinClientSig = "";
 let forceSpinClientStartedAt = 0;
 let forceSpinLocal = null;
 let lastKillTrickSig = "";
+let reconnectTimer = null;
+let reconnectAttempts = 0;
 const animatedKillSeats = new Set();
 // Card ids that have already played their deal-in animation, so re-renders during
 // dealing don't make the whole hand flicker (only newly dealt cards animate).
@@ -185,6 +187,10 @@ $("#roomBadge")?.addEventListener("click", copyInvite);
 })();
 
 function connectAndJoin(code, nickname, seatCount) {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   state.nickname = nickname || "玩家";
   state.createSeatCount = [4, 5, 6].includes(seatCount) ? seatCount : 5; // 仅创建房间时生效
   localStorage.setItem("szp.nickname", state.nickname);
@@ -194,12 +200,14 @@ function connectAndJoin(code, nickname, seatCount) {
   const ws = new WebSocket(`${proto}://${location.host}`);
   state.ws = ws;
   ws.addEventListener("open", () => {
+    reconnectAttempts = 0;
     updatePingStatus("connecting");
     startPingLoop();
   });
   ws.addEventListener("close", () => {
     stopPingLoop();
     updatePingStatus("down");
+    scheduleReconnect(code || state.room?.code || localStorage.getItem("szp.roomCode"));
   });
   ws.addEventListener("error", () => {
     updatePingStatus("down");
@@ -225,6 +233,7 @@ function connectAndJoin(code, nickname, seatCount) {
       handleAudioEvents(msg.payload);
       setMusicPhase(msg.payload.phase === "lobby" ? "lobby" : "game"); // 大厅放开场，开打后切牌局曲
       state.room = msg.payload;
+      reconnectAttempts = 0;
       // Remember the room so a refresh / reopen can auto-reconnect us back in.
       if (state.room.code) localStorage.setItem("szp.roomCode", state.room.code);
       // Preserve selected cards that are still in hand
@@ -241,6 +250,17 @@ function connectAndJoin(code, nickname, seatCount) {
     if (msg.type === "hint") applyHint(msg.payload);
     if (msg.type === "error") showError(msg.payload.message);
   });
+}
+
+function scheduleReconnect(code) {
+  const roomCode = String(code || "").trim().toUpperCase();
+  if (!roomCode || reconnectTimer) return;
+  const delay = Math.min(10000, 800 * (2 ** reconnectAttempts));
+  reconnectAttempts += 1;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connectAndJoin(roomCode, state.nickname);
+  }, delay);
 }
 
 function send(type, payload = {}) {
@@ -508,6 +528,12 @@ function sendPing() {
     return;
   }
   const now = Date.now();
+  if (state.ping.pendingAt && now - state.ping.pendingAt > 9000) {
+    updatePingStatus("down");
+    try { ws.close(); } catch (_) {}
+    scheduleReconnect(state.room?.code || localStorage.getItem("szp.roomCode"));
+    return;
+  }
   if (state.ping.pendingAt && now - state.ping.pendingAt > 6000) {
     updatePingStatus("stale");
   }
@@ -818,9 +844,9 @@ function renderSeats(room) {
   seatsEl.className = `seats players-${room.seatCount || 5}`;
 
   const currentPlayed = {};
-  for (const play of room.currentTrick) currentPlayed[play.seat] = play.cards;
+  for (const play of room.currentTrick) currentPlayed[play.seat] = play;
   const lastPlayed = {};
-  for (const play of (room.lastTrick || [])) lastPlayed[play.seat] = play.cards;
+  for (const play of (room.lastTrick || [])) lastPlayed[play.seat] = play;
   const currentKillSeats = new Set(room.trumpKillSeats || []);
   const completedWinner = room.currentTrick.length === 0 ? room.lastTrickWin?.winner : null;
   const killTrickSig = (room.currentTrick || [])
@@ -879,9 +905,9 @@ function renderSeats(room) {
       if (resp === "pass") bidIndicator = `<div class="bid-indicator pass">${room.phase === "sixTrump" ? "不亮" : "不抢"}</div>`;
     }
 
-    // Cards beside seat — bottom-side seats show cards above the token.
-    // Your own bid reveal stays below your info and is nudged by mobile CSS.
-    const playedAbove = screenPos === 1 || screenPos === (room.seatCount || 5) - 1;
+    // Cards beside bottom-side seats and your own seat show above the token so
+    // they don't crowd the hand area.
+    const playedAbove = screenPos === 0 || screenPos === 1 || screenPos === (room.seatCount || 5) - 1;
     let sideCardsHTML = "";
     let currentPlayShown = false;
     let completedPlayShown = false;
@@ -889,14 +915,17 @@ function renderSeats(room) {
       sideCardsHTML = renderPlayedCards(seatBids[seat.index].cards);
     } else {
       let playedCards = null;
+      let shapeLabel = "";
       if (currentPlayed[seat.index]) {
-        playedCards = currentPlayed[seat.index];
+        playedCards = currentPlayed[seat.index].cards;
+        shapeLabel = currentPlayed[seat.index].shapeLabel || "";
         currentPlayShown = true;
       } else if (room.currentTrick.length === 0 && lastPlayed[seat.index]) {
-        playedCards = lastPlayed[seat.index];
+        playedCards = lastPlayed[seat.index].cards;
+        shapeLabel = lastPlayed[seat.index].shapeLabel || "";
         completedPlayShown = true;
       }
-      if (playedCards) sideCardsHTML = renderPlayedCards(playedCards);
+      if (playedCards) sideCardsHTML = `${renderPlayedCards(playedCards)}${shapeLabel ? `<div class="shape-badge">${escapeHtml(shapeLabel)}</div>` : ""}`;
     }
     // 进行中和一墩结束后都只高亮本墩“最大”的唯一一家。
     const winningPlay = (currentPlayShown && room.currentWinnerSeat === seat.index)

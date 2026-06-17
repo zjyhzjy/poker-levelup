@@ -690,17 +690,21 @@ function disconnect(client) {
 
 function send(client, type, payload) {
   const data = Buffer.from(JSON.stringify({ type, payload }));
+  sendFrame(client, 0x1, data);
+}
+
+function sendFrame(client, opcode, data = Buffer.alloc(0)) {
   const len = data.length;
   let header;
   if (len < 126) {
-    header = Buffer.from([0x81, len]);
+    header = Buffer.from([0x80 | opcode, len]);
   } else if (len < 65536) {
-    header = Buffer.from([0x81, 126, (len >> 8) & 0xff, len & 0xff]);
+    header = Buffer.from([0x80 | opcode, 126, (len >> 8) & 0xff, len & 0xff]);
   } else {
     // ≥64KB 必须用 64-bit(127) 长度，否则 16-bit 会溢出截断、整帧损坏、连接错位。
     // 6 人长局的 state 广播确实可能破 64KB。
     header = Buffer.alloc(10);
-    header[0] = 0x81;
+    header[0] = 0x80 | opcode;
     header[1] = 127;
     header.writeBigUInt64BE(BigInt(len), 2);
   }
@@ -744,7 +748,7 @@ function handleFrame(client, chunk) {
     offset = payloadStart + len;
 
     if (opcode === 0x8) { client.socket.end(); client.recvBuffer = null; return; } // close
-    if (opcode === 0x9) { continue; } // ping：忽略（如需可回 pong）
+    if (opcode === 0x9) { sendFrame(client, 0xA, Buffer.from(payload)); continue; } // ping -> pong
     if (opcode === 0xA) { continue; } // pong
     // 文本/二进制（0x1/0x2）与续帧（0x0）：按 FIN 组装后再分发
     if (opcode === 0x0) {

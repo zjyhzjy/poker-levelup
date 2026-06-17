@@ -1,41 +1,43 @@
 import { rankNumber, RANKS } from "../cards.js";
 
-export const classic4Rules = {
-  mode: "classic4",
-  seatCount: 4,
-  deckCopies: 2,
-  kittySize: 8,
+export const fixedTeam6Rules = {
+  mode: "fixedTeam6",
+  seatCount: 6,
+  deckCopies: 3,
+  kittySize: 6,
   fixedTeams: true,
   hasFriend: false,
-  noTrumpJokerCount: 2,
-  exactNoTrumpJokers: false
+  noTrumpJokerCount: 3,
+  exactNoTrumpJokers: true
 };
 
-export function upgradeResultClassic4(attackers) {
-  if (attackers === 0) return { side: "dealer", steps: 3, label: "庄家队大光，升 3 级" };
-  if (attackers < 40) return { side: "dealer", steps: 2, label: "庄家队小光，升 2 级" };
-  if (attackers < 80) return { side: "dealer", steps: 1, label: "庄家队升 1 级" };
-  if (attackers < 120) return { side: "attackers", steps: 0, label: "闲家队上台，不升级" };
-  if (attackers < 160) return { side: "attackers", steps: 1, label: "闲家队上台，升 1 级" };
-  if (attackers < 200) return { side: "attackers", steps: 2, label: "闲家队上台，升 2 级" };
-  return { side: "attackers", steps: 3, label: "闲家队上台，升 3 级" };
+export function isSixOpeningAuction(room) {
+  return room.sixFirstAuction === true
+    && room.round === 1
+    && room.teamLevels?.[0] === "2"
+    && room.teamLevels?.[1] === "2";
 }
 
-// 4 人 80 分扣底倍率独立于 5/6 人：单张 ×2、对子 ×4、拖拉机固定 ×8。
-export function buryMultiplierClassic4(shape) {
+export function upgradeResultFixedTeam6(attackers) {
+  if (attackers === 0) return { side: "dealer", steps: 3, label: "庄家队升 3 级" };
+  if (attackers < 60) return { side: "dealer", steps: 2, label: "庄家队升 2 级" };
+  if (attackers < 120) return { side: "dealer", steps: 1, label: "庄家队升 1 级" };
+  if (attackers < 180) return { side: "attackers", steps: 0, label: "闲家队上台，不升级" };
+  const steps = Math.floor((attackers - 120) / 60);
+  return { side: "attackers", steps, label: `闲家队上台，升 ${steps} 级` };
+}
+
+export function buryMultiplierFixedTeam6(shape) {
   if (!shape) return 2;
   if (shape.type === "pair") return 4;
-  if (shape.type === "tractor") return 8;
+  if (shape.type === "triple") return 8;
+  if (shape.type === "tractor") return 2 ** (shape.unit * shape.count);
   return 2;
 }
 
-export function evaluateClassic4TrumpCall(cards, levelRank) {
-  return evaluateFixedTeamTrumpCall(cards, levelRank, classic4Rules);
-}
-
-function evaluateFixedTeamTrumpCall(cards, levelRank, rules) {
+export function evaluateFixedTeam6TrumpCall(cards, levelRank) {
   if (!cards.length) return null;
-  if (cards.length >= rules.noTrumpJokerCount && cards.every((card) => card.suit === "joker")) {
+  if (cards.length === fixedTeam6Rules.noTrumpJokerCount && cards.every((card) => card.suit === "joker")) {
     const bigs = cards.filter((card) => card.rank === "bigJoker").length;
     return { strength: cards.length + (bigs >= cards.length ? 3 : 2), levelRank, trumpSuit: null, noTrump: true };
   }
@@ -144,6 +146,12 @@ export function isConsecutiveInRules(cardA, cardB, ledSuit, room) {
     return (idxB - idxA === 1);
   }
 
+  if (room.noTrump) {
+    if (cardA.rank === "bigJoker") return cardB.rank === "smallJoker";
+    if (cardA.rank === "smallJoker") return cardB.rank === level;
+    return false;
+  }
+
   // --- 情况 B：如果是复杂的主牌序列（大小王、正副级牌、主花色普通牌） ---
   // 主牌的绝对连续链条严格如下：
   // 大王 -> 小王 -> 正主级牌 -> 副主级牌(按出牌顺序或特定) -> 主花色A -> 主花色K -> 主花色J (跳过级牌)
@@ -194,7 +202,7 @@ export function validatePlay(room, seat, cards, leaderCards) {
   const lockedKey = lockedPairViolation(seat, cards, room);
   if (lockedKey) {
     if (!leaderCards) {
-      return { ok: false, reason: "这副三条已锁定，不能拆成对子出（可整体出三条或拆成单张）" };
+      return { ok: true };
     }
     const [lr, ls] = lockedKey.split("|");
     const ledSuitForLock = playSuit(leaderCards[0], room);

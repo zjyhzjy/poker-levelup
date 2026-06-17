@@ -1,53 +1,77 @@
 import { rankNumber, RANKS } from "../cards.js";
 
-export const classic4Rules = {
-  mode: "classic4",
-  seatCount: 4,
-  deckCopies: 2,
-  kittySize: 8,
-  fixedTeams: true,
-  hasFriend: false,
-  noTrumpJokerCount: 2,
-  exactNoTrumpJokers: false
+export const findFriend5Rules = {
+  mode: "findFriend5",
+  seatCount: 5,
+  deckCopies: 3,
+  kittySize: 7,
+  fixedTeams: false,
+  hasFriend: true
 };
 
-export function upgradeResultClassic4(attackers) {
-  if (attackers === 0) return { side: "dealer", steps: 3, label: "庄家队大光，升 3 级" };
-  if (attackers < 40) return { side: "dealer", steps: 2, label: "庄家队小光，升 2 级" };
-  if (attackers < 80) return { side: "dealer", steps: 1, label: "庄家队升 1 级" };
-  if (attackers < 120) return { side: "attackers", steps: 0, label: "闲家队上台，不升级" };
-  if (attackers < 160) return { side: "attackers", steps: 1, label: "闲家队上台，升 1 级" };
-  if (attackers < 200) return { side: "attackers", steps: 2, label: "闲家队上台，升 2 级" };
-  return { side: "attackers", steps: 3, label: "闲家队上台，升 3 级" };
+export function upgradeResultFindFriend5(attackers) {
+  if (attackers <= 40) return { side: "dealer", steps: 3, label: "庄家队升 3 级" };
+  if (attackers < 80) return { side: "dealer", steps: 2, label: "庄家队升 2 级" };
+  if (attackers < 120) return { side: "dealer", steps: 1, label: "庄家队升 1 级" };
+  if (attackers <= 160) return { side: "none", steps: 0, label: "不升不降" };
+  if (attackers <= 200) return { side: "attackers", steps: 1, label: "闲家队升 1 级" };
+  if (attackers < 240) return { side: "attackers", steps: 2, label: "闲家队升 2 级" };
+  return { side: "attackers", steps: 3, label: "闲家队升 3 级" };
 }
 
-// 4 人 80 分扣底倍率独立于 5/6 人：单张 ×2、对子 ×4、拖拉机固定 ×8。
-export function buryMultiplierClassic4(shape) {
+export function buryMultiplierFindFriend5(shape) {
   if (!shape) return 2;
   if (shape.type === "pair") return 4;
-  if (shape.type === "tractor") return 8;
+  if (shape.type === "triple") return 8;
+  if (shape.type === "tractor") return 2 ** (shape.unit * shape.count);
   return 2;
 }
 
-export function evaluateClassic4TrumpCall(cards, levelRank) {
-  return evaluateFixedTeamTrumpCall(cards, levelRank, classic4Rules);
+export function evaluateFindFriend5Bid(cards, playerLevel) {
+  if (!cards.length) return null;
+  if (cards.length === 3 && cards.every((card) => card.suit === "joker")) {
+    const bigs = cards.filter((card) => card.rank === "bigJoker").length;
+    return { strength: bigs >= 2 ? 5 : 4, levelRank: playerLevel, trumpSuit: null, noTrump: true };
+  }
+  if (!cards.every((card) => card.rank === playerLevel && card.suit !== "joker")) return null;
+  if (!cards.every((card) => card.suit === cards[0].suit)) return null;
+  if (![1, 2, 3].includes(cards.length)) return null;
+  return { strength: cards.length, levelRank: playerLevel, trumpSuit: cards[0].suit, noTrump: false };
 }
 
-function evaluateFixedTeamTrumpCall(cards, levelRank, rules) {
-  if (!cards.length) return null;
-  if (cards.length >= rules.noTrumpJokerCount && cards.every((card) => card.suit === "joker")) {
-    const bigs = cards.filter((card) => card.rank === "bigJoker").length;
-    return { strength: cards.length + (bigs >= cards.length ? 3 : 2), levelRank, trumpSuit: null, noTrump: true };
-  }
-  if (cards.some((card) => card.suit === "joker")) return null;
-  if (!cards.every((card) => card.rank === levelRank && card.suit === cards[0].suit)) return null;
-  if (!["spades", "hearts", "clubs", "diamonds"].includes(cards[0].suit)) return null;
+export function forceKittyCount(card) {
+  if (card.rank === "smallJoker" || card.rank === "bigJoker") return 0;
+  if (card.rank === "A") return 1;
+  if (card.rank === "J") return 11;
+  if (card.rank === "Q") return 12;
+  if (card.rank === "K") return 13;
+  return Number(card.rank);
+}
+
+export function forcedDealerTargetSeat(starterSeat, seatCount, lastKittyCard) {
+  const count = forceKittyCount(lastKittyCard);
+  let seatIndex = starterSeat;
+  for (let i = 1; i < count; i += 1) seatIndex = (seatIndex + 1) % seatCount;
+  return { seatIndex, count };
+}
+
+export function buildForceSpin(starterSeat, targetSeat, count, lastKittyCard, now = Date.now()) {
   return {
-    strength: Math.min(cards.length, 3),
-    levelRank,
-    trumpSuit: cards[0].suit,
-    noTrump: false
+    startSeat: starterSeat,
+    targetSeat,
+    count,
+    startedAt: now,
+    intervalMs: 1000,
+    holdMs: 1500,
+    card: { rank: lastKittyCard.rank, suit: lastKittyCard.suit, label: lastKittyCard.label }
   };
+}
+
+export function forceSpinCountdownActive(forceSpin, now = Date.now()) {
+  if (!forceSpin) return false;
+  const interval = Math.max(0, Number(forceSpin.intervalMs || 0));
+  const count = Math.max(0, Number(forceSpin.count ?? 1));
+  return now < Number(forceSpin.startedAt || 0) + count * interval;
 }
 // Shared play-rule engine copied per mode.
 export function analyzeShape(cards, room) {
@@ -144,6 +168,12 @@ export function isConsecutiveInRules(cardA, cardB, ledSuit, room) {
     return (idxB - idxA === 1);
   }
 
+  if (room.noTrump) {
+    if (cardA.rank === "bigJoker") return cardB.rank === "smallJoker";
+    if (cardA.rank === "smallJoker") return cardB.rank === level;
+    return false;
+  }
+
   // --- 情况 B：如果是复杂的主牌序列（大小王、正副级牌、主花色普通牌） ---
   // 主牌的绝对连续链条严格如下：
   // 大王 -> 小王 -> 正主级牌 -> 副主级牌(按出牌顺序或特定) -> 主花色A -> 主花色K -> 主花色J (跳过级牌)
@@ -194,7 +224,7 @@ export function validatePlay(room, seat, cards, leaderCards) {
   const lockedKey = lockedPairViolation(seat, cards, room);
   if (lockedKey) {
     if (!leaderCards) {
-      return { ok: false, reason: "这副三条已锁定，不能拆成对子出（可整体出三条或拆成单张）" };
+      return { ok: true };
     }
     const [lr, ls] = lockedKey.split("|");
     const ledSuitForLock = playSuit(leaderCards[0], room);
