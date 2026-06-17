@@ -1184,6 +1184,26 @@ test("甩牌最高组件是对子时，只比较对子大小", () => {
   assert.equal(determineTrickWinner(room, room.currentTrick), 1);
 });
 
+test("甩牌首家两对时，后手三条加单张不能压过两对", () => {
+  const room = createRoom("THROWPAIRTRIPLE");
+  room.levelRank = "8"; room.trumpSuit = "spades";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 1) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = [...cardsOf("7", "diamonds", 2), ...cardsOf("3", "diamonds", 2)];
+  const follow = [...cardsOf("Q", "diamonds", 3), cardsOf("6", "diamonds", 1)[0]];
+  const follower = room.seats[1];
+  follower.hand = [...follow];
+  follower.lockedTriples = [];
+  room.currentTrick = [
+    { seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 },
+    { seat: 1, cards: follow, shape: analyzeShape(follow, room), points: 0 }
+  ];
+
+  assert.equal(analyzeShape(lead, room).type, "throw");
+  assert.equal(validatePlay(room, follower, follow, lead).ok, true);
+  assert.equal(determineTrickWinner(room, room.currentTrick), 0);
+});
+
 test("副牌两对甩牌可被主牌拖拉机按两对结构杀", () => {
   const room = createRoom("THROWTRUMPPAIR");
   room.levelRank = "7"; room.trumpSuit = "clubs";

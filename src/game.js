@@ -2403,7 +2403,9 @@ function comparePlay(room, challenger, currentBest, leadPlay) {
   // 4. 开始比大小
   if (challengerIsTrumpCut) {
     if (!bestIsTrumpCut) return 1;
-    if (leadShape.type === "throw") return compareByHighestTier(challengerCards, bestCards, room, leadPlayCards);
+    if (leadShape.type === "throw") {
+      return compareByHighestTier(challengerCards, bestCards, room, leadPlayCards, { allowLargerGroups: true });
+    }
     return getShapeComparativeValue(challengerCards, room) - getShapeComparativeValue(bestCards, room);
   }
 
@@ -2417,10 +2419,10 @@ function comparePlay(room, challenger, currentBest, leadPlay) {
 // For throw tricks: first identify the leader's highest component tier, then
 // compare only that tier. If the leader threw only singles (e.g. A+K), a later
 // pair is just two single cards; the pair tier must not outrank the leader.
-function compareByHighestTier(challengerCards, bestCards, room, leaderCards) {
+function compareByHighestTier(challengerCards, bestCards, room, leaderCards, options = {}) {
   const leaderInfo = highestThrowTier(leaderCards, room);
-  const c = matchingThrowTierValue(challengerCards, room, leaderInfo);
-  const b = matchingThrowTierValue(bestCards, room, leaderInfo);
+  const c = matchingThrowTierValue(challengerCards, room, leaderInfo, options);
+  const b = matchingThrowTierValue(bestCards, room, leaderInfo, options);
   if (c.value !== b.value) return c.value - b.value;
   return -1; // same tier and value → earlier play wins
 }
@@ -2442,7 +2444,7 @@ function highestThrowTier(cards, room) {
   return best;
 }
 
-function matchingThrowTierValue(cards, room, target) {
+function matchingThrowTierValue(cards, room, target, { allowLargerGroups = false } = {}) {
   if (target.tier === 1) {
     return { value: Math.max(...cards.map((card) => cardOrderValue(card, room))) };
   }
@@ -2454,7 +2456,9 @@ function matchingThrowTierValue(cards, room, target) {
       if (comp.kind === "tractor" && comp.unit === target.unit && comp.count >= target.count) {
         value = Math.max(value, cardOrderValue(comp.cards[0], room));
       }
-    } else if (comp.kind === "group" && comp.unit >= target.unit) {
+    } else if (comp.kind === "tractor" && comp.unit === target.unit && comp.count >= target.count) {
+      value = Math.max(value, cardOrderValue(comp.cards[0], room));
+    } else if (comp.kind === "group" && (comp.unit === target.unit || (allowLargerGroups && comp.unit > target.unit))) {
       value = Math.max(value, cardOrderValue(comp.cards[0], room));
     }
   }
