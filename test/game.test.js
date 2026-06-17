@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
-import { addAiPlayer, analyzeShape, buryKitty, dominantThrowShape, callSixTrump, chooseAiFriendCard, chooseAiPlay, chooseForcedTrump, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, determineTrickWinner, evaluateBid, forceDealer, kickSeatByVote, makeBid, passBid, passSixTrump, playCards, publicState, recommendPlay, recomputeScores, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, takeoverAiSeat, upgradeResult, upgradeResultClassic4, upgradeResultSix, validatePlay } from "../src/game.js";
+import { addAiPlayer, analyzeShape, buryKitty, dominantThrowShape, callSixTrump, chooseAiFriendCard, chooseAiPlay, chooseForcedTrump, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, decideAiSixTrump, determineTrickWinner, evaluateBid, forceDealer, kickSeatByVote, makeBid, passBid, passSixTrump, playCards, publicState, recommendPlay, recomputeScores, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, takeoverAiSeat, upgradeResult, upgradeResultClassic4, upgradeResultSix, validatePlay } from "../src/game.js";
 import { buryMultiplierClassic4 } from "../src/rules/classic4.js";
 
 test("三副牌共 162 张", () => {
@@ -1380,6 +1380,25 @@ test("需要对子但只有三条时，不拆出单张会锁定三条，之后�
   assert.equal(validatePlay(room, follower, triple, null).ok, true, "锁定后三条仍可整组三张出");
 });
 
+test("6 人三条锁定后，两张同点跟对子不能按对子赢墩", () => {
+  const room = createRoom("LOCKPAIRWIN6", { seatCount: 6 });
+  room.levelRank = "2"; room.trumpSuit = "hearts";
+  room.phase = "playing";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 1) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = cardsOf("7", "clubs", 2);
+  const lockedQ = cardsOf("Q", "clubs", 2);
+  const follower = room.seats[1];
+  for (let i = 0; i < 6; i += 1) room.seats[i].playerId = `p${i}`;
+  follower.hand = [...lockedQ];
+  follower.lockedTriples = ["Q|clubs"];
+  room.currentTrick = [{ seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 }];
+
+  assert.equal(validatePlay(room, follower, lockedQ, lead).ok, true, "别无他法时可按两张单牌跟出");
+  room.currentTrick.push({ seat: 1, cards: lockedQ, shape: analyzeShape(lockedQ, room), points: 0 });
+  assert.equal(determineTrickWinner(room, room.currentTrick), 0);
+});
+
 test("拖拉机跟牌时天然对子足够，剩下三条之后仍可选择拆成对子", () => {
   const room = createRoom("TRLOCKNATURAL");
   room.levelRank = "2"; room.trumpSuit = "hearts";
@@ -1898,6 +1917,53 @@ test("6 人已有庄家叫主：闲家盖主只改花色不改庄家", () => {
   assert.equal(room.levelRank, "3");
   assert.equal(room.trumpSuit, "clubs");
   assert.equal(room.starterSeat, 0);
+});
+
+test("6 人已有庄家叫主：3 张王可以反 2 张常主为无主", () => {
+  const room = createRoom("FIXED6JOKERCOVER", { seatCount: 6 });
+  for (let i = 0; i < 6; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+  room.phase = "sixTrump";
+  room.round = 2;
+  room.teamLevels = { 0: "Q", 1: "Q" };
+  room.dealerSeat = 0;
+  room.sixOriginalDealerSeat = 0;
+  room.levelRank = "Q";
+  room.starterSeat = 0;
+
+  const deck = createDeck();
+  const clubQs = deck.filter((card) => card.rank === "Q" && card.suit === "clubs").slice(0, 2);
+  const jokers = deck.filter((card) => card.suit === "joker").slice(0, 3);
+  room.seats[0].hand.push(...clubQs);
+  room.seats[1].hand.push(...jokers);
+
+  callSixTrump(room, "p0", clubQs.map((card) => card.id));
+  callSixTrump(room, "p1", jokers.map((card) => card.id));
+
+  assert.equal(room.currentBid.seat, 1);
+  assert.equal(room.dealerSeat, 0, "已有庄家时 3 王反主不改变庄家");
+  assert.equal(room.noTrump, true);
+  assert.equal(room.trumpSuit, null);
+  assert.ok(room.currentBid.strength > 2);
+});
+
+test("6 人 AI 叫主会用 3 张王反 2 张常主", () => {
+  const room = createRoom("FIXED6AIJOKERCOVER", { seatCount: 6 });
+  room.phase = "sixTrump";
+  room.round = 2;
+  room.teamLevels = { 0: "Q", 1: "Q" };
+  room.dealerSeat = 0;
+  room.levelRank = "Q";
+  room.currentBid = { seat: 0, strength: 2, levelRank: "Q", trumpSuit: "clubs", noTrump: false };
+  const deck = createDeck();
+  const jokers = deck.filter((card) => card.suit === "joker").slice(0, 3);
+  const ai = room.seats[1];
+  ai.isAi = true;
+  ai.aiLevel = "hard";
+  ai.hand = [...jokers];
+
+  const decision = decideAiSixTrump(room, ai);
+  assert.deepEqual(decision.cardIds, jokers.map((card) => card.id));
+  assert.ok(decision.strength > 2);
 });
 
 test("6 人发牌阶段已有庄家：闲家按庄家等级亮主，不按自己等级", () => {

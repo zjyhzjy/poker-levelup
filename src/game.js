@@ -375,11 +375,11 @@ export function makeBid(room, playerId, cardIds) {
   const cards = pickCards(seat.hand, cardIds);
   const fixedLevelRank = fixedOpeningAuction && room.dealerSeat === null ? seat.level : room.levelRank;
   const bid = fixedTeamBid
-    ? evaluateSixTrumpCall(cards, fixedLevelRank, { allowNoTrump: isClassic4(room) })
+    ? evaluateSixTrumpCall(cards, fixedLevelRank, { noTrumpJokerCount: isClassic4(room) ? 2 : 3, exactNoTrumpJokers: !isClassic4(room) })
     : evaluateBid(cards, seat.level);
   if (!bid) {
     throw new Error(fixedTeamBid
-      ? (isClassic4(room) ? `只能亮当前等级 ${fixedLevelRank} 的同花色牌，或选择至少 2 张王亮无主` : `只能亮当前等级 ${fixedLevelRank} 的同花色牌`)
+      ? (isClassic4(room) ? `只能亮当前等级 ${fixedLevelRank} 的同花色牌，或选择至少 2 张王亮无主` : `只能亮当前等级 ${fixedLevelRank} 的同花色牌，或选择 3 张王亮无主`)
       : "只能亮自己的常主牌，或任意 3 张王");
   }
   if (room.currentBid && compareBid(bid, room.currentBid) <= 0) throw new Error("必须用更高强度抢庄");
@@ -472,7 +472,13 @@ function isSixOpeningAuction(room) {
 
 function evaluateSixTrumpCall(cards, levelRank, options = {}) {
   if (!cards.length) return null;
-  if (options.allowNoTrump && cards.length >= 2 && cards.every((card) => card.suit === "joker")) {
+  const noTrumpJokerCount = options.noTrumpJokerCount || 0;
+  const noTrumpLengthOk = options.exactNoTrumpJokers
+    ? cards.length === noTrumpJokerCount
+    : cards.length >= noTrumpJokerCount;
+  if (noTrumpJokerCount > 0
+    && noTrumpLengthOk
+    && cards.every((card) => card.suit === "joker")) {
     const bigs = cards.filter((card) => card.rank === "bigJoker").length;
     return { strength: cards.length + (bigs >= cards.length ? 3 : 2), levelRank, trumpSuit: null, noTrump: true };
   }
@@ -495,9 +501,9 @@ export function callSixTrump(room, playerId, cardIds) {
   const openingAuction = isSixOpeningAuction(room);
   const levelRank = openingAuction ? seat.level : room.levelRank;
   const cards = pickCards(seat.hand, cardIds);
-  const bid = evaluateSixTrumpCall(cards, levelRank, { allowNoTrump: isClassic4(room) });
-  if (!bid) throw new Error(isClassic4(room) ? `只能亮当前等级 ${levelRank} 的同花色牌，或选择至少 2 张王亮无主` : `只能亮当前等级 ${levelRank} 的同花色牌`);
-  if (room.currentBid && compareBid(bid, room.currentBid) <= 0) throw new Error("必须用更多张同花色级牌盖主");
+  const bid = evaluateSixTrumpCall(cards, levelRank, { noTrumpJokerCount: isClassic4(room) ? 2 : 3, exactNoTrumpJokers: !isClassic4(room) });
+  if (!bid) throw new Error(isClassic4(room) ? `只能亮当前等级 ${levelRank} 的同花色牌，或选择至少 2 张王亮无主` : `只能亮当前等级 ${levelRank} 的同花色牌，或选择 3 张王亮无主`);
+  if (room.currentBid && compareBid(bid, room.currentBid) <= 0) throw new Error("必须用更高强度盖主");
 
   if (openingAuction || room.dealerSeat === null) {
     room.dealerSeat = seat.index;
@@ -852,7 +858,7 @@ function playCardsInternal(room, seat, cardIds) {
       };
 
       // Push only kept cards as the play
-      const keepPlay = { seat: seat.index, cards: keepCards, shape: analyzeShape(keepCards, room), points: keepCards.reduce((sum, card) => sum + cardScore(card), 0) };
+      const keepPlay = { seat: seat.index, cards: keepCards, shape: analyzeShapeWithLockedTriples(keepCards, room, seat.lockedTriples || []), points: keepCards.reduce((sum, card) => sum + cardScore(card), 0) };
       room.currentTrick.push(keepPlay);
       updateFriend(room, keepPlay);
       room.tableLog.push(`${seat.nickname} 甩牌失败（${validation.reason}），仅保留 ${keepCards.map((c) => c.label).join("、")}`);
@@ -867,7 +873,8 @@ function playCardsInternal(room, seat, cardIds) {
     if (!validation.ok) throw new Error(validation.reason);
     if (leaderPlay) recordTripleLockDecision(room, seat, cards, leaderPlay);
     removeCards(seat.hand, cardIds);
-    const play = { seat: seat.index, cards, shape, points: cards.reduce((sum, card) => sum + cardScore(card), 0) };
+    const playShape = analyzeShapeWithLockedTriples(cards, room, seat.lockedTriples || []);
+    const play = { seat: seat.index, cards, shape: playShape, points: cards.reduce((sum, card) => sum + cardScore(card), 0) };
     room.currentTrick.push(play);
     updateFriend(room, play);
     room.tableLog.push(`${seat.nickname} 出牌：${cards.map((card) => card.label).join("、")}`);
@@ -1401,7 +1408,7 @@ function enemyBehind(room, seat) {
 // comparison so the AI's judgement always matches the actual ruling.
 function candidateBeats(room, seat, cards) {
   if (!room.currentTrick.length) return true;
-  const myPlay = { seat: seat.index, cards, shape: analyzeShape(cards, room), points: 0 };
+  const myPlay = { seat: seat.index, cards, shape: analyzeShapeWithLockedTriples(cards, room, seat.lockedTriples || []), points: 0 };
   return determineTrickWinner(room, [...room.currentTrick, myPlay]) === seat.index;
 }
 
@@ -1915,7 +1922,18 @@ export function analyzeShape(cards, room) {
 
   const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
   const groups = groupCards(sorted);
+  return analyzeShapeFromGroups(cards, room, groups);
+}
 
+function analyzeShapeWithLockedTriples(cards, room, lockedTriples = []) {
+  if (cards.length === 0) return { type: "empty", unit: 0, value: 0 };
+
+  const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  const groups = groupCardsRespectingLockedTriples(sorted, lockedTriples);
+  return analyzeShapeFromGroups(cards, room, groups);
+}
+
+function analyzeShapeFromGroups(cards, room, groups) {
   // 1. 如果全是单张
   if (groups.every(g => g.length === 1)) {
     if (cards.length === 1) return { type: "single", unit: 1, value: cardOrderValue(cards[0], room) };
@@ -2095,14 +2113,17 @@ export function validatePlay(room, seat, cards, leaderCards) {
 
   // Special case: leader played a throw — validate each atomic group independently
   if (leaderShape.type === "throw" && following.length === cards.length) {
-    return validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available);
+    const leaderLockedTriples = room.currentTrick[0]?.cards === leaderCards
+      ? lockedTriplesForPlay(room, room.currentTrick[0])
+      : [];
+    return validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available, leaderLockedTriples);
   }
 
   if (following.length === cards.length) {
     const wanted = forcedRequirement(leaderShape, available, room, seat.lockedTriples || []);
-    const actual = analyzeShape(cards, room);
+    const actual = analyzeShapeWithLockedTriples(cards, room, seat.lockedTriples || []);
     const followingSameSuit = cards.filter((c) => playSuit(c, room) === ledSuit);
-    if (!shapeSatisfies(actual, wanted, followingSameSuit, available, room)) {
+    if (!shapeSatisfies(actual, wanted, followingSameSuit, available, room, seat.lockedTriples || [])) {
       return { ok: false, reason: "需要优先跟同类牌型" };
     }
   }
@@ -2111,9 +2132,9 @@ export function validatePlay(room, seat, cards, leaderCards) {
 
 // When following a throw, each atomic group in the leader's throw must be matched
 // with the best same-size group the follower can produce from same-suit cards.
-function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available) {
+function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available, leaderLockedTriples = []) {
   const leaderSorted = [...leaderCards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
-  const leaderGroups = groupCards(leaderSorted); // e.g. [[A,A,A],[Q,Q],[J]]
+  const leaderGroups = groupCardsRespectingLockedTriples(leaderSorted, leaderLockedTriples); // e.g. [[A,A,A],[Q,Q],[J]]
 
   // Build what follower MUST contribute per group
   let mustPairs = 0;    // number of pairs required
@@ -2131,14 +2152,17 @@ function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available)
 
   // 甩牌里如果包含拖拉机组件，跟家手里有对应拖拉机时必须优先跟拖拉机；
   // 不能只用散对子凑数量（例如首家 7788，跟家有 991010 时不能出 9944）。
-  const components = decomposeThrowComponents(leaderCards, room, ledSuit);
+  const components = decomposeThrowComponents(leaderCards, room, ledSuit, leaderLockedTriples);
   for (const comp of components) {
     if (comp.kind !== "tractor") continue;
     const need = comp.unit * comp.count;
     const pool = comp.unit === 2
       ? naturalPairPool(available, room, lockedSet)
       : available;
-    if (findTractors(pool, room, need).length && !findTractors(playedSameSuit, room, need).length) {
+    const playedPool = comp.unit === 2
+      ? naturalPairPool(playedSameSuit, room, lockedSet)
+      : playedSameSuit;
+    if (findTractors(pool, room, need).length && !findTractors(playedPool, room, need).length) {
       return { ok: false, reason: "需要优先跟拖拉机" };
     }
   }
@@ -2158,7 +2182,10 @@ function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available)
   }
 
   // Check follower's actual played cards satisfy the requirement
-  const playedGroups = groupCards([...playedSameSuit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)));
+  const playedGroups = groupCardsRespectingLockedTriples(
+    [...playedSameSuit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)),
+    lockedSet
+  );
   const playedPairs   = playedGroups.filter(g => g.length === 2).length;
   const playedTriples = playedGroups.filter(g => g.length >= 3).length;
 
@@ -2173,9 +2200,9 @@ function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available)
 // same-size groups), standalone pairs/triples, and singles. This is the crux of
 // correct throw validation — a pair that is part of a tractor (e.g. the 1010 in
 // JJ1010) must be beaten by a bigger TRACTOR, not merely by a higher lone pair.
-function decomposeThrowComponents(cards, room, ledSuit) {
+function decomposeThrowComponents(cards, room, ledSuit, lockedTriples = []) {
   const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
-  const groups = groupCards(sorted);
+  const groups = groupCardsRespectingLockedTriples(sorted, lockedTriples);
   const components = [];
   let i = 0;
   while (i < groups.length) {
@@ -2243,7 +2270,7 @@ function opponentHasBetterTractor(otherSameSuit, room, unit, count, headValue, l
 // which is exactly the set of cards the thrower must keep after a failed throw.
 function validateThrow(room, throwerSeat, cards) {
   const ledSuit = playSuit(cards[0], room);
-  const components = decomposeThrowComponents(cards, room, ledSuit);
+  const components = decomposeThrowComponents(cards, room, ledSuit, throwerSeat.lockedTriples || []);
 
   const allBlocked = []; // { cards, headValue, reason }
 
@@ -2346,15 +2373,18 @@ export { upgradeResultClassic4 };
 // 【彻底修复 2】：完善墩牌大小裁判，防止垫牌、不匹配牌型盗取胜利
 function comparePlay(room, challenger, currentBest, leadPlay) {
   const leadPlayCards = leadPlay.cards;
-  const leadShape = analyzeShape(leadPlayCards, room);
+  const leadLockedTriples = lockedTriplesForPlay(room, leadPlay);
+  const leadShape = analyzeShapeWithLockedTriples(leadPlayCards, room, leadLockedTriples);
   const ledSuit = playSuit(leadPlayCards[0], room);
 
   const challengerCards = challenger.cards;
-  const challengerShape = analyzeShape(challengerCards, room);
+  const challengerLockedTriples = lockedTriplesForPlay(room, challenger);
+  const challengerShape = analyzeShapeWithLockedTriples(challengerCards, room, challengerLockedTriples);
   const challengerSuit = playSuit(challengerCards[0], room);
 
   const bestCards = currentBest.cards;
-  const bestShape = analyzeShape(bestCards, room);
+  const bestLockedTriples = lockedTriplesForPlay(room, currentBest);
+  const bestShape = analyzeShapeWithLockedTriples(bestCards, room, bestLockedTriples);
   const bestSuit = playSuit(bestCards[0], room);
 
   // 1. 张数不同，直接没有可比性
@@ -2385,7 +2415,7 @@ function comparePlay(room, challenger, currentBest, leadPlay) {
     } else if (ledSuit !== "trump" && isAllTrumpCards(challengerCards, room)) {
       // 主牌杀：必须【整手】都是主牌，且结构与甩牌完全一致
       // (same count of tractors/triples/pairs/singles as the leader's throw)
-      if (throwStructureMatch(challengerCards, leadPlayCards, room)) {
+      if (throwStructureMatch(challengerCards, leadPlayCards, room, challengerLockedTriples, leadLockedTriples)) {
         challengerValid = true;
         challengerIsTrumpCut = true;
       }
@@ -2404,32 +2434,47 @@ function comparePlay(room, challenger, currentBest, leadPlay) {
   if (challengerIsTrumpCut) {
     if (!bestIsTrumpCut) return 1;
     if (leadShape.type === "throw") {
-      return compareByHighestTier(challengerCards, bestCards, room, leadPlayCards, { allowLargerGroups: true });
+      return compareByHighestTier(challengerCards, bestCards, room, leadPlayCards, {
+        allowLargerGroups: true,
+        challengerLockedTriples,
+        bestLockedTriples,
+        leaderLockedTriples: leadLockedTriples
+      });
     }
     return getShapeComparativeValue(challengerCards, room) - getShapeComparativeValue(bestCards, room);
   }
 
   if (bestIsTrumpCut) return -1;
 
-  if (leadShape.type === "throw") return compareByHighestTier(challengerCards, bestCards, room, leadPlayCards);
+  if (leadShape.type === "throw") {
+    return compareByHighestTier(challengerCards, bestCards, room, leadPlayCards, {
+      challengerLockedTriples,
+      bestLockedTriples,
+      leaderLockedTriples: leadLockedTriples
+    });
+  }
 
   return getShapeComparativeValue(challengerCards, room) - getShapeComparativeValue(bestCards, room);
+}
+
+function lockedTriplesForPlay(room, play) {
+  return room.seats?.[play.seat]?.lockedTriples || [];
 }
 
 // For throw tricks: first identify the leader's highest component tier, then
 // compare only that tier. If the leader threw only singles (e.g. A+K), a later
 // pair is just two single cards; the pair tier must not outrank the leader.
 function compareByHighestTier(challengerCards, bestCards, room, leaderCards, options = {}) {
-  const leaderInfo = highestThrowTier(leaderCards, room);
-  const c = matchingThrowTierValue(challengerCards, room, leaderInfo, options);
-  const b = matchingThrowTierValue(bestCards, room, leaderInfo, options);
+  const leaderInfo = highestThrowTier(leaderCards, room, options.leaderLockedTriples || []);
+  const c = matchingThrowTierValue(challengerCards, room, leaderInfo, options.challengerLockedTriples || [], options);
+  const b = matchingThrowTierValue(bestCards, room, leaderInfo, options.bestLockedTriples || [], options);
   if (c.value !== b.value) return c.value - b.value;
   return -1; // same tier and value → earlier play wins
 }
 
-function highestThrowTier(cards, room) {
+function highestThrowTier(cards, room, lockedTriples = []) {
   const ledSuit = playSuit(cards[0], room);
-  const components = decomposeThrowComponents(cards, room, ledSuit);
+  const components = decomposeThrowComponents(cards, room, ledSuit, lockedTriples);
   let best = { tier: 1, unit: 1, count: 1, value: 0 };
   for (const comp of components) {
     const headValue = cardOrderValue(comp.cards[0], room);
@@ -2444,12 +2489,12 @@ function highestThrowTier(cards, room) {
   return best;
 }
 
-function matchingThrowTierValue(cards, room, target, { allowLargerGroups = false } = {}) {
+function matchingThrowTierValue(cards, room, target, lockedTriples = [], { allowLargerGroups = false } = {}) {
   if (target.tier === 1) {
     return { value: Math.max(...cards.map((card) => cardOrderValue(card, room))) };
   }
   const ledSuit = playSuit(cards[0], room);
-  const components = decomposeThrowComponents(cards, room, ledSuit);
+  const components = decomposeThrowComponents(cards, room, ledSuit, lockedTriples);
   let value = -Infinity;
   for (const comp of components) {
     if (target.tier === 4) {
@@ -2474,10 +2519,10 @@ function isAllTrumpCards(cards, room) {
 
 // Check if trump cut cards match the structural composition of the leader's throw.
 // e.g. leader throws AAA+QQ+J (triple+pair+single) → trump cut must also be triple+pair+single.
-function throwStructureMatch(trumpCards, leaderCards, room) {
-  const getStructure = (cards) => {
+function throwStructureMatch(trumpCards, leaderCards, room, trumpLockedTriples = [], leaderLockedTriples = []) {
+  const getStructure = (cards, lockedTriples = []) => {
     const ledSuit = playSuit(cards[0], room);
-    const components = decomposeThrowComponents(cards, room, ledSuit);
+    const components = decomposeThrowComponents(cards, room, ledSuit, lockedTriples);
     const counts = { tractor: 0, triple: 0, pair: 0, single: 0, tripleUnits: 0, pairUnits: 0 };
     for (const comp of components) {
       if (comp.kind === "tractor") {
@@ -2496,8 +2541,8 @@ function throwStructureMatch(trumpCards, leaderCards, room) {
     }
     return counts;
   };
-  const ls = getStructure(leaderCards);
-  const ts = getStructure(trumpCards);
+  const ls = getStructure(leaderCards, leaderLockedTriples);
+  const ts = getStructure(trumpCards, trumpLockedTriples);
   if (ls.tractor > 0) {
     return ls.tractor === ts.tractor && ls.triple === ts.triple &&
            ls.pair === ts.pair && ls.single === ts.single;
@@ -2616,7 +2661,10 @@ function pairDemandForTripleChoice(leaderShape, leaderCards, room) {
   if (leaderShape.type === "tractor" && leaderShape.unit === 2) return leaderShape.count;
   if (leaderShape.type !== "throw") return 0;
   const ledSuit = playSuit(leaderCards[0], room);
-  return decomposeThrowComponents(leaderCards, room, ledSuit).reduce((sum, comp) => {
+  const leaderLockedTriples = room.currentTrick[0]?.cards === leaderCards
+    ? lockedTriplesForPlay(room, room.currentTrick[0])
+    : [];
+  return decomposeThrowComponents(leaderCards, room, ledSuit, leaderLockedTriples).reduce((sum, comp) => {
     if (comp.kind === "tractor" && comp.unit === 2) return sum + comp.count;
     if (comp.kind === "group" && comp.unit === 2) return sum + 1;
     return sum;
@@ -2707,11 +2755,13 @@ function naturalPairPool(cards, room, lockedSet = new Set()) {
   return cards.filter((c) => allowed.has(c.id));
 }
 
-function shapeSatisfies(actual, wanted, cards, available, room) {
+function shapeSatisfies(actual, wanted, cards, available, room, lockedTriples = []) {
   if (wanted.type === "any") return true;
 
   // Sort before grouping so detection never depends on the order cards were picked.
   const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  const lockedSet = lockedTriples instanceof Set ? lockedTriples : new Set(lockedTriples || []);
+  const groups = groupCardsRespectingLockedTriples(sorted, lockedSet);
 
   if (wanted.type === "tractor") {
     return actual.type === "tractor" && actual.unit === wanted.unit && actual.count >= wanted.count;
@@ -2719,31 +2769,29 @@ function shapeSatisfies(actual, wanted, cards, available, room) {
 
   if (wanted.type === "pairs") {
     // 对子要求只认天然对子；三条不能被强制拆成对子。
-    const groups = groupCards(sorted).filter((g) => wanted.unit === 2 ? g.length === 2 : g.length >= wanted.unit);
-    return groups.length >= wanted.count;
+    return groups.filter((g) => wanted.unit === 2 ? g.length === 2 : g.length >= wanted.unit).length >= wanted.count;
   }
 
   if (wanted.type === "tripleFallback") {
-    const groups = groupCards(sorted);
     const triples = groups.filter((g) => g.length >= 3).length;
     const pairs = groups.filter((g) => g.length >= 2 && g.length < 3).length;
     return triples >= wanted.triples && pairs >= wanted.pairs;
   }
 
   if (wanted.type === "pairTractorFallback") {
-    const run = findBestTractorRun(cards, room, 2);
-    const pairs = groupCards(sorted).filter((g) => g.length === 2).length;
+    const run = findBestTractorRun(naturalPairPool(cards, room, lockedSet), room, 2);
+    const pairs = groups.filter((g) => g.length === 2).length;
     return !!run && run.length >= wanted.tractorPairs && pairs >= wanted.pairs;
   }
 
   if (wanted.type === "triple") {
     // Must contain at least one group of 3
-    return groupCards(sorted).some((g) => g.length >= 3);
+    return groups.some((g) => g.length >= 3);
   }
 
   if (wanted.type === "pair") {
     // Must contain at least one natural pair; triples may be kept intact.
-    return groupCards(sorted).some((g) => g.length === 2);
+    return groups.some((g) => g.length === 2);
   }
 
   return true;
@@ -2770,6 +2818,16 @@ function groupCards(sortedCards) {
   }
   if (currentGroup.length > 0) groups.push(currentGroup);
   return groups;
+}
+
+function groupCardsRespectingLockedTriples(sortedCards, lockedTriples = []) {
+  const lockedSet = lockedTriples instanceof Set ? lockedTriples : new Set(lockedTriples || []);
+  const groups = groupCards(sortedCards);
+  if (lockedSet.size === 0) return groups;
+  return groups.flatMap((g) => {
+    const key = `${g[0].rank}|${g[0].suit}`;
+    return g.length === 2 && lockedSet.has(key) ? g.map((card) => [card]) : [g];
+  });
 }
 
 function tractorUnitSize(groups) {
@@ -3016,6 +3074,13 @@ export function decideAiSixTrump(room, seat) {
   if (profile.autoBid === false) return null;
   const hand = seat.hand;
   const level = room.dealerSeat === null ? seat.level : room.levelRank;
+  const jokerCards = hand.filter((c) => c.suit === "joker").slice(0, 3);
+  if (jokerCards.length === 3) {
+    const jokerBid = evaluateSixTrumpCall(jokerCards, level, { noTrumpJokerCount: 3 });
+    if (jokerBid && (!room.currentBid || compareBid(jokerBid, room.currentBid) > 0)) {
+      return { cardIds: jokerCards.map((c) => c.id), strength: jokerBid.strength };
+    }
+  }
   const levelBySuit = {};
   for (const c of hand) if (c.rank === level && c.suit !== "joker") (levelBySuit[c.suit] ||= []).push(c);
   let best = null;
@@ -3154,9 +3219,13 @@ export function isDealerTeam(room, seatIndex) {
 function buryMultiplier(room, winPlay) {
   let shape = winPlay?.shape;
   if (!shape) return 2;
+  const lockedTriples = lockedTriplesForPlay(room, winPlay);
+  if (lockedTriples.length) {
+    shape = analyzeShapeWithLockedTriples(winPlay.cards, room, lockedTriples);
+  }
   // 甩牌：扣底倍率只按其中“最大的单一牌型”（张数最多的组件）计算，不累加其余组件。
   // 例：复数对子+单张 → 只算一对（×4）；4 张拖拉机+单张+对子+三条 → 只算拖拉机（×16）。
-  if (shape.type === "throw") shape = dominantThrowShape(winPlay.cards, room);
+  if (shape.type === "throw") shape = dominantThrowShape(winPlay.cards, room, lockedTriples);
   if (isClassic4(room)) {
     return buryMultiplierClassic4(shape);
   }
@@ -3169,9 +3238,9 @@ function buryMultiplier(room, winPlay) {
 
 // 把一手甩牌拆成结构组件，取“张数最多”的那个组件，合成等价的单一牌型 shape。
 // 倍率随张数单调递增（2^张数），故张数最多 = 倍率最高，符合“只算最大牌型”的规则。
-export function dominantThrowShape(cards, room) {
+export function dominantThrowShape(cards, room, lockedTriples = []) {
   const ledSuit = playSuit(cards[0], room);
-  const components = decomposeThrowComponents(cards, room, ledSuit);
+  const components = decomposeThrowComponents(cards, room, ledSuit, lockedTriples);
   let top = null;
   for (const comp of components) {
     if (!top || comp.cards.length > top.cards.length) top = comp;

@@ -1261,6 +1261,57 @@ function renderBidReveal(room) {
 }
 
 /* ─── Controls ───────────────────────────────────────────── */
+function requiredFixedTrumpRank(room, seat) {
+  if (!room?.fixedTeams) return seat?.level || room?.levelRank || "";
+  if ((room.seatCount || 5) === 6 && room.dealerSeat == null) return seat?.level || room.levelRank || "";
+  return room.levelRank || seat?.level || "";
+}
+
+function trumpCallActionLabel(room, myIndex) {
+  const rank = requiredFixedTrumpRank(room, room.seats?.[myIndex]);
+  const verb = room.currentBid && room.currentBid.seat !== myIndex ? "反主" : "亮主";
+  return rank ? `${verb}（打${rankText(rank)}）` : verb;
+}
+
+function validateSixTrumpSelection(action) {
+  const room = state.room;
+  if (!room || room.seatCount !== 6 || room.fixedTeams !== true) return true;
+  if (action !== "bid" && action !== "sixCallTrump") return true;
+  if (!["dealing", "auctionReady", "forcedSuit", "sixTrump"].includes(room.phase)) return true;
+
+  const myIndex = room.viewerSeat;
+  const seat = room.seats?.[myIndex];
+  if (!seat) return true;
+  const selected = (seat.hand || []).filter((card) => state.selected.has(card.id));
+  if (!selected.length) return true;
+  const allJokers = selected.every((card) => card.suit === "joker");
+  if (allJokers) {
+    if (selected.length === 3) return true;
+    const verb = room.currentBid && room.currentBid.seat !== myIndex ? "反主" : "亮主";
+    showError(`6人${verb}无主请选任意 3 张王`);
+    return false;
+  }
+
+  const rank = requiredFixedTrumpRank(room, seat);
+  if (!rank) return true;
+  if (selected.some((card) => card.suit === "joker" || card.rank !== rank)) {
+    const verb = room.currentBid && room.currentBid.seat !== myIndex ? "反主" : "亮主";
+    const owner = room.dealerSeat == null ? "自己的当前等级" : "庄家当前等级";
+    showError(`6人${verb}请选${owner} ${rankText(rank)} 的同花色牌`);
+    return false;
+  }
+  if (new Set(selected.map((card) => card.suit)).size > 1) {
+    const verb = room.currentBid && room.currentBid.seat !== myIndex ? "反主" : "亮主";
+    showError(`6人${verb}请选同一花色的 ${rankText(rank)}`);
+    return false;
+  }
+  if (room.currentBid && Math.min(selected.length, 3) <= Number(room.currentBid.strength || 0)) {
+    showError("反主必须用更高强度");
+    return false;
+  }
+  return true;
+}
+
 function renderControls(room) {
   const parts = [];
 
@@ -1281,7 +1332,7 @@ function renderControls(room) {
     const allRevealed = revealed >= 7;
     const fixedTeams = room.fixedTeams === true;
 
-    parts.push(`<button data-action="bid">${fixedTeams ? "亮主" : "亮庄"}</button>`);
+    parts.push(`<button data-action="bid">${fixedTeams ? trumpCallActionLabel(room, myIndex) : "亮庄"}</button>`);
 
     if (hasBid && !myResponse && room.currentBid.seat !== myIndex) {
       parts.push(`<button data-action="passBid">${fixedTeams ? "不亮" : "不抢"}</button>`);
@@ -1306,7 +1357,7 @@ function renderControls(room) {
     const myResponse = bidResponses[myIndex];
     const hasBid = !!room.currentBid;
     if (!myResponse && (!hasBid || room.currentBid.seat !== myIndex)) {
-      parts.push(`<button data-action="sixCallTrump" class="primary-action">亮主</button>`);
+      parts.push(`<button data-action="sixCallTrump" class="primary-action">${trumpCallActionLabel(room, myIndex)}</button>`);
       parts.push(`<button data-action="sixPassTrump">不亮</button>`);
     } else {
       parts.push(`<span style="color:rgba(255,255,255,.6);font-size:13px">等待其他玩家叫主…</span>`);
@@ -1331,8 +1382,8 @@ function renderControls(room) {
         </select>
         <button data-action="chooseForcedTrump" class="primary-action">确认定主</button>`);
     } else if (!myResponse) {
-      // 其他人（含被盖庄后的原强制庄）：选自己的级牌亮主，或不亮。
-      parts.push(`<button data-action="bid" class="primary-action">亮主</button>`);
+      // 其他人（含被盖庄后的原强制庄）：选当前等级的级牌亮主，或不亮。
+      parts.push(`<button data-action="bid" class="primary-action">${room.fixedTeams ? trumpCallActionLabel(room, room.viewerSeat) : "亮主"}</button>`);
       parts.push(`<button data-action="passBid">不亮</button>`);
     } else {
       parts.push(`<span style="color:rgba(255,255,255,.6);font-size:13px">等待其他玩家表态…</span>`);
@@ -1400,6 +1451,7 @@ function bindControls(root = document) {
   root.querySelectorAll("[data-action]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const action = btn.dataset.action;
+      if (!validateSixTrumpSelection(action)) return;
       if (action === "bid")         send("bid",         { cardIds: [...state.selected] });
       else if (action === "passBid")     send("passBid",     {});
       else if (action === "sixCallTrump") send("sixCallTrump", { cardIds: [...state.selected] });
