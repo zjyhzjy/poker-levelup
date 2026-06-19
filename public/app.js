@@ -600,7 +600,12 @@ function render() {
   $("#phaseBadge").textContent = phaseText(room.phase);
 
   const trump = room.noTrump ? "无主" : (room.trumpSuit ? suitSymbolColored(room.trumpSuit) : "-");
-  const roundInfoHtml = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}`;
+  // 闲家分数随房间信息显示在顶栏（移出牌桌中央，给中央出牌区让位）。
+  const teamScoreKnown = room.fixedTeams || room.friendSeat !== null || room.phase === "roundOver";
+  const scoreSeg = teamScoreKnown
+    ? ` · <span class="round-score">闲家 ${room.scores?.attackers ?? 0}分</span>`
+    : "";
+  const roundInfoHtml = `第${room.round || 0}局 · 打${room.levelRank || "-"} · 主${trump}${scoreSeg}`;
   $("#roundInfo").innerHTML = roundInfoHtml;
   const mobileRoundInfo = $("#mobileRoundInfo");
   if (mobileRoundInfo) mobileRoundInfo.innerHTML = roundInfoHtml;
@@ -876,6 +881,9 @@ function renderSeats(room) {
   const spinInfo = forceSpinInfo(room);
   const spinningSeat = spinInfo?.seatIndex ?? null;
 
+  // 出牌阶段每家出的牌收集到这里，最后统一渲染到中央 #trickArea（按方位摆开，互不压叠）。
+  const trickSlots = [];
+
   seatsEl.innerHTML = room.seats.map((seat) => {
     const screenPos = seatToScreenPos(seat.index, viewerSeatIndex, room.seatCount || 5);
     const initial = escapeHtml((seat.nickname || "?")[0].toUpperCase());
@@ -910,34 +918,47 @@ function renderSeats(room) {
       if (resp === "pass") bidIndicator = `<div class="bid-indicator pass">${room.phase === "sixTrump" ? "不亮" : "不抢"}</div>`;
     }
 
-    // Cards beside bottom-side seats and your own seat show above the token so
-    // they don't crowd the hand area.
+    // 亮主阶段：各家亮的牌仍贴座位显示（此时无人出牌、不挤）。下位座位的亮牌
+    // 放在头像上方，避免压到手牌区。
     const playedAbove = screenPos === 0 || screenPos === 1 || screenPos === (room.seatCount || 5) - 1;
-    let sideCardsHTML = "";
-    let currentPlayShown = false;
-    let completedPlayShown = false;
+    let bidDiv = "";
     if (showBids && seatBids[seat.index]) {
-      sideCardsHTML = renderPlayedCards(seatBids[seat.index].cards);
-    } else {
+      bidDiv = `<div class="seat-played bid-played">${renderPlayedCards(seatBids[seat.index].cards)}</div>`;
+    } else if (!showBids) {
+      // 出牌阶段：把本墩（或刚结束墩）这家出的牌收集到中央 trick area。
       let playedCards = null;
-      let shapeLabel = "";
+      let shapeLabel = '';
+      let currentPlayShown = false;
+      let completedPlayShown = false;
       if (currentPlayed[seat.index]) {
         playedCards = currentPlayed[seat.index].cards;
-        shapeLabel = currentPlayed[seat.index].shapeLabel || "";
+        shapeLabel = currentPlayed[seat.index].shapeLabel || '';
         currentPlayShown = true;
       } else if (room.currentTrick.length === 0 && lastPlayed[seat.index]) {
         playedCards = lastPlayed[seat.index].cards;
-        shapeLabel = lastPlayed[seat.index].shapeLabel || "";
+        shapeLabel = lastPlayed[seat.index].shapeLabel || '';
         completedPlayShown = true;
       }
-      if (playedCards) sideCardsHTML = `${renderPlayedCards(playedCards)}${shapeLabel ? `<div class="shape-badge">${escapeHtml(shapeLabel)}</div>` : ""}`;
+      if (playedCards) {
+        // 进行中和一墩结束后都只高亮本墩最大的唯一一家。
+        const winningPlay = (currentPlayShown && room.currentWinnerSeat === seat.index)
+          || (completedPlayShown && completedWinner === seat.index);
+        const killPlay = currentPlayShown && currentKillSeats.has(seat.index);
+        const animateKill = killPlay && !animatedKillSeats.has(seat.index);
+        if (animateKill) animatedKillSeats.add(seat.index);
+        const slotClasses = [
+          'trick-slot',
+          `trick-pos-${screenPos}`,
+          winningPlay ? 'winning' : '',
+          killPlay ? 'trump-kill' : '',
+          killPlay && !animateKill ? 'trump-kill-settled' : ''
+        ].filter(Boolean).join(' ');
+        trickSlots.push(
+          `<div class='${slotClasses}'><div class='trick-cards'>${renderPlayedCards(playedCards)}` +
+          `${shapeLabel ? `<div class='shape-badge'>${escapeHtml(shapeLabel)}</div>` : ''}</div></div>`
+        );
+      }
     }
-    // 进行中和一墩结束后都只高亮本墩“最大”的唯一一家。
-    const winningPlay = (currentPlayShown && room.currentWinnerSeat === seat.index)
-      || (completedPlayShown && completedWinner === seat.index);
-    const killPlay = currentPlayShown && currentKillSeats.has(seat.index);
-    const animateKill = killPlay && !animatedKillSeats.has(seat.index);
-    if (animateKill) animatedKillSeats.add(seat.index);
 
     // Personal score
     let personalScore = "";
@@ -979,19 +1000,8 @@ function renderSeats(room) {
       ? `${seat.isAi ? "AI" : (seat.trustee ? "托管" : (seat.connected ? "在线" : "离线"))} · ${seat.handCount}张`
       : "空座";
 
-    const playedClasses = [
-      "seat-played",
-      showBids ? "bid-played" : "",
-      winningPlay ? "winning" : "",
-      killPlay ? "trump-kill" : "",
-      killPlay && !animateKill ? "trump-kill-settled" : ""
-    ].filter(Boolean).join(" ");
-    const playedDiv = sideCardsHTML
-      ? `<div class="${playedClasses}">${sideCardsHTML}</div>`
-      : "";
-
     return `<div class="seat screen-pos-${screenPos} ${youClass} ${activeClass} ${forceSpinClass}">
-      ${playedAbove ? playedDiv : ""}
+      ${playedAbove ? bidDiv : ""}
       <div class="seat-token-wrap">
         ${roleBadge}
         ${forceStartBadge}
@@ -1003,9 +1013,16 @@ function renderSeats(room) {
       <div class="seat-info">${statusText}${levelText ? " · " + levelText : ""}</div>
       ${bidIndicator}
       ${actionsHTML}
-      ${!playedAbove ? playedDiv : ""}
+      ${!playedAbove ? bidDiv : ""}
     </div>`;
   }).join("");
+
+  // 把本墩所有出牌一次性渲染到中央 trick area（按座位数定位）。
+  const trickAreaEl = document.getElementById("trickArea");
+  if (trickAreaEl) {
+    trickAreaEl.className = `trick-area players-${room.seatCount || 5}`;
+    trickAreaEl.innerHTML = trickSlots.join("");
+  }
 
   seatsEl.querySelectorAll("[data-emote]").forEach(el =>
     el.addEventListener("click", (e) => { e.stopPropagation(); openEmoteMenu(Number(el.dataset.emote), el); }));
@@ -1082,20 +1099,14 @@ function playedCardHTML(card) {
 
 /* ─── Center Table Info ──────────────────────────────────── */
 function renderCenter(room) {
-  // Score display: show team scores only after friend is revealed
-  // （6 人固定队从开局就已知队伍，直接显示）
+  // 闲家分数已移到顶栏；中央只在出现甩牌罚分时短暂显示罚分行（不常驻、不挡出牌区）。
   const friendRevealed = room.fixedTeams || room.friendSeat !== null;
-  if (friendRevealed || room.phase === "roundOver") {
-    const penalties = throwPenaltyLines(room);
-    $("#scoreInfo").innerHTML = `
-      <div class="score-main">闲家分数 ${room.scores.attackers} 分</div>
-      ${penalties.length ? `<div class="score-sub">${penalties.join("<br>")}</div>` : ""}`;
-  } else {
-    $("#scoreInfo").innerHTML = "";
-  }
-  $("#turnInfo").textContent = room.turnSeat != null && room.phase === "playing"
-    ? `轮到：${seatName(room, room.turnSeat)}`
+  const penalties = (friendRevealed || room.phase === "roundOver") ? throwPenaltyLines(room) : [];
+  $("#scoreInfo").innerHTML = penalties.length
+    ? `<div class="score-sub">${penalties.join("<br>")}</div>`
     : "";
+  // 轮到谁靠当前出牌者头像的金色高亮表示，中央不再放常驻文字（避免压住出牌区）。
+  $("#turnInfo").textContent = "";
 
   // Current declared trump ("亮主") shown prominently in the center with a pop
   // animation whenever someone bids / counters (反主/加固).

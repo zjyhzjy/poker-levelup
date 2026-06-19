@@ -945,5 +945,12 @@ function contentType(filePath) {
   if (filePath.endsWith(".mp3")) return "audio/mpeg";
   if (filePath.endsWith(".wav")) return "audio/wav";
   if (filePath.endsWith(".ogg")) return "audio/ogg";
+  if (filePath.endsWith(".webmanifest")) return "application/manifest+json; charset=utf-8";
+  if (filePath.endsWith(".json")) return "application/json; charset=utf-8";
+  if (filePath.endsWith(".png")) return "image/png";
+  if (filePath.endsWith(".svg")) return "image/svg+xml";
+  if (filePath.endsWith(".jpg") || filePath.endsWith(".jpeg")) return "image/jpeg";
+  if (filePath.endsWith(".webp")) return "image/webp";
+  if (filePath.endsWith(".gif")) return "image/gif";
   return "application/octet-stream";
 }
