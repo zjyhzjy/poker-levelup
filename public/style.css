@@ -266,13 +266,12 @@ button, input, select { font: inherit; }
   .seat-name  { font-size: 10px; }
   .seat-info  { font-size: 9px; }
   /* Spread seats out more in landscape */
-  .screen-pos-0 { bottom: calc(var(--hand-stack-h, 150px) + 8px); left: 50%; transform: translateX(-50%); }
+  .screen-pos-0 { bottom: 185px; left: 50%; transform: translateX(-50%); }
   .screen-pos-1 { bottom: 30%;   right: 5%; }
   .screen-pos-2 { top: 10%;       right: 10%; }
   .screen-pos-3 { top: 10%;       left: 10%; }
   .screen-pos-4 { bottom: 30%;   left: 5%; }
-  /* Hand height is size-driven from renderHand() in all orientations now;
-     don't force it here or multi-row fans get clipped. */
+  .hand { height: 74px !important; }
   .control-zone {
     padding-bottom: calc(6px + env(safe-area-inset-bottom));
     padding-left:  env(safe-area-inset-left);
@@ -287,23 +286,10 @@ button, input, select { font: inherit; }
 /* ─── Portrait adjustments ───────────────────────────────── */
 @media (orientation: portrait) and (max-width: 500px) {
   /* Higher specificity so it wins over the later base `.screen-pos-0` rule;
-     lowers the player's own avatar so its name/info sit close to the 亮庄 button.
-     Driven by the measured control/hand stack so a 2/3-row fan never covers it. */
-  .table-felt .screen-pos-0 { bottom: calc(var(--hand-stack-h, 205px) + 12px); left: 50%; transform: translateX(-50%); }
+     lowers the player's own avatar so its name/info sit close to the 亮庄 button. */
+  .table-felt .screen-pos-0 { bottom: 218px; left: 50%; transform: translateX(-50%); }
   .screen-pos-1 { bottom: 22%;   right: 2%; }
   .screen-pos-4 { bottom: 22%;   left: 2%; }
-  /* 6-player phone portrait: the .players-6 .screen-pos-N rules (specificity
-     0,2,0) otherwise beat the single-class portrait rules above and fall back
-     to desktop-ish percentages that crowd the center. Re-place them here with
-     equal-or-higher specificity (.table-felt .players-6 .screen-pos-N = 0,3,0):
-     top-center pos-3 hugs the top, upper side seats sit tight to the edges and
-     a touch lower than pos-3, lower side seats ride high enough to clear the
-     multi-row hand. */
-  .table-felt .players-6 .screen-pos-1 { bottom: 30%; right: 1%; top: auto; left: auto; }
-  .table-felt .players-6 .screen-pos-2 { top: 13%;  right: 1%; bottom: auto; left: auto; }
-  .table-felt .players-6 .screen-pos-3 { top: 5%; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
-  .table-felt .players-6 .screen-pos-4 { top: 13%;  left: 1%;  right: auto; bottom: auto; }
-  .table-felt .players-6 .screen-pos-5 { bottom: 30%; left: 1%; right: auto; top: auto; }
   /* Hand height is set per-case in renderHand() (two-row / single-row / empty);
      don't force a fixed height here or the buttons drift away from the cards. */
   .control-zone {
@@ -712,15 +698,8 @@ button, input, select { font: inherit; }
 }
 .seat-btn.ai-lv-master:active { background: linear-gradient(135deg, rgba(200,144,45,.8), rgba(150,60,160,.8)); }
 
-/* Seat positions by screen position (viewer always at pos 0).
-   pos-0 (own avatar) is driven by the measured control/hand stack height
-   (--hand-stack-h, published from renderHand) so it always sits just above the
-   real hand instead of a hardcoded px; the fallback keeps it sane pre-render. */
-.screen-pos-0 {
-  bottom: calc(var(--hand-stack-h, 175px) + 10px);
-  left: 50%;
-  transform: translateX(-50%);
-}
+/* Seat positions by screen position (viewer always at pos 0) */
+.screen-pos-0 { bottom: 185px; left: 50%; transform: translateX(-50%); }
 .screen-pos-1 { bottom: 30%;   right: 5%; }
 .screen-pos-2 { top: 10%;      right: 10%; }
 .screen-pos-3 { top: 10%;      left: 10%; }
@@ -769,10 +748,10 @@ body.desktop .seats.players-6 .played-card .card-center { font-size: 29px; }
 body.desktop .seats.players-6 .played-card .card-center.joker-text { font-size: 15px; }
 body.desktop .players-6 .screen-pos-1 { bottom: 30%; right: 2%; top: auto; left: auto; }
 body.desktop .players-6 .screen-pos-5 { bottom: 30%; left: 2%; right: auto; top: auto; }
-/* 矮屏（360×640、地址栏展开等）：下位座位再上抬，给座位腾空间。
-   手牌高度由 renderHand() 按尺寸自适应，不再在此强制。 */
+/* 矮屏（360×640、地址栏展开等）：下位座位再上抬、手牌区压低，给座位腾空间 */
 @media (orientation: portrait) and (max-height: 700px) {
   .players-6 .screen-pos-1, .players-6 .screen-pos-5 { bottom: 40%; }
+  .hand { height: 132px !important; }
 }
 /* 横屏 6 人：利用宽度沿屏幕两侧左右铺开，避免竖向三层堆叠 */
 @media (orientation: landscape) {
@@ -804,14 +783,7 @@ body.desktop .players-6 .screen-pos-5 { bottom: 30%; left: 2%; right: auto; top:
   top: 50%;
   left: 50%;
   transform: translate(-50%, -55%);
-  /* Above the seats (z-index:2) so side-seat played piles pass UNDER the
-     score/turn text instead of covering it; a subtle translucent backdrop +
-     capped width keeps the text readable when a pile overlaps. */
-  z-index: 4;
-  max-width: 70%;
-  padding: 4px 10px;
-  border-radius: 10px;
-  background: radial-gradient(ellipse at center, rgba(6,20,12,.55) 0%, rgba(6,20,12,.28) 60%, transparent 100%);
+  z-index: 2;
   text-align: center;
   pointer-events: none;
 }
@@ -1122,9 +1094,6 @@ body.desktop .players-6 .screen-pos-5 { bottom: 30%; left: 2%; right: auto; top:
   flex-direction: column;
   align-items: center;
   padding: 6px 10px 10px;
-  /* Base safe-area inset so the 500–1024 "dead zone" (neither phone nor desktop
-     media block) still keeps controls off the home indicator / rounded edges. */
-  padding-bottom: calc(10px + env(safe-area-inset-bottom));
   background: linear-gradient(to top, rgba(0,0,0,.75) 0%, rgba(0,0,0,.5) 70%, transparent 100%);
   gap: 6px;
   overflow: visible;
@@ -1406,9 +1375,7 @@ body.desktop .friend-pop { font-size: 30px; }
   color: var(--muted-felt);
 }
 
-/* The hand row(s): overlapping fanned cards. Height is set inline by
-   renderHand() based on the size-driven row count (1–3 rows) so cards never
-   stack illegibly; this value is only a fallback before the first render. */
+/* The hand row: overlapping fanned cards */
 .hand {
   position: relative;
   height: 86px;
@@ -1655,7 +1622,7 @@ body.desktop .friend-pop { font-size: 30px; }
 }
 .log-drawer {
   position: fixed;
-  bottom: calc(var(--hand-stack-h, 92px) + 4px); right: 0;
+  bottom: 0; right: 0;
   z-index: 20;
 }
 
