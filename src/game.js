@@ -208,9 +208,14 @@ export function addAiPlayer(room, seatIndex, aiLevel = "medium") {
 }
 
 export function leaveSeat(room, playerId) {
-  assertPhase(room, PHASES.LOBBY);
   const seat = findSeatByPlayer(room, playerId);
   if (!seat) return;
+  if (room.phase !== PHASES.LOBBY) {
+    // 对局中退出：AI 真正接管该座位（不是托管），牌局继续进行。
+    seatTakenOverByAi(room, seat.index);
+    return;
+  }
+  // 大厅：座位空出来，离座者转为观战。
   room.spectators.set(playerId, { playerId, nickname: seat.nickname, connected: true });
   seat.playerId = null;
   seat.nickname = "";
@@ -238,12 +243,18 @@ export function kickSeatByVote(room, seatIndex) {
     return;
   }
   if (seat.isAi) throw new Error("牌局中不能移除 AI 座位");
+  seatTakenOverByAi(room, seatIndex);
+}
+
+// 把一个真人座位转成 AI 替补（对局中踢人 / 真人退出时用）。AI 真正接管，不是托管。
+function seatTakenOverByAi(room, seatIndex) {
+  const seat = room.seats[seatIndex];
   seat.playerId = uid("ai");
   seat.nickname = `AI替补${seatIndex + 1}`;
   seat.avatar = "🤖";
   seat.connected = true;
   seat.isAi = true;
-  seat.aiLevel = seat.aiLevel || "medium";
+  seat.aiLevel = seat.aiLevel || "hard"; // 接管用强档（带 PIMC 搜索），别让退出/踢人后的座位变弱
   seat.aiRngState = (Math.random() * 2 ** 31) | 0;
   seat.aiBias = Math.random() - 0.5;
   seat.trustee = false;
@@ -551,6 +562,7 @@ function handleNoSixTrumpCall(room) {
     const original = room.sixOriginalDealerSeat ?? room.dealerSeat;
     const newDealer = nextSeat(original, room.seatCount);
     room.dealerSeat = newDealer;
+    room.starterSeat = newDealer; // 临时上台后首家随之更新，保持展示/日志一致（出牌顺序由 buryKitty 重置）
     room.levelRank = room.teamLevels[newDealer % 2];
     room.sixTrumpAttempt = 1;
     room.currentBid = null;
@@ -965,14 +977,32 @@ export function setTrustee(room, playerId, on) {
   return seat.trustee;
 }
 
-// 推荐出牌：只给“规则内最小组合”，不参与 AI 的赢墩/送分策略。
+// 推荐出牌（提示按钮）：给出一手"强档"的合法好牌（赢墩/喂分/做空门等策略，与强
+// AI 同源），而非过去的"规则内最小组合"。同步执行（用户点击触发），用启发式选牌器
+// 即可，足够快且永远合法、绝不抛错。服务端的 hint 处理器会在此基础上再叠加一层轻量
+// PIMC 搜索（带记牌器）以进一步提升，搜索失败时回退到这里的启发式结果。
 export function recommendPlay(room, playerId) {
   if (room.phase !== PHASES.PLAYING) return null;
   const seat = room.seats.find((s) => s.playerId === playerId);
   if (!seat || seat.index !== room.turnSeat) return null;
   const leaderCards = room.currentTrick[0]?.cards ?? null;
-  const cards = chooseRecommendedPlay(room, seat, leaderCards) || [];
-  return cards.map((card) => card.id);
+  let cards = null;
+  try {
+    // 以"强"档视角选牌：临时把座位看作 hard AI（不改动真实座位的任何字段），
+    // 让 aiProfile 走 hard 档启发式（赢墩/喂分/控分/做空门 + 低温≈argmax 决策）。
+    const strongSeat = { ...seat, aiLevel: "hard", aiBias: 0 };
+    cards = chooseAiPlay(room, strongSeat, leaderCards);
+    // 保险：用真实座位再校验一次合法性（strongSeat 与真实座位手牌同源，正常必合法）。
+    if (cards && cards.length && !validatePlay(room, seat, cards, leaderCards).ok) cards = null;
+  } catch (_) { cards = null; }
+  if (!cards || !cards.length) {
+    // 任何意外都回退到"规则内最小合法组合"，保证提示永远给得出且合法。
+    try { cards = chooseRecommendedPlay(room, seat, leaderCards); } catch (_) { cards = null; }
+  }
+  if (!cards || !cards.length) {
+    try { cards = safeAiPlay(room, seat, leaderCards); } catch (_) { cards = null; }
+  }
+  return (cards || []).map((card) => card.id);
 }
 
 function chooseRecommendedPlay(room, seat, leaderCards = null) {
@@ -1108,7 +1138,7 @@ function rankSuitGroups(cards) {
 //   riskAware   : avoid over-ruff, duck behind a teammate, use known voids
 //   temp        : softmax temperature — higher = looser/more mistakes (easy)
 export const AI_PROFILES = {
-  easy:   { contest: true, feed: true, pull: false, voidDiscard: false, riskAware: false, autoBid: false, bidRatio: 0.62, temp: 1.6  },
+  easy:   { contest: true, feed: true, pull: false, voidDiscard: false, riskAware: false, autoBid: false, easyBidChance: 0.35, bidRatio: 0.62, temp: 1.6  },
   medium: { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: false, bidRatio: 0.50, temp: 0.55 },
   hard:   { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: true,  bidRatio: 0.42, temp: 0.12 },
   // 大师：叫牌/扣底/亮主等沿用 hard 启发式；出牌阶段由服务端接入 PIMC 搜索
@@ -1116,7 +1146,11 @@ export const AI_PROFILES = {
   master: { contest: true, feed: true, pull: true,  voidDiscard: true,  riskAware: true, masterLead: true, bidRatio: 0.42, temp: 0.12 }
 };
 export function aiProfile(seat) {
-  return AI_PROFILES[seat?.aiLevel] || AI_PROFILES.medium;
+  if (AI_PROFILES[seat?.aiLevel]) return AI_PROFILES[seat.aiLevel];
+  // 托管的真人座位没有 aiLevel：让它在每个阶段（叫牌/亮主/扣底/叫朋友/出牌启发式）
+  // 都按"强"档行动，与出牌阶段服务端接入的 hard PIMC 搜索一致，而非默认偏弱的 medium。
+  if (seat?.trustee) return AI_PROFILES.hard;
+  return AI_PROFILES.medium;
 }
 
 // Tunable scoring weights for the heuristic (scoreFollow / scoreLead). The
@@ -1138,6 +1172,10 @@ export const AI_WEIGHTS = {
   fRiskOwnPts: 1.0,    // ×points — penalty: own points exposed to overtake
   fDuck: 0.4,          // ×reward — extra discount when a teammate can still take it
   fGiftPts: 3.5,       // ×points — penalty for gifting points to enemies
+  fDuckBoss: 1.2,      // bonus for ducking while KEEPING a card that becomes boss (de-myopify)
+  fVoidRuffSetup: 0.8, // ×(near-void progress) — discard from a nearly-exhausted side suit to set up a ruff
+  fAllyGrab: 1.2,      // ×points — relaxed 3rd-hand-high: secure a beatable ally point-trick with my best winner
+  fOverRuffPts: 1.0,   // ×points — bonus for over-ruffing a points-rich enemy trick with minimal trump
   // ── lead (scoreLead) ──
   lProbe: 0.5,         // base score of the safe low probe
   lProbeCard: 0.01,    // ×cardOrderValue tiebreak on the probe
@@ -1148,7 +1186,18 @@ export const AI_WEIGHTS = {
   lBossLen: 1.5,       // ×combo length (clear cards / pressure)
   lTrumpPull: 4,       // declarer pulling-trump bonus base
   lTrumpKeep: 2,       // penalty for leading trump when not pulling
-  lAceRuff: 4          // penalty for cashing a bare side ace into ruff risk
+  lAceRuff: 4,         // penalty for cashing a bare side ace into ruff risk
+  lTrumpSupply: 3,     // pull-trump bonus when MY side holds the majority of outstanding trump
+  lAllyBehindPts: 1.2, // ×points — lead points/partner-controlled cards when ally acts last (don't strand points)
+  lPartnerRuff: 1.5,   // bonus for leading a suit a partner is likely void in (sets up partner ruff)
+  lThrowBoss: 2.5,     // base bonus for a fully-boss combined 甩牌 lead
+  // ── auction (decideAiBid / decideAiSixTrump) ──
+  bJoker: 3.5,         // ×jokers — top control matters most
+  bLevel: 2,           // ×level cards (of the bid suit) — solid trump tops
+  bOffAce: 1.2,        // ×off-suit aces — side-suit control / quick tricks
+  bOffKing: 0.5,       // ×off-suit kings — secondary side control
+  bTrumpLen: 0.6,      // ×trump length — raw trump bulk
+  bThreshold: 7        // composite must clear this (level-scaled) to be worth declaring
 };
 
 // Merge an override object into AI_WEIGHTS in place (only known keys). Used by
@@ -1432,6 +1481,19 @@ function followCandidates(room, seat, leaderCards) {
       .sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room));
     if (trumps.length >= length) { raw.push(trumps.slice(0, length)); raw.push(trumps.slice(-length)); }
     raw.push([...seat.hand].sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room)).slice(0, length));
+    // Over-ruff an enemy points-rich trick: the lowest trump slice may NOT beat a
+    // ruff already on the table. Add the MINIMAL trump combo that actually beats
+    // the current standing as an explicit candidate, so the AI can take the points
+    // instead of dumping low. Bounded: only when an enemy holds points worth taking.
+    const stand = trickStanding(room, seat);
+    if (stand && stand.rel !== "ally" && stand.points >= 5 && length >= 1) {
+      // Walk trumps low→high; the first combo of the right length that beats the
+      // standing is the minimal over-ruff (preserves higher trump for later).
+      for (let i = 0; i + length <= trumps.length; i += 1) {
+        const combo = trumps.slice(i, i + length);
+        if (candidateBeats(room, seat, combo)) { raw.push(combo); break; }
+      }
+    }
   }
   const legal = findAnyLegalCombination(room, seat, leaderCards, length);
   if (legal) raw.push(legal);
@@ -1448,6 +1510,74 @@ function followCandidates(room, seat, leaderCards) {
     out.push(c);
   }
   return out;
+}
+
+// De-myopify a discard: look past THIS trick. (a) If, after spending `cards`, the
+// best card I KEEP in some side suit is now the boss of that suit, ducking is
+// good — I keep a future winner. (b) Discarding the last cards of a nearly-empty
+// side suit manufactures a void I can later ruff from; reward that over a random
+// low card. Returns a small bounded bonus; only nudges among low non-point discards.
+function keepBossCredit(room, seat, cards, seen) {
+  const spendIds = new Set(cards.map((c) => c.id));
+  const keptBySuit = {};
+  for (const c of seat.hand) {
+    if (spendIds.has(c.id)) continue;
+    if (playSuit(c, room) === "trump") continue;
+    (keptBySuit[c.suit] ||= []).push(c);
+  }
+  // Only the suits I'm actually discarding from matter for "what I keep there".
+  const touched = new Set(cards.filter((c) => playSuit(c, room) !== "trump").map((c) => c.suit));
+  let bonus = 0;
+  for (const suit of touched) {
+    const kept = keptBySuit[suit];
+    if (!kept || !kept.length) continue; // emptied the suit — handled by void-setup below
+    const top = kept.sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room))[0];
+    // The boss test: count the same head against what's already been seen PLUS the
+    // copies I'm discarding now (they leave my hand → out of play for opponents too).
+    if (isGroupBoss(room, top, 1, seen)) bonus += 1; // capped per suit
+  }
+  return bonus;
+}
+
+// Reward discarding the LAST card(s) of a nearly-exhausted side suit (length ≤2),
+// which creates a void to ruff from later. Bounded; complements voidProgress.
+function voidRuffSetup(room, seat, cards) {
+  const spendIds = new Set(cards.map((c) => c.id));
+  const remaining = {};
+  for (const c of seat.hand) {
+    if (playSuit(c, room) === "trump") continue;
+    remaining[c.suit] = (remaining[c.suit] || 0) + 1;
+  }
+  let bonus = 0;
+  const emptiedBy = {};
+  for (const c of cards) {
+    if (playSuit(c, room) === "trump") continue;
+    emptiedBy[c.suit] = (emptiedBy[c.suit] || 0) + 1;
+  }
+  for (const suit of Object.keys(emptiedBy)) {
+    const before = remaining[suit] || 0;
+    const after = before - emptiedBy[suit];
+    if (before <= 2 && after === 0) bonus += 1; // this discard fully empties a short suit
+    else if (before <= 3 && after >= 1 && after <= 1) bonus += 0.4; // brings it to a singleton
+  }
+  return bonus;
+}
+
+// For the relaxed 3rd-hand-high grab: is `cards` (which beats the current trick)
+// the STRONGEST winner I can legally play here? We want the highest available
+// winner so it's least likely to be over-trumped by the enemy behind us. Compares
+// against other same-length follow candidates that also beat the trick.
+function isMyBestFollowWinner(room, seat, cards) {
+  const leaderCards = room.currentTrick[0]?.cards;
+  if (!leaderCards) return true;
+  const myVal = cards.reduce((s, c) => s + cardOrderValue(c, room), 0);
+  for (const alt of followCandidates(room, seat, leaderCards)) {
+    if (alt.length !== cards.length) continue;
+    if (!candidateBeats(room, seat, alt)) continue;
+    const altVal = alt.reduce((s, c) => s + cardOrderValue(c, room), 0);
+    if (altVal > myVal) return false; // a stronger winner exists — prefer that one
+  }
+  return true;
 }
 
 function scoreFollow(room, seat, cards, stand, profile, seen) {
@@ -1470,6 +1600,13 @@ function scoreFollow(room, seat, cards, stand, profile, seen) {
     // next player could beat, so I never waste a losable card on my own partner.
     if (beats && stand.points > 0 && enemyBehind(room, seat) && isComboBoss(room, seat, cards, seen)) {
       u += stand.points * W.fAllySecure + W.fAllySecureBase;
+    } else if (beats && enemyBehind(room, seat) && stand.points >= 10 && isMyBestFollowWinner(room, seat, cards)) {
+      // Relaxed: a big point-trick (≥10) my ally is winning but could lose to the
+      // enemy behind me. Even without a certified boss, grabbing it now with my
+      // BEST available winner is worth the gamble — better than handing the enemy
+      // double-digit points. (riskAware levels only, so easy doesn't overreach.)
+      if (profile.riskAware) u += stand.points * W.fAllyGrab + W.fAllySecureBase;
+      else u -= pts * W.fAllyKeep;
     } else {
       u -= pts * W.fAllyKeep;
     }
@@ -1485,10 +1622,24 @@ function scoreFollow(room, seat, cards, stand, profile, seen) {
       u -= pts * W.fRiskOwnPts;                      // and my own points could be overtaken
       if (allyBehind(room, seat)) reward *= W.fDuck; // a teammate can still take it — duck
     }
+    // Over-ruff bonus: I'm void of the led suit and beating an enemy points-rich
+    // trick with trump. Taking double-digit-ish points off the enemy is worth a
+    // ruff even mid-trick; the candidate builder already supplied the MINIMAL
+    // over-ruff so this doesn't waste a big trump.
+    const ledSuit = playSuit(room.currentTrick[0].cards[0], room);
+    const iAmVoid = ledSuit !== "trump" && cards.every((c) => playSuit(c, room) === "trump");
+    if (iAmVoid && stand.points >= 5) u += stand.points * W.fOverRuffPts;
     u += reward;
   } else {
     u -= pts * W.fGiftPts;                           // never gift points to enemies/unknowns
     if (profile.voidDiscard) u += voidProgress(room, seat, cards); // shed toward a void
+    // De-myopify: ducking is better when the card I KEEP becomes boss afterward,
+    // and emptying a nearly-exhausted side suit sets up a future ruff (all levels
+    // that already look past the trick get this; gated on voidDiscard like above).
+    if (pts === 0) {
+      u += keepBossCredit(room, seat, cards, seen) * W.fDuckBoss;
+      if (profile.voidDiscard) u += voidRuffSetup(room, seat, cards) * W.fVoidRuffSetup;
+    }
   }
   return u;
 }
@@ -1590,10 +1741,41 @@ function leadCandidates(room, seat) {
     if (t.every((c) => playSuit(c, room) === "trump")) continue;
     cands.push(t);
   }
+  for (const c of bossThrowCandidates(room, seat)) cands.push(c);
   return cands;
 }
 
-// The safe default: lowest non-point singleton from the longest side suit.
+// 甩牌 (throw) when leading all-boss: if I hold MULTIPLE boss groups in one side
+// suit, offer a combined throw of those groups. GATED so EVERY component group is
+// boss (verified on my card-counter) — a fully-boss throw can never be blocked,
+// so it can't be 甩牌-penalized. The engine's validatePlay(...null) confirms
+// legality on top of this. Side suits only (trump tractors are skipped above).
+function bossThrowCandidates(room, seat) {
+  const seen = seenCounts(room, seat);
+  const out = [];
+  const bySuit = {};
+  for (const c of seat.hand) {
+    if (playSuit(c, room) === "trump") continue;
+    (bySuit[c.suit] ||= []).push(c);
+  }
+  for (const suit of Object.keys(bySuit)) {
+    const desc = bySuit[suit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+    const groups = groupCards(desc);
+    // Keep only groups whose top is boss at that group's width — these can't be
+    // out-grouped by an opponent in this suit.
+    const bossGroups = groups.filter((g) => isGroupBoss(room, g[0], g.length, seen));
+    if (bossGroups.length < 2) continue; // a throw needs ≥2 distinct groups
+    const combined = bossGroups.flat();
+    if (combined.length >= 2 && combined.length < desc.length + 1) out.push(combined);
+  }
+  return out;
+}
+
+// The safe develop probe: lowest non-point singleton from the SHORTEST side suit.
+// Probing a short suit (length 1–2) manufactures a void to ruff from later while
+// keeping length — and thus control — in the longer suits. (The previous version
+// probed the LONGEST suit, which works AGAINST making a void.) Consistent with
+// voidProgress, which already nudges discards toward shorter suits.
 function developProbe(room, seat, groups) {
   const singletonIds = new Set(groups.filter((g) => g.length === 1).map((g) => g[0].id));
   const bySuit = {};
@@ -1601,7 +1783,9 @@ function developProbe(room, seat, groups) {
     if (playSuit(c, room) === "trump") continue;
     (bySuit[c.suit] ||= []).push(c);
   }
-  const suits = Object.keys(bySuit).sort((a, b) => bySuit[b].length - bySuit[a].length);
+  // Shortest first → empty a near-void suit. Among ties, prefer the suit whose
+  // non-point singleton is lowest (cheapest to spend).
+  const suits = Object.keys(bySuit).sort((a, b) => bySuit[a].length - bySuit[b].length);
   for (const s of suits) {
     const pick = bySuit[s]
       .filter((c) => cardScore(c) === 0 && singletonIds.has(c.id))
@@ -1614,6 +1798,19 @@ function developProbe(room, seat, groups) {
   return anyLow ? [anyLow] : [lowestCard(seat.hand, room)];
 }
 
+// True when `cards` form a same-suit (side) throw whose EVERY component group is
+// boss on my card-counter — so no opponent can block any part of it. Used to score
+// an all-boss 甩牌 lead without risk of the throw being penalized.
+function isBossThrow(room, cards, seen) {
+  if (cards.length < 2) return false;
+  if (cards.some((c) => playSuit(c, room) === "trump")) return false; // side suits only
+  const suit = cards[0].suit;
+  if (!cards.every((c) => c.suit === suit && playSuit(c, room) !== "trump")) return false;
+  const groups = groupCards([...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)));
+  if (groups.length < 2) return false; // a single group isn't a throw
+  return groups.every((g) => isGroupBoss(room, g[0], g.length, seen));
+}
+
 function scoreLead(room, seat, cards, profile, seen) {
   const W = seat.aiWeights || AI_WEIGHTS; // per-seat override (tuning) else global
   const head = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room))[0];
@@ -1622,26 +1819,60 @@ function scoreLead(room, seat, cards, profile, seen) {
   const len = cards.length;
   const boss = isComboBoss(room, seat, cards, seen);
 
+  // Partner-aware leading (don't strand points; set up a partner ruff). Only when
+  // I read partners (feed) and, for the void read, track voids (riskAware). Bounded.
+  let partnerBonus = 0;
+  if (profile.feed) {
+    // If my ally acts LAST this trick, leading a point card is safe — the partner
+    // sweeps the trick and banks the points for the team.
+    if (pts > 0 && allyLastToAct(room, seat)) partnerBonus += pts * W.lAllyBehindPts;
+    // Lead toward a suit a known ally is void in → the partner ruffs and wins.
+    if (!isTrump && profile.riskAware && allyVoidIn(room, seat, head.suit)) partnerBonus += W.lPartnerRuff;
+  }
+
+  // 甩牌 leading all-boss: a multi-group same-suit throw where EVERY component is
+  // boss can't be blocked → score it like a big boss cash (bank points, clear many
+  // cards, apply pressure). Gated by isBossThrow so a beatable throw never scores
+  // here (it would risk a 甩牌 penalty). voidDiscard levels manage this.
+  if (len >= 2 && isBossThrow(room, cards, seen)) {
+    return W.lThrowBoss + pts * W.lBossPts + len * W.lBossLen + partnerBonus;
+  }
+
   // Non-point low single = the probe: pick it only when nothing is worth cashing.
-  if (len === 1 && !boss && cardScore(head) === 0) return W.lProbe - cardOrderValue(head, room) * W.lProbeCard;
+  if (len === 1 && !boss && cardScore(head) === 0) return W.lProbe - cardOrderValue(head, room) * W.lProbeCard + partnerBonus;
   // A non-boss high card / combo can be beaten or ruffed. Master still prefers
   // meaningful side-suit structures over a pointless low single: pairs/triples/
   // tractors often take control even when not mathematically boss yet.
   if (!boss) {
     if (profile.masterLead && !isTrump && len >= 2) {
       const ruffable = enemyVoidIn(room, seat, head.suit) || suitPlayed(room, head.suit) > 8;
-      return 1.2 + len * 1.1 + cardOrderValue(head, room) * 0.08 + pts * 0.35 - (ruffable ? 2.5 : 0);
+      return 1.2 + len * 1.1 + cardOrderValue(head, room) * 0.08 + pts * 0.35 - (ruffable ? 2.5 : 0) + partnerBonus;
     }
-    return -W.lNonBoss - cardOrderValue(head, room) * W.lNonBossCard - len;
+    return -W.lNonBoss - cardOrderValue(head, room) * W.lNonBossCard - len + partnerBonus;
   }
 
   // Boss combo: cash a guaranteed winner — bank points, clear cards, apply pressure.
-  let u = W.lBossBase + pts * W.lBossPts + len * W.lBossLen;
+  let u = W.lBossBase + pts * W.lBossPts + len * W.lBossLen + partnerBonus;
   if (isTrump) {
-    // Declarer pulls trump from strength (basic). easy doesn't manage trump, so it
-    // doesn't get the pull bonus and leaves its trump back.
-    if (seat.index === room.dealerSeat && profile.pull) u += W.lTrumpPull + len;
-    else u -= W.lTrumpKeep;
+    // Pull trump from SUPPLY, not seat: lead boss trump when MY side controls the
+    // majority of the trump still outstanding (so every round clears more of the
+    // opponents' trump than ours). A defender with the trump majority may correctly
+    // pull too — it's no longer gated on being the declarer. Once opponents are out
+    // of trump, stop hammering it (a boss side winner is better than burning trump).
+    if (profile.pull) {
+      const sup = trumpSupply(room, seat, seen);
+      if (sup.opponentsOut) {
+        u -= W.lTrumpKeep; // no enemy trump left to pull — keep trump for ruffing/control
+      } else if (sup.myTrump > sup.othersTrump) {
+        u += W.lTrumpSupply + len; // my side has the trump majority — pull from strength
+      } else if (seat.index === room.dealerSeat) {
+        u += W.lTrumpPull + len;   // declarer still pulls even without a clear majority (basic)
+      } else {
+        u -= W.lTrumpKeep;
+      }
+    } else {
+      u -= W.lTrumpKeep; // easy doesn't manage trump — leaves its trump back
+    }
   } else if (len === 1 && pts === 0) {
     // Cashing a bare side ace is basic, but it risks a ruff once the suit dries up
     // or an opponent is known void — back off then (all levels read this much).
@@ -1682,6 +1913,27 @@ function enemyVoidIn(room, seat, suit) {
   return false;
 }
 
+// Has a KNOWN ally shown void in `suit`? Leading that side suit lets the partner
+// ruff (and bank points for the team).
+function allyVoidIn(room, seat, suit) {
+  for (const other of room.seats) {
+    if (other.index === seat.index) continue;
+    if (aiRelation(room, seat.index, other.index) !== "ally") continue;
+    if (isVoidIn(room, other.index, suit)) return true;
+  }
+  return false;
+}
+
+// On the trick I'm about to lead, is a known ally the LAST player to act? If so I
+// can lead points safely — the partner closes out the trick and banks them.
+function allyLastToAct(room, seat) {
+  const after = room.seatCount - room.currentTrick.length - 1;
+  if (after <= 0) return false;
+  let s = seat.index;
+  for (let k = 0; k < after; k += 1) s = nextSeat(s, room.seatCount);
+  return aiRelation(room, seat.index, s) === "ally"; // the very last seat is my ally
+}
+
 // ── card-counting helpers for "boss" detection ──────────────
 // A group (single/pair/triple/tractor) is "boss" when no opponent can still
 // assemble a higher group of the same width: for every stronger card type the
@@ -1701,6 +1953,36 @@ function suitPlayed(room, suit) {
   let n = 0;
   for (const t of room.finishedTricks) for (const p of t.plays) for (const c of p.cards) if (c.suit === suit) n += 1;
   return n;
+}
+
+// Enumerate every distinct trump card key (jokers + level cards of all suits +
+// every rank of the trump suit). Each key has 3 copies in the deck.
+function trumpCardKeys(room) {
+  const keys = new Set();
+  keys.add("bigJoker");
+  keys.add("smallJoker");
+  if (room.levelRank) for (const s of SUITS) keys.add(`${room.levelRank}|${s}`);
+  if (!room.noTrump && room.trumpSuit) {
+    for (const r of RANKS) keys.add(`${r}|${room.trumpSuit}`);
+  }
+  return keys;
+}
+
+// Trump supply read for trump-pull decisions: how many trump cards are still in
+// other players' hands ("outstanding"), and how many of those are likely held by
+// MY side vs theirs. seen = seenCounts (my hand + everything already played). We
+// can't see opponents' hands, so "mine" = the trump still in my own hand; the
+// rest of the outstanding trump is attributed to the opposing side as a worst
+// case. The signal we want is: does my side control the majority of trump still
+// in play (so pulling clears theirs), and are opponents already out (stop pulling)?
+function trumpSupply(room, seat, seen) {
+  let myTrump = 0;
+  for (const c of seat.hand) if (playSuit(c, room) === "trump") myTrump += 1;
+  let outstanding = 0; // trump not yet seen (in other players' hands)
+  for (const k of trumpCardKeys(room)) outstanding += Math.max(0, 3 - (seen.get(k) || 0));
+  // outstanding counts unseen copies = trump in OTHER hands (mine are already in `seen`).
+  const othersTrump = outstanding;
+  return { myTrump, othersTrump, opponentsOut: othersTrump === 0 };
 }
 
 // Card types that out-rank `head` and could beat its group if grouped together.
@@ -2086,15 +2368,32 @@ export function chooseAiBury(room, dealer) {
       .sort((a, b) => cardScore(a) - cardScore(b) || cardOrderValue(a, room) - cardOrderValue(b, room))
       .slice(0, room.kittySize);
   }
-  // medium/hard: keep points, trump and side Aces; bury junk while emptying the
-  // shortest side suits first so the dealer can later ruff (扣底造空门).
+  // medium/hard: keep points, trump and side Aces; bury junk while PREFERRING bury
+  // sets that COMPLETELY empty one or more side suits (true 空门) — a real void lets
+  // the dealer ruff that suit every time, far better than half-depleting two suits.
   const isTrump = (c) => playSuit(c, room) === "trump";
   const suitLen = {};
   for (const c of hand) if (!isTrump(c)) suitLen[c.suit] = (suitLen[c.suit] || 0) + 1;
+  // A suit is "voidable by junk" only if EVERY card we hold in it is buriable junk
+  // (no points, no Ace, not trump) — burying that whole suit creates a clean void.
+  const suitCards = {};
+  for (const c of hand) if (!isTrump(c)) (suitCards[c.suit] ||= []).push(c);
+  const buriableInSuit = (s) => suitCards[s].every((c) => cardScore(c) === 0 && c.rank !== "A");
+  const voidableSuits = Object.keys(suitCards)
+    .filter((s) => buriableInSuit(s) && suitCards[s].length <= room.kittySize)
+    .sort((a, b) => suitLen[a] - suitLen[b]); // emptiest-first so we can void the most suits
+  const bury = [];
+  const buried = new Set();
+  for (const s of voidableSuits) {
+    if (bury.length + suitCards[s].length > room.kittySize) continue; // can't fully void within budget
+    for (const c of suitCards[s]) { bury.push(c); buried.add(c.id); }
+  }
+  // Fill any remaining slots with the lowest junk from the shortest suits (the old
+  // behaviour), so we still bury sensibly when nothing else can be fully voided.
   const junk = hand
-    .filter((c) => !isTrump(c) && cardScore(c) === 0 && c.rank !== "A")
+    .filter((c) => !isTrump(c) && cardScore(c) === 0 && c.rank !== "A" && !buried.has(c.id))
     .sort((a, b) => (suitLen[a.suit] - suitLen[b.suit]) || (cardOrderValue(a, room) - cardOrderValue(b, room)));
-  const bury = junk.slice(0, room.kittySize);
+  for (const c of junk) { if (bury.length >= room.kittySize) break; bury.push(c); buried.add(c.id); }
   if (bury.length < room.kittySize) {
     // Not enough junk: add the least valuable remainder, keeping points/trump for last.
     const used = new Set(bury.map((c) => c.id));
@@ -2126,8 +2425,18 @@ export function chooseAiFriendCard(room, dealer) {
       if (ordinal > 3) continue; // dealer holds all 3 copies — nobody else can have it
       const pts = (rank === "K" || rank === "10" || rank === "5") ? 1 : 0;
       const isPrimary = rank === primary;
-      const transfer = isPrimary ? (held > 0 ? 95 : 80) : 0;
-      const score = transfer + rankNumber(rank) + pts * 5 - (suitLen[suit] || 0) * 3 - Math.max(0, held - 1) * 8;
+      // Complementary call: prefer the primary off-suit Ace (or K) in a suit the
+      // DEALER is WEAK/SHORT in — the partner's winner then controls a suit the
+      // dealer can't, rather than a suit the dealer already dominates. The old
+      // held>0 cliff (95 vs 80) is replaced by a smooth, smaller held nudge so a
+      // fresh 1st copy in a short suit isn't penalised relative to a held copy.
+      const transfer = isPrimary ? 80 + held * 6 : 0;
+      // Short bonus applies only to suits the dealer ACTUALLY holds (length 1–3):
+      // a genuine short holding the partner can take over. A length-0 suit is a
+      // void, not a "short" suit to recruit control in, so it gets no bonus.
+      const len = suitLen[suit] || 0;
+      const shortBonus = (isPrimary && len >= 1 && len <= 3) ? (4 - len) * 7 : 0; // shorter dealer suit → bigger bonus
+      const score = transfer + shortBonus + rankNumber(rank) + pts * 5 - (suitLen[suit] || 0) * 3 - Math.max(0, held - 1) * 8;
       if (!best || score > best.score) best = { ordinal, rank, suit, score };
     }
   }
@@ -2168,11 +2477,33 @@ function chooseAiForcedTrump(room, dealer) {
 // Auction decision (driven by the server's bid scheduler, never by runAiStep, so
 // it doesn't bypass the reveal/timeout pacing). Returns { cardIds, strength } to
 // bid, or null to not bid. Only ever returns cards the seat actually holds.
+// Composite auction strength: top control (jokers, level cards, off-suit aces/
+// kings) weighed alongside raw trump length — not just trump count. A hand with
+// 2 jokers + 3 off aces and modest trump length is a far better declaration than
+// a long ragged trump suit; this captures that. Bounded weights live in AI_WEIGHTS.
+function auctionStrength(hand, level, suit, W) {
+  const jokers = hand.filter((c) => c.suit === "joker").length;
+  const levelCards = hand.filter((c) => c.rank === level).length;
+  const isTrumpCard = (c) => c.suit === "joker" || c.rank === level || c.suit === suit;
+  const offAces = hand.filter((c) => c.rank === "A" && !isTrumpCard(c)).length;
+  const offKings = hand.filter((c) => c.rank === "K" && !isTrumpCard(c)).length;
+  const trumpLen = hand.filter((c) => isTrumpCard(c)).length;
+  return jokers * W.bJoker + levelCards * W.bLevel + offAces * W.bOffAce
+    + offKings * W.bOffKing + trumpLen * W.bTrumpLen;
+}
+
 export function decideAiBid(room, seat) {
   const profile = aiProfile(seat);
-  if (profile.autoBid === false) return null;
+  // easy normally doesn't auto-bid, but a table where easy NEVER bids reads as
+  // broken (total auction pushover). Let it place an occasional weak bid: a random
+  // roll must pass AND it still needs a legal bid + minimal strength below.
+  if (profile.autoBid === false) {
+    if (!profile.easyBidChance || aiRandom(seat) >= profile.easyBidChance) return null;
+  }
   const hand = seat.hand;
   const level = seat.level;
+  const W = seat.aiWeights || AI_WEIGHTS;
+  const easyOccasional = profile.autoBid === false;
   const jokers = hand.filter((c) => c.suit === "joker").length;
   // Candidate bid suits = suits where I hold a level card. Pick the one that makes
   // the strongest trump (most jokers + level cards + that suit), not just the suit
@@ -2187,9 +2518,31 @@ export function decideAiBid(room, seat) {
   }
   if (!best) return null; // no level card → nothing legal to bid with
 
-  // Worth being dealer if trump-rich, or if I hold strong top control (≥2 jokers).
-  const ratio = best.trumpCount / hand.length;
-  const worthy = ratio >= profile.bidRatio || (jokers >= 2 && best.trumpCount >= hand.length * 0.4);
+  // Worth being dealer when composite strength (top control + trump length) clears
+  // a profile-scaled threshold — top control counts for more than raw trump bulk.
+  // More aggressive profiles (lower bidRatio) accept a lower bar. ≥2 jokers always
+  // qualifies (a hand that owns the top of trump should declare).
+  const composite = auctionStrength(hand, level, best.suit, W);
+  const threshold = W.bThreshold * (0.6 + profile.bidRatio); // ≈ easy/hard scaled bar
+  // easy's occasional bid just needs a legal level card (best exists) — it's meant
+  // to be a weak, beatable bid so the auction isn't a pushover, not a strong claim.
+  let worthy = easyOccasional || composite >= threshold || jokers >= 2;
+  // 反主 awareness: weigh WHO currently holds the bid before overbidding it.
+  if (worthy && room.currentBid) {
+    const rel = aiRelation(room, seat.index, room.currentBid.seat);
+    if (rel === "ally") {
+      // An ally already declared. Don't overbid them just to grab the deal — their
+      // declaration already puts our team in charge. Only reverse if my own hand is
+      // MUCH stronger in MY suit (a clearly better trump for the team).
+      const allyComposite = room.currentBid.trumpSuit
+        ? auctionStrength(hand, level, room.currentBid.trumpSuit, W) : composite;
+      if (composite <= allyComposite + W.bThreshold * 0.5) worthy = false;
+    } else if (rel === "enemy") {
+      // An enemy declared. Reverse only when I hold a strictly-stronger legal set
+      // AND I'm clearly stronger in my own suit than they could be — a real 反主.
+      if (best.strength <= room.currentBid.strength) worthy = false;
+    }
+  }
   if (!worthy) return null;
   if (room.currentBid && best.strength <= room.currentBid.strength) return null; // can't beat
   return { cardIds: best.cards.map((c) => c.id), strength: best.strength };
@@ -2197,7 +2550,11 @@ export function decideAiBid(room, seat) {
 
 export function decideAiSixTrump(room, seat) {
   const profile = aiProfile(seat);
-  if (profile.autoBid === false) return null;
+  // easy occasionally defines trump too (see decideAiBid) so it isn't a pushover.
+  if (profile.autoBid === false) {
+    if (!profile.easyBidChance || aiRandom(seat) >= profile.easyBidChance) return null;
+  }
+  const easyOccasional = profile.autoBid === false;
   const hand = seat.hand;
   const level = room.dealerSeat === null ? seat.level : room.levelRank;
   const jokerCards = hand.filter((c) => c.suit === "joker").slice(0, 3);
@@ -2218,13 +2575,24 @@ export function decideAiSixTrump(room, seat) {
     }
   }
   if (!best) return null;
-  const ratio = best.trumpCount / Math.max(1, hand.length);
+  const W = seat.aiWeights || AI_WEIGHTS;
+  const composite = auctionStrength(hand, level, best.suit, W);
+  const threshold = W.bThreshold * (0.6 + profile.bidRatio);
   const eagerFirstDealer = room.dealerSeat === null && best.strength >= 1;
   // 守庄队在后续局应主动定主：定主只定花色、不改坐庄，不亮反而可能被对家反主成不利
   // 花色、或全员不亮触发换台/重发。所以只要手里有一张级牌就亮自己最强的花色。
   const onDealerTeam = room.dealerSeat !== null && isFixedTeamMode(room) && seat.index % 2 === room.dealerSeat % 2;
   const eagerHold = onDealerTeam && best.strength >= 1;
-  const worthy = eagerFirstDealer || eagerHold || best.strength >= 2 || ratio >= profile.bidRatio;
+  let worthy = easyOccasional || eagerFirstDealer || eagerHold || best.strength >= 2 || composite >= threshold;
+  // 反主 awareness: if a teammate already declared and I'm not meaningfully stronger,
+  // don't overbid them — their declaration already keeps our team in charge. (Skip
+  // when eager-holding the deal for game-flow reasons; that path is intentional.)
+  if (worthy && !eagerHold && !eagerFirstDealer && room.currentBid
+      && aiRelation(room, seat.index, room.currentBid.seat) === "ally") {
+    const allyComposite = room.currentBid.trumpSuit
+      ? auctionStrength(hand, level, room.currentBid.trumpSuit, W) : composite;
+    if (composite <= allyComposite + W.bThreshold * 0.5) worthy = false;
+  }
   if (!worthy) return null;
   if (room.currentBid && best.strength <= room.currentBid.strength) return null;
   return { cardIds: best.cards.map((c) => c.id), strength: best.strength };

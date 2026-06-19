@@ -55,6 +55,10 @@ let forceSpinLocal = null;
 let lastKillTrickSig = "";
 let reconnectTimer = null;
 let reconnectAttempts = 0;
+// Set when the user explicitly leaves a room, so the socket's close handler does
+// NOT auto-reconnect us back in (the close callback captures the room `code` in a
+// closure, which otherwise pulls us straight back after 退出).
+let leavingRoom = false;
 const animatedKillSeats = new Set();
 // Card ids that have already played their deal-in animation, so re-renders during
 // dealing don't make the whole hand flicker (only newly dealt cards animate).
@@ -207,6 +211,7 @@ function connectAndJoin(code, nickname, seatCount) {
   ws.addEventListener("close", () => {
     stopPingLoop();
     updatePingStatus("down");
+    if (leavingRoom) { leavingRoom = false; return; } // 主动退出：不要把自己拉回房间
     scheduleReconnect(code || state.room?.code || localStorage.getItem("szp.roomCode"));
   });
   ws.addEventListener("error", () => {
@@ -1530,27 +1535,80 @@ function renderHand(room) {
     // No hand (e.g. lobby): collapse the area so action buttons sit at the
     // bottom instead of being pushed up over a seat.
     container.style.height = "0";
+    syncHandStackHeight();
     return;
   }
 
-  const isPortrait = window.innerHeight > window.innerWidth;
   const containerWidth = container.clientWidth || (window.innerWidth - 20);
   const cardW = Math.round(52 * UI);
+  const cardH = Math.round(74 * UI);
 
-  // Portrait narrow screens: split into 2 rows
-  if (isPortrait && window.innerWidth < 500 && hand.length > 8) {
-    const half = Math.ceil(hand.length / 2);
-    const row1 = hand.slice(0, half);
-    const row2 = hand.slice(half);
-    // Height = top row offset (78) + card height (74); no dead space above the
-    // top row so the action buttons sit close to the cards.
-    container.style.height = `${Math.round(152 * UI)}px`;
-    renderHandRow(container, row1, containerWidth, cardW, 78);  // top row
-    renderHandRow(container, row2, containerWidth, cardW, 2);   // bottom row
-  } else {
-    container.style.height = `${Math.round(86 * UI)}px`;
-    renderHandRow(container, hand, containerWidth, cardW, 2);
+  // ── Size-driven row count (works for ALL orientations incl. desktop) ──
+  // Choose the smallest number of rows (1→3) such that the per-card horizontal
+  // step stays at or above a legibility threshold, so ranks never become
+  // illegible by stacking. With N rows the widest row holds ceil(len/N) cards.
+  // Phone uses a legibility floor (~16px reveals the rank + small-suit corner)
+  // and keeps a moderate fan, so big hands become 2 tidy rows.
+  // Desktop uses a much higher comfort floor: a 70px card should show most of
+  // its width, so any hand whose single-row step would drop below ~54px wraps to
+  // 2 rows. With the 58px spread cap, wrapped rows overlap only ~12px (≈83% of
+  // each card visible) — e.g. 26/31/38-card hands all become clean 2-row fans
+  // instead of a single crushed row.
+  const MIN_STEP = UI > 1 ? 54 : 16;               // wrap below this step
+  const MAX_STEP = UI > 1 ? 58 : Math.round(38 * UI); // fan never spreads beyond this
+  const usableW  = containerWidth - cardW;         // travel room for the fan
+  const stepFor  = (cards) => cards <= 1 ? MAX_STEP
+    : Math.min(MAX_STEP, Math.floor(usableW / (cards - 1)));
+  let rows = 1;
+  while (rows < 3 && stepFor(Math.ceil(hand.length / rows)) < MIN_STEP) rows++;
+
+  // Distribute as evenly as possible; top rows get the (possibly larger) share
+  // so the bottom row is never wider than the rows above it.
+  const per = Math.ceil(hand.length / rows);
+  // All rows share ONE step (the widest row's), so the rows line up instead of
+  // each row computing its own spacing/centering (which made unequal rows ragged
+  // on the right). Capped by MAX_STEP via stepFor.
+  const step = stepFor(per);
+  const slices = [];
+  for (let i = 0; i < hand.length; i += per) slices.push(hand.slice(i, i + per));
+  while (slices.length < rows) slices.push([]);   // safety
+
+  // Vertical geometry. Rows are stacked bottom-up. Each row needs the card
+  // height; rows overlap vertically by a fixed amount so the hand stays compact
+  // while still revealing the top corner (rank) of the row beneath. Reserve
+  // clearance at the very top for the selected-card lift so a raised card never
+  // pokes into the meta row / row above.
+  const ROW_GAP   = Math.round(28 * UI);           // vertical reveal between rows
+  const LIFT      = UI > 1 ? 24 : 18;              // selected-card lift (matches CSS)
+  const BASE      = 2;                             // bottom-most row offset
+  const topRowBottom = BASE + (rows - 1) * ROW_GAP;
+  // Container height = bottom offset of top row + card height + lift clearance.
+  container.style.height = `${topRowBottom + cardH + LIFT}px`;
+
+  // Render top→bottom so later (lower) rows paint over earlier ones, matching
+  // the natural overlap of a held fan.
+  for (let r = 0; r < rows; r++) {
+    const bottom = BASE + (rows - 1 - r) * ROW_GAP;
+    renderHandRow(container, slices[r], containerWidth, cardW, bottom, step);
   }
+  syncHandStackHeight();
+}
+
+// Measure the actual control-zone stack height and publish it as a CSS custom
+// property so the player's own avatar (.screen-pos-0) can sit just above the
+// real hand/controls instead of a hardcoded bottom px. Deferred to the next
+// frame so layout has settled after the hand re-renders.
+function syncHandStackHeight() {
+  const apply = () => {
+    const zone = document.querySelector(".control-zone");
+    if (!zone) return;
+    const h = Math.round(zone.getBoundingClientRect().height);
+    // Publish on :root so siblings of .table-felt (e.g. .log-drawer) can read it
+    // too; .screen-pos-0 still inherits the value fine.
+    if (h > 0) document.documentElement.style.setProperty("--hand-stack-h", `${h}px`);
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(apply);
+  else apply();
 }
 
 function describeSelectedCards(seat, hand) {
@@ -1565,8 +1623,8 @@ function describeSelectedCards(seat, hand) {
   return `已选 ${state.selected.size} 张`;
 }
 
-function renderHandRow(container, hand, containerWidth, cardW, bottomOffset) {
-  const maxOffset = Math.min(Math.round(38 * UI), Math.floor((containerWidth - cardW) / Math.max(hand.length - 1, 1)));
+function renderHandRow(container, hand, containerWidth, cardW, bottomOffset, step) {
+  const maxOffset = step || Math.min(Math.round(38 * UI), Math.floor((containerWidth - cardW) / Math.max(hand.length - 1, 1)));
   const totalWidth = cardW + (hand.length - 1) * maxOffset;
   const startX = Math.max(0, (containerWidth - totalWidth) / 2);
 
@@ -1821,13 +1879,16 @@ function exitRoom() {
   if (room && room.phase !== "lobby") {
     if (!confirm("游戏正在进行中，确定要退出房间吗？")) return;
   }
-  // Free our seat if we're still in the lobby so others can use it.
-  if (room && room.phase === "lobby" && state.ws && state.ws.readyState === WebSocket.OPEN) {
+  // 离座：大厅→座位空出来；对局中→AI 接管该座位（服务端按阶段处理），牌局继续。
+  if (room && state.ws && state.ws.readyState === WebSocket.OPEN) {
     const you = room.seats.find((s) => s.isYou);
     if (you) send("leaveSeat");
   }
-  // Stop auto-reconnect from pulling us back in.
+  // Stop auto-reconnect from pulling us back in: flag the intentional exit, drop
+  // the saved room, and cancel any pending reconnect timer.
+  leavingRoom = true;
   localStorage.removeItem("szp.roomCode");
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   state.room = null;
   try { state.ws?.close(); } catch (_) {}
   state.ws = null;

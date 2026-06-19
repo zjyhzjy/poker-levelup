@@ -17,7 +17,7 @@ else
 fi
 
 # --- 隧道 ---
-TUN_PID=$(pgrep -f "cloudflared tunnel --url" | head -1 || true)
+TUN_PID=$(pgrep -f "cloudflared tunnel" | head -1 || true)  # 快速隧道或命名隧道
 if [ -n "$TUN_PID" ]; then
   echo "隧  道   : ✅ 运行中 (PID $TUN_PID)"
 else
@@ -25,7 +25,12 @@ else
 fi
 
 # --- 网址 ---
-URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | tail -1 || true)
+# 命名隧道用固定子域名（由 TUNNEL_HOSTNAME 指定）；快速隧道从日志里抓随机网址。
+if [ -n "${TUNNEL_HOSTNAME:-}" ]; then
+  URL="https://$TUNNEL_HOSTNAME"
+else
+  URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | tail -1 || true)
+fi
 echo "公网网址 : ${URL:-（无，隧道未运行）}"
 
 # --- 可访问性 ---

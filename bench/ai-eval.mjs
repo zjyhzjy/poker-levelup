@@ -6,6 +6,7 @@
 // and zeroes the personality bias, so identical seeds produce identical games and any
 // metric change is attributable purely to the code change.
 import { addAiPlayer, confirmDealer, createRoom, decideAiBid, makeBid, passBid, revealKittyCard, runAiStep, startAuction, startRound, upgradeResult } from "../src/game.js";
+import { resolveForcedSuit } from "./lib/pimc-deal.mjs";
 
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
@@ -35,7 +36,10 @@ function playGame(levels, seed) {
   let steps = 0, ok = true;
   // 离线连跑：清掉每墩之间的展示暂停（trickPauseUntil），否则 runAiStep 会一直
   // 因暂停返回 false、整局卡在第一墩后无法推进（线上由定时器处理，离线必须手动清）。
-  try { while (room.phase !== "roundOver" && steps++ < 3000) { room.trickPauseUntil = 0; runAiStep(room); } }
+  // forcedSuit (翻底定庄) is timer-driven on the server; offline runAiStep stalls in
+  // it (spin countdown is wall-clock), so resolve it the way the server does instead
+  // of letting the deal hang and be miscounted as a crash.
+  try { while (room.phase !== "roundOver" && steps++ < 3000) { room.trickPauseUntil = 0; if (room.phase === "forcedSuit") { resolveForcedSuit(room); continue; } runAiStep(room); } }
   catch { ok = false; }
   if (room.phase !== "roundOver") ok = false;
   return ok ? room : null;

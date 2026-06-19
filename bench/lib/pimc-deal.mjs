@@ -9,7 +9,7 @@ import {
 } from "../../src/game.js";
 import { pimcChoosePlay } from "../../src/ai/pimc.js";
 
-const { PLAYING, ROUND_OVER } = constants.PHASES;
+const { PLAYING, ROUND_OVER, FORCED_SUIT } = constants.PHASES;
 
 export function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
@@ -29,6 +29,43 @@ export function runAuction(room) {
   if (!room.currentBid) { if (room.phase === "auctionReady") startAuction(room); let k = 0; while (room.phase === "auction" && k++ < 10) revealKittyCard(room); }
 }
 
+// When nobody bids voluntarily, revealKittyCard runs forceDealer() and the room
+// lands in the FORCED_SUIT phase guarded by a wall-clock "spin" countdown. The
+// live server resolves this with timers (scheduleAi clears room.forceSpin once the
+// spin elapses, then runAiStep makes the forced dealer call chooseForcedTrump, and
+// scheduleAiBids/scheduleBidTimeout collect the other seats' 亮/不亮 responses).
+// The offline driver has no wall clock, so runAiStep returns false while the spin
+// is "active" and the deal stalls in forcedSuit — previously miscounted as a crash.
+// This replicates the server's resolution synchronously: drop the spin, let the
+// dealer choose its forced trump, then drive every other seat to over-bid (if its
+// heuristic wants to) or pass, which triggers _checkAllBidResponded → confirmDealer.
+export function resolveForcedSuit(room) {
+  if (room.phase !== FORCED_SUIT) return;
+  room.forceSpin = null; // spin countdown is wall-clock; treat it as elapsed (server.js scheduleAi)
+  if (!room.bidResponses[room.dealerSeat]) {
+    if (!runAiStep(room)) return; // dealer chooses 亮自己常主 / 亮无主 / 不亮(沿用底牌花色)
+  }
+  // Response window: each non-dealer seat over-bids if its heuristic wants the deal,
+  // otherwise passes. Loop because an over-bid resets everyone else's response.
+  let guard = 0;
+  while (room.phase === FORCED_SUIT && guard++ < 50) {
+    let acted = false;
+    for (const s of room.seats) {
+      if (room.phase !== FORCED_SUIT) break;
+      if (s.index === room.dealerSeat) continue;
+      if (room.bidResponses[s.index]) continue;
+      const d = decideAiBid(room, s);
+      if (d && room.currentBid && d.strength > room.currentBid.strength) {
+        try { makeBid(room, s.playerId, d.cardIds); } catch { passBid(room, s.playerId); }
+      } else {
+        passBid(room, s.playerId);
+      }
+      acted = true;
+    }
+    if (!acted) break;
+  }
+}
+
 // pimcSide ∈ "none" | "dealer". Returns null if the deal didn't reach/finish play.
 export function playDeal(seed, pimcSide, pimcOpts) {
   const room = createRoom("EVAL", { seatCount: 5 });
@@ -38,7 +75,11 @@ export function playDeal(seed, pimcSide, pimcOpts) {
   runAuction(room);
 
   let g = 0;
-  while (room.phase !== PLAYING && room.phase !== ROUND_OVER && g++ < 60) { room.trickPauseUntil = 0; if (!runAiStep(room)) break; }
+  while (room.phase !== PLAYING && room.phase !== ROUND_OVER && g++ < 60) {
+    room.trickPauseUntil = 0;
+    if (room.phase === FORCED_SUIT) { resolveForcedSuit(room); continue; }
+    if (!runAiStep(room)) break;
+  }
   if (room.phase !== PLAYING) return null;
 
   let nonce = (seed * 0x9e3779b9) | 0;

@@ -68,6 +68,9 @@ const port = Number(process.env.PORT || 3000);
 const rooms = new Map();
 const sockets = new Map();
 const BID_RESPONSE_TIMEOUT_MS = 10000;
+// 单帧负载上限：防止伪造超大长度头让 recvBuffer 无限累积（内存耗尽 / DoS）。
+// 6 人长局的 state 广播也远小于此。
+const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const BURY_TIMEOUT_MS = 120000;
 // 搜索型 AI 的 PIMC 预算（按难度档）。timeBudgetMs 给每步思考设上限，避免阻塞
 // 服务端事件循环过久（回合制 + 友人对局可接受）。rollout 用启发式，不会递归回
@@ -75,8 +78,21 @@ const BURY_TIMEOUT_MS = 120000;
 //   强  ：轻量搜索，采样少、预算短 → 仍近乎秒出，但已用上"记牌器"推演。
 //   大师：深度搜索，采样多、预算长 → 最强，出牌略慢。
 const SEARCH_OPTS = {
-  hard:   { determinizations: 24, maxCandidates: 6, timeBudgetMs: Number(process.env.HARD_PIMC_MS || 400),    rolloutLevel: "hard" },
-  master: { determinizations: 40, maxCandidates: 8, timeBudgetMs: Number(process.env.MASTER_PIMC_MS || 1200), rolloutLevel: "hard" }
+  // 之前线上预算太小（24 次采样/400ms），把搜索"饿着"了——bench 满预算实测 +0.48 级。
+  // 这里适度调大采样/时间（仍受 timeBudget 上限约束，弱网/慢机不会卡死），并让 master
+  // 的 rollout 用"大师"启发式（启用强领牌），之前 rollout 硬编码 hard 导致强领牌失效。
+  // 搜索是同步的，会阻塞单线程事件循环（期间所有房间的 WS/广播/心跳都停）。所以
+  // 预算保持克制：强度增益主要来自启发式（与预算几乎无关）+ master rollout 用强档。
+  // 嫌慢/想更强可用 HARD_PIMC_MS / MASTER_PIMC_MS 临时调高。
+  hard:   { determinizations: 40, maxCandidates: 6, timeBudgetMs: Number(process.env.HARD_PIMC_MS || 450),    rolloutLevel: "hard"   },
+  master: { determinizations: 64, maxCandidates: 8, timeBudgetMs: Number(process.env.MASTER_PIMC_MS || 1300), rolloutLevel: "master" }
+};
+// 提示按钮（hint）专用的轻量 PIMC 预算：用户点击同步触发，需尽量秒出，所以采样
+// 比"强"档更少、时间上限更短，但仍带记牌器推演——比纯启发式更准。搜索失败/超预算
+// 时由 recommendPlay 的强启发式兜底。可用 HINT_PIMC_MS 覆盖时间预算。
+const HINT_PIMC_OPTS = {
+  determinizations: 16, maxCandidates: 6,
+  timeBudgetMs: Number(process.env.HINT_PIMC_MS || 250), rolloutLevel: "hard"
 };
 
 const server = http.createServer((req, res) => {
@@ -144,6 +160,7 @@ setInterval(() => {
     if (room.emptySince == null) { room.emptySince = now; continue; }
     if (now - room.emptySince > ROOM_EMPTY_TTL_MS) {
       if (room.trusteeTimers) for (const t of Object.values(room.trusteeTimers)) clearTimeout(t);
+      if (room.aiTimer) clearTimeout(room.aiTimer);
       rooms.delete(code);
     }
   }
@@ -165,9 +182,32 @@ function serveStatic(urlPath, res) {
       res.end("Not found");
       return;
     }
-    res.writeHead(200, { "Content-Type": contentType(filePath) });
-    res.end(data);
+    let body = data;
+    // 首页里给 app.js / style.css 注入“按文件 mtime 计算的版本号”，改了前端就自动 bust
+    // 浏览器/Cloudflare 缓存（首页本身 no-cache，所以每次都拿到最新版本号，无需手动改）。
+    if (filePath === path.join(publicDir, "index.html")) {
+      try { body = Buffer.from(data.toString("utf8").replace(/\?v=[\w.]+/g, `?v=${assetVersion()}`)); }
+      catch (_) { /* 注入失败就原样发送 */ }
+    }
+    res.writeHead(200, { "Content-Type": contentType(filePath), "Cache-Control": cacheControl(filePath) });
+    res.end(body);
   });
+}
+
+// 前端资源版本号 = app.js / style.css 里最新的修改时间（base36）。文件一变版本就变。
+function assetVersion() {
+  const mtimes = ["app.js", "style.css"].map((n) => {
+    try { return fs.statSync(path.join(publicDir, n)).mtimeMs; } catch (_) { return 0; }
+  });
+  return Math.round(Math.max(...mtimes)).toString(36);
+}
+
+// HTML/JS/CSS 一律 no-cache（每次回源校验），保证改了代码后刷新立即生效，避免手机
+// 缓存旧版导致“明明修了还看到旧的”。大体积静态资源（音频/图片）仍长缓存省流量。
+function cacheControl(filePath) {
+  if (/\.(html|js|css)$/i.test(filePath)) return "no-cache";
+  if (/\.(mp3|wav|ogg|png|jpe?g|gif|webp|svg)$/i.test(filePath)) return "public, max-age=86400";
+  return "no-cache";
 }
 
 function sendJson(res, data) {
@@ -196,8 +236,11 @@ function handleMessage(client, message) {
         client.nickname = seat.nickname;
         seat.connected = true;
         room.spectators.delete(storedId);
+        evictDuplicateClients(room, storedId, client); // 踢掉同 id 的旧连接
+        clearSeatTrusteeTimer(room, seat.index);       // 清掉掉线托管计时，别再误托管已回来的人
         send(client, "hello", { playerId: client.playerId });
         broadcast(room);
+        resumeRoomTimers(room); // 恢复可能因无人而停摆的 AI/叫主推进
       } else {
         // Not found — treat as normal join
         attachToRoom(client, room, payload.nickname);
@@ -228,8 +271,11 @@ function handleMessage(client, message) {
           client.nickname = seat.nickname;
           seat.connected = true;
           room.spectators.delete(storedId);
+          evictDuplicateClients(room, storedId, client); // 踢掉同 id 的旧连接
+          clearSeatTrusteeTimer(room, seat.index);       // 清掉掉线托管计时
           send(client, "hello", { playerId: client.playerId });
           broadcast(room);
+          resumeRoomTimers(room); // 恢复可能因无人而停摆的 AI/叫主推进
           return;
         }
         // Fresh join: still adopt the client-owned id so that if this player
@@ -274,11 +320,30 @@ function handleMessage(client, message) {
       return;
     }
 
-    // Recommended play — deterministic legal minimum, separate from AI strategy.
+    // Recommended play — a genuinely STRONG legal play. First try a light, bounded
+    // PIMC search (the same card-counter the strong AI uses) so the hint reflects
+    // hidden-card reasoning; fall back to the strong heuristic (recommendPlay) if the
+    // search can't run or yields nothing. Both are fast and synchronous, both always
+    // return a legal play, and the whole thing is wrapped so it can never throw.
     if (type === "hint") {
       const room = currentRoom(client);
       let cardIds = [];
-      try { cardIds = recommendPlay(room, client.playerId) || []; } catch { cardIds = []; }
+      try {
+        const seat = room.seats.find((s) => s.playerId === client.playerId);
+        if (room.phase === "playing" && seat && seat.index === room.turnSeat
+            && (room.trickPauseUntil || 0) <= Date.now()) {
+          try {
+            // Light search: few determinizations + short budget so the click stays
+            // snappy (no deep blocking search). pimcChoosePlay returns card objects
+            // from the real hand and never an illegal play.
+            const picked = pimcChoosePlay(room, seat.index, HINT_PIMC_OPTS);
+            if (picked && picked.length) cardIds = picked.map((c) => c.id);
+          } catch { cardIds = []; }
+        }
+      } catch { cardIds = []; }
+      if (!cardIds.length) {
+        try { cardIds = recommendPlay(room, client.playerId) || []; } catch { cardIds = []; }
+      }
       send(client, "hint", { cardIds });
       return;
     }
@@ -343,6 +408,8 @@ function handleMessage(client, message) {
     if (["bid", "passBid", "startAuction", "revealKitty", "sixCallTrump", "sixPassTrump", "chooseForcedTrump"].includes(type)) {
       scheduleAiBids(room);
     }
+    // 6 人叫主：无人亮主时也要有超时兜底，避免真人发呆/掉线把整局卡死。
+    if (room.phase === "sixTrump") scheduleSixTrumpTimeout(room);
 
     scheduleAi(room);
   } catch (error) {
@@ -359,6 +426,20 @@ function setClientRoom(client, room) {
   }
   client.roomCode = room.code;
   (room.clients ??= new Set()).add(client);
+}
+
+// 同一 playerId 重连/双开页时，房间里可能残留旧的 client 连接（弱网下旧 socket 的
+// close/FIN 往往滞后于新连接）。把旧连接踢掉，避免重复 client 累积——否则旧 socket
+// 关闭时 disconnect() 会把刚回来的在线玩家误标记为掉线。`keep` 是要保留的新连接。
+function evictDuplicateClients(room, playerId, keep) {
+  if (!room.clients) return;
+  for (const c of [...room.clients]) {
+    if (c !== keep && c.playerId === playerId) {
+      room.clients.delete(c);
+      sockets.delete(c.socket);
+      try { c.socket.destroy(); } catch (_) { /* already dead */ }
+    }
+  }
 }
 
 function attachToRoom(client, room, nickname) {
@@ -418,7 +499,7 @@ function startKickVote(room, client, targetSeatIndex) {
     if (c.roomCode !== room.code) continue;
     const seat = room.seats.find((s) => s.playerId === c.playerId);
     if (!seat || seat.index === vote.initiatorSeat || seat.index === vote.targetSeat) continue;
-    send(c, "kickVote", payload);
+    try { send(c, "kickVote", payload); } catch (_) { /* dead socket; don't abort the fan-out */ }
   }
 }
 
@@ -466,6 +547,7 @@ function scheduleDealing(room) {
       // Dealing finished. If a bid is pending, make sure it still gets resolved.
       if (room.currentBid && ["dealing", "auctionReady", "auction"].includes(room.phase)) scheduleBidTimeout(room);
       scheduleAiBids(room); // AI seats may now open the bidding
+      if (room.phase === "sixTrump") scheduleSixTrumpTimeout(room); // 6人叫主无人亮主的超时兜底
       scheduleAi(room);
     }
   }, DEAL_ROUND_MS);
@@ -475,7 +557,9 @@ function scheduleDealing(room) {
 // by auction events (deal finished, a bid placed, a card revealed) so it respects
 // the reveal/response-timeout pacing instead of firing through the fast 350ms AI loop.
 function scheduleAiBids(room) {
-  const aiSeats = room.seats.filter((s) => s.isAi && s.playerId);
+  // 托管座位（s.trustee，真人挂机/掉线）也要参与抢庄/亮主，用与 AI 相同的
+  // decideAiBid / decideAiSixTrump 策略，否则只能靠超时被动 pass，整局偏弱。
+  const aiSeats = room.seats.filter((s) => (s.isAi || s.trustee) && s.playerId);
   aiSeats.forEach((seat, i) => {
     setTimeout(() => {
       if (room.dealing) return;
@@ -531,11 +615,12 @@ function scheduleBidTimeout(room, delay = BID_RESPONSE_TIMEOUT_MS) {
     try {
       if (room.phase === "sixTrump") {
         if (room.currentBid) {
+          const resp0 = room.bidResponses;
           for (const seat of room.seats) {
-            if (seat.playerId && !room.bidResponses[seat.index]) {
-              passSixTrump(room, seat.playerId);
-              if (room.phase !== "sixTrump") break;
-            }
+            // 一旦 bidResponses 被重置（临时上台/重发）或离开 sixTrump，立即停止——
+            // 否则会把后面的座位 pass 进“新一轮”叫主，剥夺其叫主权。
+            if (room.phase !== "sixTrump" || room.bidResponses !== resp0) break;
+            if (seat.playerId && !room.bidResponses[seat.index]) passSixTrump(room, seat.playerId);
           }
         }
       } else {
@@ -549,6 +634,49 @@ function scheduleBidTimeout(room, delay = BID_RESPONSE_TIMEOUT_MS) {
       broadcast(room); scheduleAi(room);
     } catch (_) {}
   }, delay);
+}
+
+// 6 人叫主阶段专用兜底：scheduleBidTimeout 只在“已有人亮主”时才会推进（无 bid 时第
+// 一行就 return 了），所以无人亮主、又有真人发呆/掉线时整局会卡死。这里给所有还没响应
+// 的座位一个统一的响应窗口，过期就替他们“不亮”，从而触发 _checkAllSixTrumpResponded
+// （进扣底 / 临时上台再叫 / 作废重发）。用 sixTrumpTimeoutAt 去重，避免计时器堆叠。
+function scheduleSixTrumpTimeout(room) {
+  if (room.phase !== "sixTrump" || room.dealing) return;
+  if (!room.clients || room.clients.size === 0) return; // 废弃房间不空跑
+  const now = Date.now();
+  if (room.sixTrumpTimeoutAt && room.sixTrumpTimeoutAt > now) return; // 已在计时
+  if (!room.bidResponseReadyAt || room.bidResponseReadyAt <= now) {
+    room.bidResponseReadyAt = now + BID_RESPONSE_TIMEOUT_MS;
+  }
+  const fireAt = room.bidResponseReadyAt + 100;
+  room.sixTrumpTimeoutAt = fireAt;
+  setTimeout(() => {
+    room.sixTrumpTimeoutAt = 0;
+    if (room.phase !== "sixTrump" || room.dealing) return;
+    if ((room.bidResponseReadyAt || 0) > Date.now()) { scheduleSixTrumpTimeout(room); return; }
+    try {
+      const resp0 = room.bidResponses;
+      for (const seat of room.seats) {
+        // bidResponses 被重置（临时上台/重发）或离开 sixTrump 即停，别 pass 进新一轮。
+        if (room.phase !== "sixTrump" || room.bidResponses !== resp0) break;
+        if (seat.playerId && !room.bidResponses[seat.index]) passSixTrump(room, seat.playerId);
+      }
+      broadcast(room);
+      scheduleAiBids(room);
+      scheduleAi(room);
+      if (room.phase === "sixTrump") scheduleSixTrumpTimeout(room); // 临时上台后重新叫主则继续兜底
+    } catch (_) { /* 状态已推进，忽略 */ }
+  }, Math.max(200, fireAt - now));
+}
+
+// 重连后恢复可能因“房间一度无人”而停摆的自动推进计时器。scheduleAi 在无连接时会
+// 提前 return，所以重连后必须主动重新拉起，否则轮到 AI 时不会再出牌。
+function resumeRoomTimers(room) {
+  scheduleAi(room);
+  scheduleAiBids(room);
+  if (room.phase === "sixTrump") scheduleSixTrumpTimeout(room);
+  if (room.phase === "burying") scheduleBuryTimeout(room);
+  if (room.currentBid) scheduleBidTimeout(room);
 }
 
 // 搜索档（强 / 大师）：轮到搜索型 AI（或其托管座位）在出牌阶段行动时，用 PIMC
@@ -573,6 +701,9 @@ function searchStep(room) {
 }
 
 function scheduleAi(room) {
+  // 没有任何活跃连接（在座/观战）的废弃房间不再空跑 AI——否则全 AI 房会每 350ms
+  // 持续推演+广播直到本局结束，白白占 CPU。重连时由 resumeRoomTimers 重新拉起。
+  if (!room.clients || room.clients.size === 0) return;
   scheduleAutoTrustee(room); // 轮到掉线真人时宽限后自动托管，避免整桌卡死
   if (room.phase === "burying") scheduleBuryTimeout(room);
   if (room.phase === "playing" && (room.trickPauseUntil || 0) > Date.now()) {
@@ -594,7 +725,10 @@ function scheduleAi(room) {
     scheduleAiBids(room);     // 非庄家 AI 亮主/不亮
     scheduleBidTimeout(room); // 都不亮 / 庄家不定则超时按底牌花色定庄
   }
-  setTimeout(() => {
+  // 单飞：同一房间最多排一个 AI 行动计时，避免多条 AI 链并存导致节奏叠加、广播扎堆。
+  if (room.aiTimer) return;
+  room.aiTimer = setTimeout(() => {
+    room.aiTimer = null;
     let moved = false;
     try {
       moved = searchStep(room) || runAiStep(room);
@@ -648,6 +782,14 @@ function actorSeat(room) {
   if (["forcedSuit", "burying", "friend"].includes(room.phase)) return room.dealerSeat;
   return null; // 抢庄阶段由 scheduleBidTimeout 兜底
 }
+// 清掉某个座位待触发的自动托管计时（重连后调用，避免把已回来的玩家强制托管）。
+function clearSeatTrusteeTimer(room, seatIndex) {
+  if (room.trusteeTimers && room.trusteeTimers[seatIndex]) {
+    clearTimeout(room.trusteeTimers[seatIndex]);
+    delete room.trusteeTimers[seatIndex];
+  }
+}
+
 function scheduleAutoTrustee(room) {
   room.trusteeTimers = room.trusteeTimers || {};
   const idx = actorSeat(room);
@@ -675,15 +817,39 @@ function scheduleAutoTrustee(room) {
   }, grace);
 }
 
+// 托管座位 isAi=false，算真人；只要还有任何真人座位，房间就保留。
+function roomHasHumanSeat(room) {
+  return room.seats.some((s) => s.playerId && !s.isAi);
+}
+// 房间里没有真人座位、也没有任何在线连接 → 全是 AI 的废弃房间，直接关掉并清理计时器。
+function maybeCloseAbandonedRoom(room) {
+  if (!room || !rooms.has(room.code)) return false;
+  const noClients = !room.clients || room.clients.size === 0;
+  if (!roomHasHumanSeat(room) && noClients) {
+    if (room.trusteeTimers) for (const t of Object.values(room.trusteeTimers)) clearTimeout(t);
+      if (room.aiTimer) clearTimeout(room.aiTimer);
+    rooms.delete(room.code);
+    return true;
+  }
+  return false;
+}
+
 function disconnect(client) {
   sockets.delete(client.socket);
   const room = client.roomCode ? rooms.get(client.roomCode) : null;
   if (!room) return;
   room.clients?.delete(client);
-  for (const seat of room.seats) {
-    if (seat.playerId === client.playerId) seat.connected = false;
+  // 只有当房间里没有“另一个仍在线、同一 playerId”的连接时，才把座位标记为掉线。
+  // 防止重连竞态 / 双开页：旧 socket 关闭不应把刚回来的在线玩家误判为掉线并触发自动托管。
+  const stillConnected = room.clients && [...room.clients].some((c) => c.playerId === client.playerId);
+  if (!stillConnected) {
+    for (const seat of room.seats) {
+      if (seat.playerId === client.playerId) seat.connected = false;
+    }
+    if (room.spectators.has(client.playerId)) room.spectators.get(client.playerId).connected = false;
   }
-  if (room.spectators.has(client.playerId)) room.spectators.get(client.playerId).connected = false;
+  // 最后一个真人退出后只剩 AI（且无连接）→ 关掉这桌 AI 自嗨的废弃房间。
+  if (maybeCloseAbandonedRoom(room)) return;
   broadcast(room);
   scheduleAutoTrustee(room); // 掉线的正是当前该行动的人时，启动自动托管计时
 }
@@ -735,6 +901,12 @@ function handleFrame(client, chunk) {
       if (buf.length - offset < 10) break;
       len = Number(buf.readBigUInt64BE(offset + 2));
       headerLen = 10;
+    }
+    // 拒绝异常超大帧：否则伪造的长度头会让 recvBuffer 无限累积直到内存耗尽。
+    if (len > MAX_FRAME_BYTES) {
+      try { client.socket.destroy(); } catch (_) { /* already dead */ }
+      client.recvBuffer = null;
+      return;
     }
     const maskLen = masked ? 4 : 0;
     if (buf.length - offset < headerLen + maskLen + len) break; // 整帧未到齐，等续传

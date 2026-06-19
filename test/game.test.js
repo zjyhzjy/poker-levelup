@@ -467,6 +467,63 @@ test("AI 垫牌优先做空门（基础）", () => {
   assert.ok(voided > 30, `应当优先垫掉短门梅花做空门，实际 ${voided}/40`);
 });
 
+test("AI 缺门时盖吃对家的有分牌（盖主吃分）", () => {
+  const room = createRoom("OVERRUFF");
+  room.levelRank = "2"; room.trumpSuit = "hearts"; room.dealerSeat = 0; room.friendSeat = null;
+  const deck = createDeck();
+  const spadeK = deck.find((c) => c.rank === "K" && c.suit === "spades"); // 对家领 10 分黑桃
+  const trump3 = deck.find((c) => c.rank === "3" && c.suit === "hearts"); // 小主，可盖吃
+  const trump4 = deck.find((c) => c.rank === "4" && c.suit === "hearts");
+  const diamond5 = deck.find((c) => c.rank === "5" && c.suit === "diamonds"); // 缺黑桃时可垫的低牌
+  room.seats[0].playerId = "e0";
+  const ai = room.seats[1];
+  ai.playerId = "ai1"; ai.isAi = true; ai.aiLevel = "hard";
+  ai.hand = [trump3, trump4, diamond5]; // 黑桃缺门：可盖吃或垫牌
+  room.currentTrick = [{ seat: 0, cards: [spadeK], shape: analyzeShape([spadeK], room), points: 10 }];
+  room.turnSeat = 1;
+  let ruffed = 0;
+  for (let k = 0; k < 40; k++) { ai.aiRngState = (k * 2246822519 + 3) | 0; const p = chooseAiPlay(room, ai, [spadeK]); if (p.length === 1 && p[0].suit === "hearts") ruffed++; }
+  assert.ok(ruffed > 30, `缺门时应当盖吃对家 10 分的黑桃，实际 ${ruffed}/40`);
+});
+
+test("AI 首出会甩出全大组合（甩牌兑现）", () => {
+  const room = createRoom("BOSSTHROW");
+  room.levelRank = "2"; room.trumpSuit = "hearts"; room.dealerSeat = 0; room.friendSeat = null;
+  const deck = createDeck();
+  const ai = room.seats[0];
+  ai.playerId = "ai0"; ai.isAi = true; ai.aiLevel = "hard";
+  // 持有黑桃全部 3 张 A 与 3 张 K（两个绝对最大组），对手无法阻挡 → 应当甩出
+  ai.hand = [
+    ...deck.filter((c) => c.rank === "A" && c.suit === "spades").slice(0, 3),
+    ...deck.filter((c) => c.rank === "K" && c.suit === "spades").slice(0, 3),
+    deck.find((c) => c.rank === "3" && c.suit === "clubs")
+  ];
+  // 把另外 6 张同点牌算作已出现，使 isGroupBoss 判定这两组为绝对最大。
+  room.finishedTricks = [];
+  let threw = 0;
+  for (let k = 0; k < 40; k++) {
+    ai.aiRngState = (k * 2654435761 + 11) | 0;
+    const p = chooseAiPlay(room, ai, null);
+    if (p.length > 3 && p.every((c) => c.suit === "spades")) threw++;
+  }
+  assert.ok(threw > 0, `应当至少有时甩出全大的黑桃 A+K，实际 ${threw}/40`);
+});
+
+test("弱 AI 偶尔会下注（避免叫牌阶段毫无对抗）", () => {
+  const room = createRoom("EASYSOMETIMES");
+  const deck = createDeck();
+  const seat = room.seats[0];
+  seat.playerId = "a"; seat.isAi = true; seat.aiLevel = "easy"; seat.level = "K";
+  seat.hand = [
+    ...deck.filter((c) => c.rank === "K" && c.suit === "spades").slice(0, 1), // 一张级牌：strength 1
+    ...deck.filter((c) => c.suit === "spades" && c.rank !== "K").slice(0, 10),
+    ...deck.filter((c) => c.suit === "clubs").slice(0, 12)
+  ];
+  let bids = 0;
+  for (let k = 0; k < 60; k++) { seat.aiRngState = (k * 40503 + 5) | 0; if (decideAiBid(room, seat)) bids++; }
+  assert.ok(bids > 0 && bids < 60, `弱 AI 应当偶尔下注但非每次，实际 ${bids}/60`);
+});
+
 test("三条锁定剩两张时不死锁：锁定对不强制跟对，单张合法", () => {
   // 复刻 bench seed 75×7919 的死锁：锁定三条只剩两张、恰是该门唯一天然对子。
   const room = createRoom("LOCK1");

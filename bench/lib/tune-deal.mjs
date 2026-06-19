@@ -5,9 +5,9 @@
 // seed the dealer/friend assignment is identical regardless of weights → clean
 // common-random-numbers comparison.
 import { addAiPlayer, createRoom, runAiStep, startRound, constants, upgradeResult } from "../../src/game.js";
-import { runAuction, mulberry32 } from "./pimc-deal.mjs";
+import { runAuction, mulberry32, resolveForcedSuit } from "./pimc-deal.mjs";
 
-const { PLAYING, ROUND_OVER } = constants.PHASES;
+const { PLAYING, ROUND_OVER, FORCED_SUIT } = constants.PHASES;
 
 // Returns the dealer team's net level-steps (+win / −loss), or null if the deal
 // didn't reach/finish play. Weights are applied per-decision so the friend seat
@@ -21,7 +21,11 @@ export function tunedDealNet(seed, dealerW, otherW) {
     runAuction(room);
 
     let g = 0;
-    while (room.phase !== PLAYING && room.phase !== ROUND_OVER && g++ < 60) { room.trickPauseUntil = 0; if (!runAiStep(room)) break; }
+    while (room.phase !== PLAYING && room.phase !== ROUND_OVER && g++ < 60) {
+      room.trickPauseUntil = 0;
+      if (room.phase === FORCED_SUIT) { resolveForcedSuit(room); continue; }
+      if (!runAiStep(room)) break;
+    }
     if (room.phase !== PLAYING) return null;
 
     let steps = 0;

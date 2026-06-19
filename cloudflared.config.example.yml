@@ -1,0 +1,19 @@
+# Cloudflare 命名隧道配置模板
+# 用法：复制本文件到 ~/.cloudflared/config.yml，再把下面的占位符替换成你自己的值。
+#   cp cloudflared.config.example.yml ~/.cloudflared/config.yml
+# 详细步骤见 docs/deploy-domain.md。
+
+# 隧道的 UUID（执行 `cloudflared tunnel create poker` 后打印出来；
+# 也可用 `cloudflared tunnel list` 查看）。
+tunnel: 00000000-0000-0000-0000-000000000000
+
+# 凭据文件路径（create 命令会打印出来，通常在 ~/.cloudflared/<UUID>.json）。
+credentials-file: /Users/zifanzhang/.cloudflared/00000000-0000-0000-0000-000000000000.json
+
+# 入站路由规则：从上往下匹配，命中即停。
+ingress:
+  # 把你的子域名指向本机游戏服务（server.js 监听的端口）。
+  - hostname: poker.zifanzhang.com
+    service: http://localhost:3000
+  # 兜底规则（必须放最后）：其它一切请求返回 404。
+  - service: http_status:404

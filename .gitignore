@@ -8,3 +8,6 @@ bench/tune-progress.log
 public/voice/cand/
 asset/
 public/voice/cand2/
+.claude/
+screenshots/
+Domain.pdf
