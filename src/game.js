@@ -407,7 +407,7 @@ export function makeBid(room, playerId, cardIds) {
     : evaluateBid(cards, seat.level);
   if (!bid) {
     throw new Error(fixedTeamBid
-      ? (isClassic4(room) ? `只能亮当前等级 ${fixedLevelRank} 的同花色牌，或选择至少 2 张王亮无主` : `只能亮当前等级 ${fixedLevelRank} 的同花色牌，或选择 3 张王亮无主`)
+      ? (isClassic4(room) ? `只能亮当前等级 ${fixedLevelRank} 的同花色牌，或选择同类双王亮无主` : `只能亮当前等级 ${fixedLevelRank} 的同花色牌，或选择 3 张王亮无主`)
       : "只能亮自己的常主牌，或任意 3 张王");
   }
   if (room.currentBid && compareBid(bid, room.currentBid) <= 0) throw new Error("必须用更高强度抢庄");
@@ -506,7 +506,7 @@ export function callSixTrump(room, playerId, cardIds) {
   const levelRank = openingAuction ? seat.level : room.levelRank;
   const cards = pickCards(seat.hand, cardIds);
   const bid = evaluateFixedTeamTrumpCall(room, cards, levelRank);
-  if (!bid) throw new Error(isClassic4(room) ? `只能亮当前等级 ${levelRank} 的同花色牌，或选择至少 2 张王亮无主` : `只能亮当前等级 ${levelRank} 的同花色牌，或选择 3 张王亮无主`);
+  if (!bid) throw new Error(isClassic4(room) ? `只能亮当前等级 ${levelRank} 的同花色牌，或选择同类双王亮无主` : `只能亮当前等级 ${levelRank} 的同花色牌，或选择 3 张王亮无主`);
   if (room.currentBid && compareBid(bid, room.currentBid) <= 0) throw new Error("必须用更高强度盖主");
 
   if (openingAuction || room.dealerSeat === null) {

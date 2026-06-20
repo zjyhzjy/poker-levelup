@@ -29,9 +29,12 @@ export function upgradeResultFixedTeam6(attackers) {
 
 export function buryMultiplierFixedTeam6(shape) {
   if (!shape) return 2;
-  if (shape.type === "pair") return 4;
-  if (shape.type === "triple") return 8;
-  if (shape.type === "tractor") return 2 ** (shape.unit * shape.count);
+  if (shape.type === "pair") return 3;
+  if (shape.type === "triple") return 4;
+  if (shape.type === "tractor") {
+    if (shape.unit === 2) return shape.count + 3;       // 两连对 ×5，每多一对 +1
+    if (shape.unit === 3) return 2 * shape.count + 2;   // 两连刻 ×6，每多一刻 +2
+  }
   return 2;
 }
 

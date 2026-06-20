@@ -12,20 +12,23 @@ export const classic4Rules = {
 };
 
 export function upgradeResultClassic4(attackers) {
+  if (attackers < 0) {
+    const steps = 4 + Math.floor((-attackers - 1) / 40);
+    return { side: "dealer", steps, label: `庄家队升 ${steps} 级` };
+  }
   if (attackers === 0) return { side: "dealer", steps: 3, label: "庄家队大光，升 3 级" };
   if (attackers < 40) return { side: "dealer", steps: 2, label: "庄家队小光，升 2 级" };
   if (attackers < 80) return { side: "dealer", steps: 1, label: "庄家队升 1 级" };
-  if (attackers < 120) return { side: "attackers", steps: 0, label: "闲家队上台，不升级" };
-  if (attackers < 160) return { side: "attackers", steps: 1, label: "闲家队上台，升 1 级" };
-  if (attackers < 200) return { side: "attackers", steps: 2, label: "闲家队上台，升 2 级" };
-  return { side: "attackers", steps: 3, label: "闲家队上台，升 3 级" };
+  const steps = Math.floor((attackers - 80) / 40);
+  return { side: "attackers", steps, label: steps === 0 ? "闲家队上台，不升级" : `闲家队上台，升 ${steps} 级` };
 }
 
-// 4 人 80 分扣底倍率独立于 5/6 人：单张 ×2、对子 ×4、拖拉机固定 ×8。
+// 4 人 80 分按维基/竞赛双升表：单张 ×2、对子 ×4；
+// 连对两连对 ×6，每多一对 +2。
 export function buryMultiplierClassic4(shape) {
   if (!shape) return 2;
   if (shape.type === "pair") return 4;
-  if (shape.type === "tractor") return 8;
+  if (shape.type === "tractor") return shape.unit === 2 ? 2 * shape.count + 2 : 2;
   return 2;
 }
 
@@ -35,7 +38,8 @@ export function evaluateClassic4TrumpCall(cards, levelRank) {
 
 function evaluateFixedTeamTrumpCall(cards, levelRank, rules) {
   if (!cards.length) return null;
-  if (cards.length >= rules.noTrumpJokerCount && cards.every((card) => card.suit === "joker")) {
+  if (cards.length === rules.noTrumpJokerCount
+      && cards.every((card) => card.suit === "joker" && card.rank === cards[0].rank)) {
     const bigs = cards.filter((card) => card.rank === "bigJoker").length;
     return { strength: cards.length + (bigs >= cards.length ? 3 : 2), levelRank, trumpSuit: null, noTrump: true };
   }

@@ -765,6 +765,33 @@ body.desktop .seats.players-6 .played-card .card-center.joker-text,
 body.desktop .trick-area.players-6 .played-card .card-center.joker-text { font-size: 15px; }
 body.desktop .players-6 .screen-pos-1 { bottom: 30%; right: 2%; top: auto; left: auto; }
 body.desktop .players-6 .screen-pos-5 { bottom: 30%; left: 2%; right: auto; top: auto; }
+
+/* Desktop table geometry. 头像按相对坐标摆在规则形状的顶点：
+   4 人十字，5 人正五边形（顶部为水平边、自己在底部尖点），6 人正六边形。 */
+body.desktop .seats .seat {
+  left: var(--seat-x);
+  top: var(--seat-y);
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+}
+body.desktop .players-4 .screen-pos-0 { --seat-x: 50%; --seat-y: 66%; }
+body.desktop .players-4 .screen-pos-1 { --seat-x: 84%; --seat-y: 50%; }
+body.desktop .players-4 .screen-pos-2 { --seat-x: 50%; --seat-y: 14%; }
+body.desktop .players-4 .screen-pos-3 { --seat-x: 16%; --seat-y: 50%; }
+
+body.desktop .players-5 .screen-pos-0 { --seat-x: 50%; --seat-y: 66%; }
+body.desktop .players-5 .screen-pos-1 { --seat-x: 80%; --seat-y: 58%; }
+body.desktop .players-5 .screen-pos-2 { --seat-x: 68%; --seat-y: 18%; }
+body.desktop .players-5 .screen-pos-3 { --seat-x: 32%; --seat-y: 18%; }
+body.desktop .players-5 .screen-pos-4 { --seat-x: 20%; --seat-y: 58%; }
+
+body.desktop .players-6 .screen-pos-0 { --seat-x: 50%; --seat-y: 66%; }
+body.desktop .players-6 .screen-pos-1 { --seat-x: 78%; --seat-y: 66%; }
+body.desktop .players-6 .screen-pos-2 { --seat-x: 78%; --seat-y: 34%; }
+body.desktop .players-6 .screen-pos-3 { --seat-x: 50%; --seat-y: 16%; }
+body.desktop .players-6 .screen-pos-4 { --seat-x: 22%; --seat-y: 34%; }
+body.desktop .players-6 .screen-pos-5 { --seat-x: 22%; --seat-y: 66%; }
 /* 矮屏（360×640、地址栏展开等）：下位座位再上抬、手牌区压低，给座位腾空间 */
 @media (orientation: portrait) and (max-height: 700px) {
   .players-6 .screen-pos-1, .players-6 .screen-pos-5 { bottom: 40%; }
@@ -793,11 +820,9 @@ body.desktop .players-6 .screen-pos-5 { bottom: 30%; left: 2%; right: auto; top:
   margin-bottom: 4px;
 }
 
-/* ─── Central Trick Area ─────────────────────────────────────
-   本墩所有人出的牌统一渲染到屏幕正中的共享区域，每家按其相对方位
-   （trick-pos-N）从中心向外做一个小偏移，互不压叠。偏移量 = 基准 --tx/--ty
-   （竖屏手机像素）× 半径倍率 --rx/--ry（横屏拉宽、桌面整体放大）。牌片比
-   手牌略小（scale）。 */
+/* ─── Central Trick Area: shared structure ───────────────────
+   本墩所有人出的牌统一渲染到共享区域。这里只保留结构和坐标公式；
+   手机/桌面各自的中心点、半径和缩放在下面分开定义，避免互相牵连。 */
 .trick-area {
   position: absolute;
   inset: 0;
@@ -805,11 +830,13 @@ body.desktop .players-6 .screen-pos-5 { bottom: 30%; left: 2%; right: auto; top:
   pointer-events: none;
   --rx: 1;
   --ry: 1;
+  --trick-center-y: 44%;
+  --trick-scale: .96;
 }
 .trick-slot {
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: var(--trick-center-y);
   transform: translate(
     calc(-50% + var(--tx, 0) * var(--rx) * 1px),
     calc(-50% + var(--ty, 0) * var(--ry) * 1px)
@@ -820,18 +847,21 @@ body.desktop .players-6 .screen-pos-5 { bottom: 30%; left: 2%; right: auto; top:
 .trick-cards {
   position: relative;
   display: inline-block;
-  transform: scale(var(--trick-scale, .8));
+  transform: scale(var(--trick-scale));
   transform-origin: center center;
 }
 
-/* 横屏拉宽横向、压扁纵向；桌面整体放大（桌面也是 landscape 朝向，
-   但 body.desktop 选择器特异性更高，覆盖横屏规则）。 */
+/* Mobile trick layout. 这些是手机默认值；横屏只改手机半径/中心。 */
 @media (orientation: landscape) {
-  .trick-area { --rx: 1.7; --ry: .82; }
+  body:not(.desktop) .trick-area {
+    --rx: 1.7;
+    --ry: .82;
+    --trick-center-y: 48%;
+    --trick-scale: .92;
+  }
 }
-body.desktop .trick-area { --rx: 1.45; --ry: 1.4; }
 
-/* 各座位数下、每个相对方位的中心偏移（竖屏手机基准像素） */
+/* 各座位数下、每个相对方位的中心偏移（手机基准像素） */
 .trick-area.players-4 .trick-pos-0 { --tx: 0;    --ty: 112; }
 .trick-area.players-4 .trick-pos-1 { --tx: 128;  --ty: 0; }
 .trick-area.players-4 .trick-pos-2 { --tx: 0;    --ty: -112; }
@@ -849,6 +879,74 @@ body.desktop .trick-area { --rx: 1.45; --ry: 1.4; }
 .trick-area.players-6 .trick-pos-3 { --tx: 0;    --ty: -120; }
 .trick-area.players-6 .trick-pos-4 { --tx: -112; --ty: -38; }
 .trick-area.players-6 .trick-pos-5 { --tx: -98;  --ty: 60; }
+
+.trick-area.players-6 {
+  --trick-scale: .9;
+}
+.trick-area.players-6 .played-card {
+  width: 50px;
+  height: 71px;
+  border-radius: 7px;
+}
+.trick-area.players-6 .played-card .card-rank { font-size: 14px; }
+.trick-area.players-6 .played-card .card-suit-sm { font-size: 10px; }
+.trick-area.players-6 .played-card .card-center { font-size: 25px; }
+.trick-area.players-6 .played-card .card-center.joker-text { font-size: 13px; }
+
+/* Desktop trick layout. 桌面单独放大半径，让牌更靠近对应玩家。 */
+body.desktop .trick-area {
+  --trick-scale: .9;
+}
+body.desktop .trick-slot {
+  left: var(--play-x);
+  top: var(--play-y);
+  transform: translate(-50%, -50%);
+}
+body.desktop .trick-area.players-4 .trick-pos-0 { --play-x: 50%; --play-y: 60%; }
+body.desktop .trick-area.players-4 .trick-pos-1 { --play-x: 72%; --play-y: 50%; }
+body.desktop .trick-area.players-4 .trick-pos-2 { --play-x: 50%; --play-y: 30%; }
+body.desktop .trick-area.players-4 .trick-pos-3 { --play-x: 28%; --play-y: 50%; }
+
+body.desktop .trick-area.players-5 .trick-pos-0 { --play-x: 50%; --play-y: 60%; }
+body.desktop .trick-area.players-5 .trick-pos-1 { --play-x: 72%; --play-y: 57%; }
+body.desktop .trick-area.players-5 .trick-pos-2 { --play-x: 64%; --play-y: 28%; }
+body.desktop .trick-area.players-5 .trick-pos-3 { --play-x: 36%; --play-y: 28%; }
+body.desktop .trick-area.players-5 .trick-pos-4 { --play-x: 28%; --play-y: 57%; }
+
+body.desktop .trick-area.players-6 .trick-pos-0 { --play-x: 50%; --play-y: 60%; }
+body.desktop .trick-area.players-6 .trick-pos-1 { --play-x: 68%; --play-y: 66%; }
+body.desktop .trick-area.players-6 .trick-pos-2 { --play-x: 68%; --play-y: 34%; }
+body.desktop .trick-area.players-6 .trick-pos-3 { --play-x: 50%; --play-y: 30%; }
+body.desktop .trick-area.players-6 .trick-pos-4 { --play-x: 32%; --play-y: 34%; }
+body.desktop .trick-area.players-6 .trick-pos-5 { --play-x: 32%; --play-y: 66%; }
+body.desktop .trick-area.players-6 {
+  --trick-scale: .86;
+}
+@media (max-width: 1199px) {
+  body.desktop .trick-area {
+    --trick-scale: .72;
+  }
+  body.desktop .trick-area.players-6 {
+    --trick-scale: .68;
+  }
+}
+@media (min-width: 1200px) and (max-width: 1399px) {
+  body.desktop .trick-area {
+    --trick-scale: .82;
+  }
+  body.desktop .trick-area.players-6 {
+    --trick-scale: .78;
+  }
+}
+body.desktop .trick-area.players-6 .played-card {
+  width: 68px;
+  height: 96px;
+  border-radius: 9px;
+}
+body.desktop .trick-area.players-6 .played-card .card-rank { font-size: 19px; }
+body.desktop .trick-area.players-6 .played-card .card-suit-sm { font-size: 15px; }
+body.desktop .trick-area.players-6 .played-card .card-center { font-size: 34px; }
+body.desktop .trick-area.players-6 .played-card .card-center.joker-text { font-size: 18px; }
 
 /* 本墩"最大"的一家高亮（金边 + 最大角标），贴着缩放后的牌组。 */
 .trick-slot.winning .trick-cards {
@@ -1581,8 +1679,9 @@ body.desktop .friend-pop { font-size: 30px; }
 
 .ping-status {
   position: absolute;
-  top: 8px;
-  right: 10px;
+  top: 0;
+  left: 10px;
+  right: auto;
   z-index: 7;
   min-width: 72px;
   padding: 3px 8px;
@@ -1756,34 +1855,48 @@ body.desktop .friend-pop { font-size: 30px; }
 }
 .log-drawer {
   position: fixed;
-  bottom: 0; right: 0;
+  top: calc(env(safe-area-inset-top) + 38px);
+  right: 0;
+  bottom: auto;
   z-index: 20;
+  width: min(140px, 80vw);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0;
 }
 
 .log-toggle {
-  position: absolute;
-  bottom: 100%; right: 0;
-  padding: 5px 10px;
-  font-size: 11px;
+  position: static;
+  order: 1;
+  padding: 3px 6px;
+  font-size: 8px;
   background: rgba(0,0,0,.7);
   border: 1px solid rgba(200,144,45,.3);
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
+  border-radius: 0;
   color: var(--gold);
   cursor: pointer;
 }
+#standingsToggle {
+  border-radius: 6px 0 0 0;
+  border-right: none;
+}
+#logToggle {
+  border-radius: 0 0 0 0;
+}
 
 .log-panel {
-  width: min(280px, 80vw);
+  order: 2;
+  width: 100%;
   max-height: 0;
   overflow: hidden;
   transition: max-height .3s ease;
   background: rgba(0,0,0,.85);
-  border-left: 1px solid rgba(200,144,45,.3);
-  border-top: 1px solid rgba(200,144,45,.3);
+  border: 1px solid rgba(200,144,45,.3);
+  border-radius: 0 0 8px 8px;
 }
 
-.log-panel.open { max-height: 220px; overflow-y: auto; }
+.log-panel.open { max-height: 110px; overflow-y: auto; }
 
 .history-list { padding: 6px 8px; font-size: 11px; color: #ddd; }
 .history-empty { padding: 12px; color: var(--muted-felt); text-align: center; }
@@ -1797,8 +1910,8 @@ body.desktop .friend-pop { font-size: 30px; }
 .hcard.red { color: #ff7a7a; }
 .hcard.black { color: #ededed; }
 
-#standingsToggle { right: 66px; }
-body.desktop #standingsToggle { right: 82px; }
+#standingsToggle { right: auto; }
+body.desktop #standingsToggle { right: auto; }
 .standings-list { padding: 6px 8px; font-size: 11px; color: #ddd; }
 .sd-head { color: var(--gold); font-weight: 600; margin: 6px 0 3px; }
 .sd-lvrow, .sd-row { display: flex; justify-content: space-between; gap: 8px; padding: 2px 3px; }
@@ -1917,11 +2030,15 @@ body.desktop .bid-reveal-label { font-size: 18px; }
 body.desktop .seat-btn { font-size: 14px; padding: 6px 12px; }
 body.desktop .context-controls button,
 body.desktop .context-controls select { font-size: 16px; padding: 10px 18px; }
-body.desktop .context-controls:not(:empty) { margin-bottom: 24px; }
+body.desktop .context-controls:not(:empty) { margin-bottom: 4px; }
 body.desktop .center-action button { font-size: 20px; padding: 18px 36px; }
 body.desktop .selection-info { font-size: 15px; }
 body.desktop .error-box { font-size: 15px; }
-body.desktop .log-toggle { font-size: 15px; }
+body.desktop .log-drawer { top: calc(env(safe-area-inset-top) + 48px); }
+body.desktop .log-toggle {
+  font-size: 8px;
+  padding: 3px 6px;
+}
 
 /* ─── Avatars ──────────────────────────────────────────────── */
 .avatar-picker {
@@ -1974,11 +2091,11 @@ body.desktop .log-toggle { font-size: 15px; }
 .seat-token.has-avatar { font-size: 26px; }
 body.desktop .seat-token.has-avatar { font-size: 34px; }
 
-/* ─── Spectators (top-left of the felt) ────────────────────── */
+/* ─── Spectators (below ping on the felt) ──────────────────── */
 .spectator-list {
   position: absolute;
-  top: 6px;
-  left: 8px;
+  top: 36px;
+  left: 10px;
   z-index: 30;
   max-width: 40%;
   pointer-events: none;

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
 import { addAiPlayer, analyzeShape, buryKitty, dominantThrowShape, callSixTrump, chooseAiFriendCard, chooseAiPlay, chooseForcedTrump, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, decideAiSixTrump, determineTrickWinner, evaluateBid, forceDealer, kickSeatByVote, makeBid, passBid, passSixTrump, playCards, publicState, recommendPlay, recomputeScores, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, takeoverAiSeat, upgradeResult, upgradeResultClassic4, upgradeResultSix, validatePlay } from "../src/game.js";
 import { buryMultiplierClassic4 } from "../src/rules/classic4.js";
+import { buryMultiplierFixedTeam6 } from "../src/rules/fixedTeam6.js";
 
 test("三副牌共 162 张", () => {
   assert.equal(createDeck().length, 162);
@@ -2488,21 +2489,40 @@ test("4 人 80 分：亮主坐庄、扣 8 张后直接开打", () => {
   assert.equal(room.turnSeat, 1);
 });
 
-test("4 人 80 分：至少 2 张王可以亮无主", () => {
-  const room = createRoom("FOURNT", { seatCount: 4 });
-  for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
-  startRound(room, () => 0.3);
-  const jokers = [
-    { id: "nt-small", copy: 1, suit: "joker", rank: "smallJoker", label: "小王" },
-    { id: "nt-big", copy: 1, suit: "joker", rank: "bigJoker", label: "大王" }
-  ];
-  room.seats[0].hand.push(...jokers);
-  callSixTrump(room, "p0", jokers.map((card) => card.id));
-  for (const i of [1, 2, 3]) passSixTrump(room, `p${i}`);
-  assert.equal(room.phase, "burying");
-  assert.equal(room.dealerSeat, 0);
-  assert.equal(room.trumpSuit, null);
-  assert.equal(room.noTrump, true);
+test("4 人 80 分：按维基只能用同类双王亮无主，混王不行", () => {
+  const deck = createDeck(2);
+  {
+    const room = createRoom("FOURNTMIX", { seatCount: 4 });
+    for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+    room.phase = "sixTrump";
+    room.round = 1;
+    room.teamLevels = { 0: "2", 1: "2" };
+    room.levelRank = "2";
+    room.sixFirstAuction = true;
+    const mixedJokers = [
+      deck.find((card) => card.rank === "smallJoker"),
+      deck.find((card) => card.rank === "bigJoker")
+    ];
+    room.seats[0].hand.push(...mixedJokers);
+    assert.throws(() => callSixTrump(room, "p0", mixedJokers.map((card) => card.id)), /同类双王/);
+  }
+  {
+    const room = createRoom("FOURNT", { seatCount: 4 });
+    for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; }
+    room.phase = "sixTrump";
+    room.round = 1;
+    room.teamLevels = { 0: "2", 1: "2" };
+    room.levelRank = "2";
+    room.sixFirstAuction = true;
+    const smallJokers = deck.filter((card) => card.rank === "smallJoker").slice(0, 2);
+    room.seats[0].hand.push(...smallJokers);
+    callSixTrump(room, "p0", smallJokers.map((card) => card.id));
+    for (const i of [1, 2, 3]) passSixTrump(room, `p${i}`);
+    assert.equal(room.phase, "burying");
+    assert.equal(room.dealerSeat, 0);
+    assert.equal(room.trumpSuit, null);
+    assert.equal(room.noTrump, true);
+  }
 });
 
 test("4 人 80 分已有庄家：闲家盖主只改花色不改庄家", () => {
@@ -2557,6 +2577,7 @@ test("4 人 80 分已有庄家：闲家不能亮自己等级牌夺庄", () => {
 });
 
 test("4 人 80 分结算分档", () => {
+  assert.deepEqual(upgradeResultClassic4(-5), { side: "dealer", steps: 4, label: "庄家队升 4 级" });
   assert.deepEqual(upgradeResultClassic4(0), { side: "dealer", steps: 3, label: "庄家队大光，升 3 级" });
   assert.deepEqual(upgradeResultClassic4(35), { side: "dealer", steps: 2, label: "庄家队小光，升 2 级" });
   assert.deepEqual(upgradeResultClassic4(40), { side: "dealer", steps: 1, label: "庄家队升 1 级" });
@@ -2564,19 +2585,20 @@ test("4 人 80 分结算分档", () => {
   assert.deepEqual(upgradeResultClassic4(120), { side: "attackers", steps: 1, label: "闲家队上台，升 1 级" });
   assert.deepEqual(upgradeResultClassic4(160), { side: "attackers", steps: 2, label: "闲家队上台，升 2 级" });
   assert.deepEqual(upgradeResultClassic4(200), { side: "attackers", steps: 3, label: "闲家队上台，升 3 级" });
+  assert.deepEqual(upgradeResultClassic4(240), { side: "attackers", steps: 4, label: "闲家队上台，升 4 级" });
 });
 
-test("4 人 80 分底牌倍率：单×2 对×4 拖拉机固定×8", () => {
+test("4 人 80 分底牌倍率按维基双升表", () => {
   const tractor = (count) => ({ type: "tractor", unit: 2, count });
   assert.equal(buryMultiplierClassic4(null), 2);
   assert.equal(buryMultiplierClassic4({ type: "single" }), 2);
   assert.equal(buryMultiplierClassic4({ type: "pair" }), 4);
-  assert.equal(buryMultiplierClassic4(tractor(2)), 8);
+  assert.equal(buryMultiplierClassic4(tractor(2)), 6);
   assert.equal(buryMultiplierClassic4(tractor(3)), 8);
-  assert.equal(buryMultiplierClassic4(tractor(4)), 8);
+  assert.equal(buryMultiplierClassic4(tractor(4)), 10);
 });
 
-test("4 人 80 分：4 张拖拉机扣底固定 8 倍（整局结算）", () => {
+test("4 人 80 分：4 张拖拉机扣底按维基为 6 倍（整局结算）", () => {
   const room = createRoom("FOURKITTY", { seatCount: 4 });
   const deck = createDeck(2);
   for (let i = 0; i < 4; i += 1) { const s = room.seats[i]; s.playerId = `p${i}`; s.nickname = `P${i}`; s.level = i % 2 === 0 ? "2" : "2"; }
@@ -2598,8 +2620,20 @@ test("4 人 80 分：4 张拖拉机扣底固定 8 倍（整局结算）", () => 
   for (let i = 0; i < 4; i += 1) room.seats[i].hand = plays[i];
   playCards(room, "p0", plays[0].map((card) => card.id));
   assert.equal(room.phase, "roundOver");
-  assert.equal(room.lastResult.buriedBonus, 160); // 8 倍 × 底牌 20 分
-  assert.equal(room.lastResult.attackers, 160);
+  assert.equal(room.lastResult.buriedBonus, 120); // 6 倍 × 底牌 20 分
+  assert.equal(room.lastResult.attackers, 120);
+});
+
+test("6 人扣底倍率按维基三副牌表", () => {
+  const tractor = (unit, count) => ({ type: "tractor", unit, count });
+  assert.equal(buryMultiplierFixedTeam6(null), 2);
+  assert.equal(buryMultiplierFixedTeam6({ type: "single" }), 2);
+  assert.equal(buryMultiplierFixedTeam6({ type: "pair" }), 3);
+  assert.equal(buryMultiplierFixedTeam6({ type: "triple" }), 4);
+  assert.equal(buryMultiplierFixedTeam6(tractor(2, 2)), 5);
+  assert.equal(buryMultiplierFixedTeam6(tractor(2, 3)), 6);
+  assert.equal(buryMultiplierFixedTeam6(tractor(3, 2)), 6);
+  assert.equal(buryMultiplierFixedTeam6(tractor(3, 3)), 8);
 });
 
 test("5 人房间默认配置不变（回归）", () => {

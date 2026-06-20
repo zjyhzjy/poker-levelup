@@ -68,7 +68,7 @@ const dealtCardIds = new Set();
 // On desktop (wide screens) enlarge the whole GUI; mobile stays pixel-identical.
 // A single breakpoint decision here drives both the JS pixel math below and the
 // CSS (via the body.desktop class), so the two never disagree.
-const DESKTOP_MQ = window.matchMedia("(min-width: 1024px)");
+const DESKTOP_MQ = window.matchMedia("(min-width: 820px) and (hover: hover) and (pointer: fine)");
 let UI = DESKTOP_MQ.matches ? 1.35 : 1;
 function applyUiScale() {
   UI = DESKTOP_MQ.matches ? 1.35 : 1;
@@ -954,7 +954,7 @@ function renderSeats(room) {
           killPlay && !animateKill ? 'trump-kill-settled' : ''
         ].filter(Boolean).join(' ');
         trickSlots.push(
-          `<div class='${slotClasses}'><div class='trick-cards'>${renderPlayedCards(playedCards)}` +
+          `<div class='${slotClasses}'><div class='trick-cards'>${renderPlayedCards(playedCards, { compactSix: false })}` +
           `${shapeLabel ? `<div class='shape-badge'>${escapeHtml(shapeLabel)}</div>` : ''}</div></div>`
         );
       }
@@ -1040,19 +1040,20 @@ function renderSeats(room) {
 }
 
 /* ─── Played Cards HTML (beside seat) ───────────────────── */
-function renderPlayedCards(cards) {
+function renderPlayedCards(cards, opts = {}) {
   if (!cards || cards.length === 0) return "";
 
   // 6 人座位更密，牌片与容器都收窄，避免侧位出牌横扫顶部中央座位。
   const sixP = (state.room?.seatCount || 5) === 6;
-  const CARD_W = Math.round((sixP ? 44 : 50) * UI);
-  const CARD_H = Math.round((sixP ? 62 : 71) * UI);
+  const compactSix = sixP && opts.compactSix !== false;
+  const CARD_W = Math.round((compactSix ? 44 : 50) * UI);
+  const CARD_H = Math.round((compactSix ? 62 : 71) * UI);
   // Max container width available beside a seat (keep it compact)
-  const MAX_WIDTH = Math.round((sixP ? 104 : 170) * UI);
+  const MAX_WIDTH = Math.round((compactSix ? 104 : 170) * UI);
   // Calculate offset per card so all fit within MAX_WIDTH
   const offset = cards.length === 1
     ? 0
-    : Math.min(Math.round((sixP ? 18 : 34) * UI), Math.floor((MAX_WIDTH - CARD_W) / (cards.length - 1)));
+    : Math.min(Math.round((compactSix ? 18 : 34) * UI), Math.floor((MAX_WIDTH - CARD_W) / (cards.length - 1)));
   const totalWidth = CARD_W + (cards.length - 1) * offset;
 
   const inner = cards.map((card, i) =>
