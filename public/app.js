@@ -628,6 +628,23 @@ function render() {
   if ($("#logPanel")?.classList.contains("open")) { try { renderLog(room); } catch(e) { console.error("renderLog:", e); } }
   if ($("#standingsPanel")?.classList.contains("open")) { try { renderStandings(room); } catch(e) { console.error("standings:", e); } }
   try { maybeAnimateChampion(room); } catch(e) { console.error("champion:", e); }
+  syncHandBand();
+}
+
+// Reserve the bottom band (hand + action buttons) so the seats/trick area lay out
+// in the felt ABOVE it — keeps the play area near the player and never overlapping
+// the hand, at any viewport size. Measured from the live control-zone height.
+function syncHandBand() {
+  const felt = $(".table-felt");
+  const zone = $(".control-zone");
+  if (!felt || !zone) return;
+  const h = Math.round(zone.getBoundingClientRect().height);
+  // small clearance so a seat's name/info doesn't kiss the top card row, but never
+  // let the band eat more than ~half the felt (protects the play area on very short
+  // / landscape viewports so seats don't get squeezed into the hand).
+  const feltH = felt.getBoundingClientRect().height || 0;
+  const band = Math.min(Math.max(0, h) + 6, Math.round(feltH * 0.5));
+  felt.style.setProperty("--hand-band", `${band}px`);
 }
 
 // Spectators (joined but not seated) — listed small in the table's top-left.
@@ -1720,7 +1737,7 @@ window.addEventListener("orientationchange", () => {
   setTimeout(() => { if (state.room) render(); }, 150);
 });
 window.addEventListener("resize", () => {
-  if (state.room) renderHand(state.room);
+  if (state.room) { renderHand(state.room); syncHandBand(); }
   updatePingStatus();
 });
 

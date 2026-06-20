@@ -263,47 +263,27 @@ button, input, select { font: inherit; }
 @media (orientation: landscape) {
   .topbar { height: 32px; }
   .seat-token { width: 38px; height: 38px; font-size: 14px; }
+  .seats .seat { --seat-token-half: 19px; }
   .seat-name  { font-size: 10px; }
   .seat-info  { font-size: 9px; }
-  /* Spread seats out more in landscape */
-  .screen-pos-0 { bottom: 185px; left: 50%; transform: translateX(-50%); }
-  .screen-pos-1 { bottom: 30%;   right: 5%; }
-  .screen-pos-2 { top: 10%;       right: 10%; }
-  .screen-pos-3 { top: 10%;       left: 10%; }
-  .screen-pos-4 { bottom: 30%;   left: 5%; }
   .hand { height: 74px !important; }
   .control-zone {
     padding-bottom: calc(6px + env(safe-area-inset-bottom));
     padding-left:  env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
   }
-  .screen-pos-0 .seat-played.bid-played {
-    margin-top: 0;
-    transform: none;
-  }
 }
 
 /* ─── Portrait adjustments ───────────────────────────────── */
 @media (orientation: portrait) and (max-width: 500px) {
-  /* Higher specificity so it wins over the later base `.screen-pos-0` rule;
-     lowers the player's own avatar so its name/info sit close to the 亮庄 button. */
-  .table-felt .screen-pos-0 { bottom: 218px; left: 50%; transform: translateX(-50%); }
-  .screen-pos-1 { bottom: 22%;   right: 2%; }
-  .screen-pos-4 { bottom: 22%;   left: 2%; }
-  /* Hand height is set per-case in renderHand() (two-row / single-row / empty);
-     don't force a fixed height here or the buttons drift away from the cards. */
+  /* Hand height is set per-case in renderHand(); don't force a fixed height here. */
   .control-zone {
     padding-bottom: calc(8px + env(safe-area-inset-bottom));
     gap: 2px;
   }
   .control-zone .context-controls:not(:empty) { margin-bottom: 0; }
-  /* Lift the center score / turn text up a bit so "轮到：玩家" and the
-     闲家分数 line don't crowd the bottom (player) avatar. */
-  .table-felt .table-center { top: 45%; }
-  .screen-pos-0 .seat-played.bid-played {
-    margin-top: 0;
-    transform: none;
-  }
+  /* Center score / turn text sits in the play area above the reserved hand band. */
+  .table-felt .table-center { top: 42%; }
 }
 
 .topbar-right {
@@ -543,7 +523,10 @@ button, input, select { font: inherit; }
 }
 
 /* ─── Seats ──────────────────────────────────────────────── */
-.seats { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+/* Seats + trick occupy the felt ABOVE the reserved bottom hand band, so the play
+   area always sits near the player and never overlaps the hand. --hand-band is set
+   in JS from the actual hand/controls height (falls back to a sensible default). */
+.seats { position: absolute; top: 0; left: 0; right: 0; bottom: var(--hand-band, 150px); z-index: 2; pointer-events: none; }
 
 .seat {
   position: absolute;
@@ -705,27 +688,40 @@ button, input, select { font: inherit; }
 }
 .seat-btn.ai-lv-master:active { background: linear-gradient(135deg, rgba(200,144,45,.8), rgba(150,60,160,.8)); }
 
-/* Seat positions by screen position (viewer always at pos 0) */
-.screen-pos-0 { bottom: 185px; left: 50%; transform: translateX(-50%); }
-.screen-pos-1 { bottom: 30%;   right: 5%; }
-.screen-pos-2 { top: 10%;      right: 10%; }
-.screen-pos-3 { top: 10%;      left: 10%; }
-.screen-pos-4 { bottom: 30%;   left: 5%; }
+/* ── Unified seat geometry (all sizes) ───────────────────────────
+   座位按相对坐标摆在“出牌区”（牌桌减去底部手牌带）内，viewer 永远在 pos-0
+   底部中央。手机/桌面同一套百分比坐标，随尺寸连续缩放、无断点跳变。每家头像
+   与其出牌位在水平或垂直方向对齐（见下方 trick-pos 的 --play-x/--play-y）。 */
+.seats .seat {
+  left: var(--seat-x, 50%);
+  top: var(--seat-y, 50%);
+  right: auto;
+  bottom: auto;
+  /* Anchor by the avatar TOKEN center (not the whole token+name+info box) so each
+     player's played card lines up with their avatar. name/info hang below. */
+  transform: translate(-50%, calc(-1 * var(--seat-token-half, 24px)));
+}
 
-/* 4 人 80 分布局：对家在正上方，左右下家分居两侧。 */
-.players-4 .screen-pos-1 { bottom: 34%; right: 5%; top: auto; left: auto; }
-.players-4 .screen-pos-2 { top: 8%; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
-.players-4 .screen-pos-3 { bottom: 34%; left: 5%; right: auto; top: auto; }
+/* 4 人十字：自己底部，对家正上，左右两侧。 */
+.players-4 .screen-pos-0 { --seat-x: 50%; --seat-y: 85%; }
+.players-4 .screen-pos-1 { --seat-x: 86%; --seat-y: 48%; }
+.players-4 .screen-pos-2 { --seat-x: 50%; --seat-y: 12%; }
+.players-4 .screen-pos-3 { --seat-x: 14%; --seat-y: 48%; }
 
-/* 6 人布局（六边形，viewer 在 pos 0 底部中央）。两类选择器特异性高于媒体查询里的
-   单类 .screen-pos-N，因此覆盖五边形定位并新增顶部中央 pos 3 与左下 pos 5。
-   pos-3 贴顶(4%)，上位 pos-2/4 下移到 16% 且贴边(2%)与 pos-3 垂直错开，避免出牌
-   横扫中央；下位 pos-1/5 抬到 36% 避免压住底部手牌区。 */
-.players-6 .screen-pos-1 { bottom: 36%; right: 2%; top: auto; left: auto; }
-.players-6 .screen-pos-2 { top: 16%; right: 2%; bottom: auto; left: auto; }
-.players-6 .screen-pos-3 { top: 4%; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
-.players-6 .screen-pos-4 { top: 16%; left: 2%; right: auto; bottom: auto; }
-.players-6 .screen-pos-5 { bottom: 36%; left: 2%; right: auto; top: auto; }
+/* 5 人五边形：自己底部，左右下家在中部两侧，上家二人在上方。 */
+.players-5 .screen-pos-0 { --seat-x: 50%; --seat-y: 85%; }
+.players-5 .screen-pos-1 { --seat-x: 88%; --seat-y: 55%; }
+.players-5 .screen-pos-2 { --seat-x: 74%; --seat-y: 15%; }
+.players-5 .screen-pos-3 { --seat-x: 26%; --seat-y: 15%; }
+.players-5 .screen-pos-4 { --seat-x: 12%; --seat-y: 55%; }
+
+/* 6 人六边形：自己底部，两侧各两家，对家正上。 */
+.players-6 .screen-pos-0 { --seat-x: 50%; --seat-y: 85%; }
+.players-6 .screen-pos-1 { --seat-x: 88%; --seat-y: 63%; }
+.players-6 .screen-pos-2 { --seat-x: 88%; --seat-y: 28%; }
+.players-6 .screen-pos-3 { --seat-x: 50%; --seat-y: 11%; }
+.players-6 .screen-pos-4 { --seat-x: 12%; --seat-y: 28%; }
+.players-6 .screen-pos-5 { --seat-x: 12%; --seat-y: 63%; }
 /* 侧位出牌容器封顶，配合 JS 的 MAX_WIDTH 收窄，双保险防横扫中央座位 */
 .seats.players-6 .seat-played {
   max-width: 116px;
@@ -763,48 +759,6 @@ body.desktop .seats.players-6 .played-card .card-center,
 body.desktop .trick-area.players-6 .played-card .card-center { font-size: 29px; }
 body.desktop .seats.players-6 .played-card .card-center.joker-text,
 body.desktop .trick-area.players-6 .played-card .card-center.joker-text { font-size: 15px; }
-body.desktop .players-6 .screen-pos-1 { bottom: 30%; right: 2%; top: auto; left: auto; }
-body.desktop .players-6 .screen-pos-5 { bottom: 30%; left: 2%; right: auto; top: auto; }
-
-/* Desktop table geometry. 头像按相对坐标摆在规则形状的顶点：
-   4 人十字，5 人正五边形（顶部为水平边、自己在底部尖点），6 人正六边形。 */
-body.desktop .seats .seat {
-  left: var(--seat-x);
-  top: var(--seat-y);
-  right: auto;
-  bottom: auto;
-  transform: translate(-50%, -50%);
-}
-body.desktop .players-4 .screen-pos-0 { --seat-x: 50%; --seat-y: 66%; }
-body.desktop .players-4 .screen-pos-1 { --seat-x: 84%; --seat-y: 50%; }
-body.desktop .players-4 .screen-pos-2 { --seat-x: 50%; --seat-y: 14%; }
-body.desktop .players-4 .screen-pos-3 { --seat-x: 16%; --seat-y: 50%; }
-
-body.desktop .players-5 .screen-pos-0 { --seat-x: 50%; --seat-y: 66%; }
-body.desktop .players-5 .screen-pos-1 { --seat-x: 80%; --seat-y: 58%; }
-body.desktop .players-5 .screen-pos-2 { --seat-x: 68%; --seat-y: 18%; }
-body.desktop .players-5 .screen-pos-3 { --seat-x: 32%; --seat-y: 18%; }
-body.desktop .players-5 .screen-pos-4 { --seat-x: 20%; --seat-y: 58%; }
-
-body.desktop .players-6 .screen-pos-0 { --seat-x: 50%; --seat-y: 66%; }
-body.desktop .players-6 .screen-pos-1 { --seat-x: 78%; --seat-y: 66%; }
-body.desktop .players-6 .screen-pos-2 { --seat-x: 78%; --seat-y: 34%; }
-body.desktop .players-6 .screen-pos-3 { --seat-x: 50%; --seat-y: 16%; }
-body.desktop .players-6 .screen-pos-4 { --seat-x: 22%; --seat-y: 34%; }
-body.desktop .players-6 .screen-pos-5 { --seat-x: 22%; --seat-y: 66%; }
-/* 矮屏（360×640、地址栏展开等）：下位座位再上抬、手牌区压低，给座位腾空间 */
-@media (orientation: portrait) and (max-height: 700px) {
-  .players-6 .screen-pos-1, .players-6 .screen-pos-5 { bottom: 40%; }
-  .hand { height: 132px !important; }
-}
-/* 横屏 6 人：利用宽度沿屏幕两侧左右铺开，避免竖向三层堆叠 */
-@media (orientation: landscape) {
-  .players-6 .screen-pos-1 { bottom: 8%;  right: 3%;  top: auto; }
-  .players-6 .screen-pos-2 { top: 8%;     right: 11%; bottom: auto; }
-  .players-6 .screen-pos-3 { top: 4%; }
-  .players-6 .screen-pos-4 { top: 8%;     left: 11%;  bottom: auto; }
-  .players-6 .screen-pos-5 { bottom: 8%;  left: 3%;   top: auto; }
-}
 
 /* Played cards: above token for bottom-side seats (pos 1 & 4) so hand doesn't cover them */
 .seat-played {
@@ -825,22 +779,18 @@ body.desktop .players-6 .screen-pos-5 { --seat-x: 22%; --seat-y: 66%; }
    手机/桌面各自的中心点、半径和缩放在下面分开定义，避免互相牵连。 */
 .trick-area {
   position: absolute;
-  inset: 0;
+  top: 0; left: 0; right: 0; bottom: var(--hand-band, 150px);
   z-index: 3;
   pointer-events: none;
-  --rx: 1;
-  --ry: 1;
-  --trick-center-y: 44%;
   --trick-scale: .96;
 }
+/* 出牌位用与座位相同的相对坐标系，朝中心收拢，且每家出牌位与其头像在水平或
+   垂直方向对齐。手机/桌面同一套，随尺寸连续缩放，无断点跳变。 */
 .trick-slot {
   position: absolute;
-  left: 50%;
-  top: var(--trick-center-y);
-  transform: translate(
-    calc(-50% + var(--tx, 0) * var(--rx) * 1px),
-    calc(-50% + var(--ty, 0) * var(--ry) * 1px)
-  );
+  left: var(--play-x, 50%);
+  top: var(--play-y, 50%);
+  transform: translate(-50%, -50%);
   display: flex;
   justify-content: center;
 }
@@ -851,34 +801,26 @@ body.desktop .players-6 .screen-pos-5 { --seat-x: 22%; --seat-y: 66%; }
   transform-origin: center center;
 }
 
-/* Mobile trick layout. 这些是手机默认值；横屏只改手机半径/中心。 */
-@media (orientation: landscape) {
-  body:not(.desktop) .trick-area {
-    --rx: 1.7;
-    --ry: .82;
-    --trick-center-y: 48%;
-    --trick-scale: .92;
-  }
-}
+/* 4 人：自己(下)/对家(上) 竖直对齐 x=50；左右两家水平对齐 y=48。 */
+.trick-area.players-4 .trick-pos-0 { --play-x: 50%; --play-y: 62%; }
+.trick-area.players-4 .trick-pos-1 { --play-x: 66%; --play-y: 48%; }
+.trick-area.players-4 .trick-pos-2 { --play-x: 50%; --play-y: 34%; }
+.trick-area.players-4 .trick-pos-3 { --play-x: 34%; --play-y: 48%; }
 
-/* 各座位数下、每个相对方位的中心偏移（手机基准像素） */
-.trick-area.players-4 .trick-pos-0 { --tx: 0;    --ty: 112; }
-.trick-area.players-4 .trick-pos-1 { --tx: 128;  --ty: 0; }
-.trick-area.players-4 .trick-pos-2 { --tx: 0;    --ty: -112; }
-.trick-area.players-4 .trick-pos-3 { --tx: -128; --ty: 0; }
+/* 5 人：自己竖直对齐 x=50；上家二人竖直对齐(x=74/26)；左右下家水平对齐 y=55。 */
+.trick-area.players-5 .trick-pos-0 { --play-x: 50%; --play-y: 64%; }
+.trick-area.players-5 .trick-pos-1 { --play-x: 70%; --play-y: 55%; }
+.trick-area.players-5 .trick-pos-2 { --play-x: 74%; --play-y: 37%; }
+.trick-area.players-5 .trick-pos-3 { --play-x: 26%; --play-y: 37%; }
+.trick-area.players-5 .trick-pos-4 { --play-x: 30%; --play-y: 55%; }
 
-.trick-area.players-5 .trick-pos-0 { --tx: 0;    --ty: 118; }
-.trick-area.players-5 .trick-pos-1 { --tx: 120;  --ty: 18; }
-.trick-area.players-5 .trick-pos-2 { --tx: 72;   --ty: -110; }
-.trick-area.players-5 .trick-pos-3 { --tx: -72;  --ty: -110; }
-.trick-area.players-5 .trick-pos-4 { --tx: -120; --ty: 18; }
-
-.trick-area.players-6 .trick-pos-0 { --tx: 0;    --ty: 118; }
-.trick-area.players-6 .trick-pos-1 { --tx: 98;   --ty: 60; }
-.trick-area.players-6 .trick-pos-2 { --tx: 112;  --ty: -38; }
-.trick-area.players-6 .trick-pos-3 { --tx: 0;    --ty: -120; }
-.trick-area.players-6 .trick-pos-4 { --tx: -112; --ty: -38; }
-.trick-area.players-6 .trick-pos-5 { --tx: -98;  --ty: 60; }
+/* 6 人：自己/对家竖直对齐 x=50；两侧四家水平对齐（上排 y=28，下排 y=63）。 */
+.trick-area.players-6 .trick-pos-0 { --play-x: 50%; --play-y: 64%; }
+.trick-area.players-6 .trick-pos-1 { --play-x: 68%; --play-y: 63%; }
+.trick-area.players-6 .trick-pos-2 { --play-x: 68%; --play-y: 28%; }
+.trick-area.players-6 .trick-pos-3 { --play-x: 50%; --play-y: 31%; }
+.trick-area.players-6 .trick-pos-4 { --play-x: 32%; --play-y: 28%; }
+.trick-area.players-6 .trick-pos-5 { --play-x: 32%; --play-y: 63%; }
 
 .trick-area.players-6 {
   --trick-scale: .9;
@@ -894,34 +836,9 @@ body.desktop .players-6 .screen-pos-5 { --seat-x: 22%; --seat-y: 66%; }
 .trick-area.players-6 .played-card .card-center.joker-text { font-size: 13px; }
 
 /* Desktop trick layout. 桌面单独放大半径，让牌更靠近对应玩家。 */
-body.desktop .trick-area {
-  --trick-scale: .9;
-}
-body.desktop .trick-slot {
-  left: var(--play-x);
-  top: var(--play-y);
-  transform: translate(-50%, -50%);
-}
-body.desktop .trick-area.players-4 .trick-pos-0 { --play-x: 50%; --play-y: 60%; }
-body.desktop .trick-area.players-4 .trick-pos-1 { --play-x: 72%; --play-y: 50%; }
-body.desktop .trick-area.players-4 .trick-pos-2 { --play-x: 50%; --play-y: 30%; }
-body.desktop .trick-area.players-4 .trick-pos-3 { --play-x: 28%; --play-y: 50%; }
-
-body.desktop .trick-area.players-5 .trick-pos-0 { --play-x: 50%; --play-y: 60%; }
-body.desktop .trick-area.players-5 .trick-pos-1 { --play-x: 72%; --play-y: 57%; }
-body.desktop .trick-area.players-5 .trick-pos-2 { --play-x: 64%; --play-y: 28%; }
-body.desktop .trick-area.players-5 .trick-pos-3 { --play-x: 36%; --play-y: 28%; }
-body.desktop .trick-area.players-5 .trick-pos-4 { --play-x: 28%; --play-y: 57%; }
-
-body.desktop .trick-area.players-6 .trick-pos-0 { --play-x: 50%; --play-y: 60%; }
-body.desktop .trick-area.players-6 .trick-pos-1 { --play-x: 68%; --play-y: 66%; }
-body.desktop .trick-area.players-6 .trick-pos-2 { --play-x: 68%; --play-y: 34%; }
-body.desktop .trick-area.players-6 .trick-pos-3 { --play-x: 50%; --play-y: 30%; }
-body.desktop .trick-area.players-6 .trick-pos-4 { --play-x: 32%; --play-y: 34%; }
-body.desktop .trick-area.players-6 .trick-pos-5 { --play-x: 32%; --play-y: 66%; }
-body.desktop .trick-area.players-6 {
-  --trick-scale: .86;
-}
+/* 桌面只调整缩放；坐标已是统一的 --play-x/--play-y，跨尺寸自适应。 */
+body.desktop .trick-area { --trick-scale: .9; }
+body.desktop .trick-area.players-6 { --trick-scale: .86; }
 @media (max-width: 1199px) {
   body.desktop .trick-area {
     --trick-scale: .72;
@@ -2003,6 +1920,7 @@ body.desktop .played-card .card-center { font-size: 34px; }
 body.desktop .played-card .card-center.joker-text { font-size: 18px; }
 
 body.desktop .seat-token { width: 64px; height: 64px; font-size: 19px; }
+body.desktop .seats .seat { --seat-token-half: 32px; }
 body.desktop .seat-name { font-size: 15px; }
 body.desktop .seat-info { font-size: 13px; }
 body.desktop .role-badge { width: 24px; height: 24px; font-size: 12px; top: -8px; right: -8px; }
