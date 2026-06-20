@@ -797,30 +797,30 @@ body.desktop .trick-area.players-6 .played-card .card-center.joker-text { font-s
 .trick-cards {
   position: relative;
   display: inline-block;
-  transform: scale(var(--trick-scale));
   transform-origin: center center;
 }
 
+/* 出牌位贴着各自头像、朝中心略收（牌出在玩家“面前”）。仍与头像保持水平或垂直对齐。 */
 /* 4 人：自己(下)/对家(上) 竖直对齐 x=50；左右两家水平对齐 y=48。 */
-.trick-area.players-4 .trick-pos-0 { --play-x: 50%; --play-y: 62%; }
-.trick-area.players-4 .trick-pos-1 { --play-x: 66%; --play-y: 48%; }
-.trick-area.players-4 .trick-pos-2 { --play-x: 50%; --play-y: 34%; }
-.trick-area.players-4 .trick-pos-3 { --play-x: 34%; --play-y: 48%; }
+.trick-area.players-4 .trick-pos-0 { --play-x: 50%; --play-y: 70%; }
+.trick-area.players-4 .trick-pos-1 { --play-x: 73%; --play-y: 48%; }
+.trick-area.players-4 .trick-pos-2 { --play-x: 50%; --play-y: 28%; }
+.trick-area.players-4 .trick-pos-3 { --play-x: 27%; --play-y: 48%; }
 
 /* 5 人：自己竖直对齐 x=50；上家二人竖直对齐(x=74/26)；左右下家水平对齐 y=55。 */
-.trick-area.players-5 .trick-pos-0 { --play-x: 50%; --play-y: 64%; }
-.trick-area.players-5 .trick-pos-1 { --play-x: 70%; --play-y: 55%; }
-.trick-area.players-5 .trick-pos-2 { --play-x: 74%; --play-y: 37%; }
-.trick-area.players-5 .trick-pos-3 { --play-x: 26%; --play-y: 37%; }
-.trick-area.players-5 .trick-pos-4 { --play-x: 30%; --play-y: 55%; }
+.trick-area.players-5 .trick-pos-0 { --play-x: 50%; --play-y: 71%; }
+.trick-area.players-5 .trick-pos-1 { --play-x: 75%; --play-y: 55%; }
+.trick-area.players-5 .trick-pos-2 { --play-x: 74%; --play-y: 30%; }
+.trick-area.players-5 .trick-pos-3 { --play-x: 26%; --play-y: 30%; }
+.trick-area.players-5 .trick-pos-4 { --play-x: 25%; --play-y: 55%; }
 
 /* 6 人：自己/对家竖直对齐 x=50；两侧四家水平对齐（上排 y=28，下排 y=63）。 */
-.trick-area.players-6 .trick-pos-0 { --play-x: 50%; --play-y: 64%; }
-.trick-area.players-6 .trick-pos-1 { --play-x: 68%; --play-y: 63%; }
-.trick-area.players-6 .trick-pos-2 { --play-x: 68%; --play-y: 28%; }
-.trick-area.players-6 .trick-pos-3 { --play-x: 50%; --play-y: 31%; }
-.trick-area.players-6 .trick-pos-4 { --play-x: 32%; --play-y: 28%; }
-.trick-area.players-6 .trick-pos-5 { --play-x: 32%; --play-y: 63%; }
+.trick-area.players-6 .trick-pos-0 { --play-x: 50%; --play-y: 71%; }
+.trick-area.players-6 .trick-pos-1 { --play-x: 75%; --play-y: 63%; }
+.trick-area.players-6 .trick-pos-2 { --play-x: 75%; --play-y: 28%; }
+.trick-area.players-6 .trick-pos-3 { --play-x: 50%; --play-y: 26%; }
+.trick-area.players-6 .trick-pos-4 { --play-x: 25%; --play-y: 28%; }
+.trick-area.players-6 .trick-pos-5 { --play-x: 25%; --play-y: 63%; }
 
 .trick-area.players-6 {
   --trick-scale: .9;

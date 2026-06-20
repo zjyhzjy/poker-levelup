@@ -1059,58 +1059,79 @@ function renderSeats(room) {
 /* ─── Played Cards HTML (beside seat) ───────────────────── */
 function renderPlayedCards(cards, opts = {}) {
   if (!cards || cards.length === 0) return "";
+  const n = cards.length;
+  const seatCount = state.room?.seatCount || 5;
 
-  // 6 人座位更密，牌片与容器都收窄，避免侧位出牌横扫顶部中央座位。
-  const sixP = (state.room?.seatCount || 5) === 6;
-  const compactSix = sixP && opts.compactSix !== false;
-  const CARD_W = Math.round((compactSix ? 44 : 50) * UI);
-  const CARD_H = Math.round((compactSix ? 62 : 71) * UI);
-  // Max container width available beside a seat (keep it compact)
-  const MAX_WIDTH = Math.round((compactSix ? 104 : 170) * UI);
-  // Calculate offset per card so all fit within MAX_WIDTH
-  const offset = cards.length === 1
-    ? 0
-    : Math.min(Math.round((compactSix ? 18 : 34) * UI), Math.floor((MAX_WIDTH - CARD_W) / (cards.length - 1)));
-  const totalWidth = CARD_W + (cards.length - 1) * offset;
+  // 出牌位贴着各自头像（在玩家“面前”）。为避免相邻两家的出牌互相重叠，每家出牌组
+  // 的总宽限制在 budget 内：单/少张时牌片放到最大；一次出多张时按需缩小牌片（而非
+  // 让它们越界压到邻座）。budget 取自牌桌宽度与该人数下最近出牌位的横向间距。
+  const feltW = document.querySelector(".table-felt")?.clientWidth || window.innerWidth || 390;
+  // 最近相邻出牌位的横向间距占牌桌宽的比例（按人数，取最挤的一排留余量）。
+  const spacingFrac = seatCount >= 6 ? 0.255 : seatCount === 5 ? 0.30 : 0.42;
+  const budget = Math.max(Math.round(56 * UI), Math.round(feltW * spacingFrac) - Math.round(14 * UI));
+
+  const FAN = 0.5;                                   // 叠放时每张露出的比例
+  const CARD_W_MAX = Math.round((seatCount >= 6 ? 52 : 58) * UI);
+  const CARD_W_MIN = Math.round(24 * UI);
+  let cardW = Math.min(CARD_W_MAX, Math.floor(budget / (1 + (n - 1) * FAN)));
+  cardW = Math.max(CARD_W_MIN, cardW);
+  const cardH = Math.round(cardW * 1.4);
+  const step = n === 1 ? 0 : Math.round(cardW * FAN);
+  const totalWidth = cardW + (n - 1) * step;
+  const size = {
+    w: cardW,
+    h: cardH,
+    center: Math.round(cardW * 0.5),
+    rank: Math.max(8, Math.round(cardW * 0.26)),
+    suit: Math.max(7, Math.round(cardW * 0.2)),
+    joker: Math.max(9, Math.round(cardW * 0.27))
+  };
 
   const inner = cards.map((card, i) =>
-    `<div style="position:absolute;left:${i * offset}px;top:0;z-index:${i + 1};">
-      ${playedCardHTML(card)}
-    </div>`
+    `<div style="position:absolute;left:${i * step}px;top:0;z-index:${i + 1};">${playedCardHTML(card, size)}</div>`
   ).join("");
 
-  return `<div style="position:relative;width:${totalWidth}px;height:${CARD_H}px;flex-shrink:0;">${inner}</div>`;
+  return `<div style="position:relative;width:${totalWidth}px;height:${cardH}px;flex-shrink:0;">${inner}</div>`;
 }
 
-function playedCardHTML(card) {
+// size (optional) = { w, h, center, rank, suit, joker } → inline styles that
+// override CSS, so the trick area can size cards adaptively (big for few cards,
+// smaller for multi-card plays) without touching the kitty/bid card sizing.
+function playedCardHTML(card, size = null) {
   const colorClass = isRed(card) ? "red" : (card.suit === "joker" ? "joker" : "black");
   const jokerClass = card.rank === "bigJoker" ? "big-joker" : "";
+  const box = size ? ` style="width:${size.w}px;height:${size.h}px"` : "";
+  const cf = size ? ` style="font-size:${size.center}px"` : "";
+  const rf = size ? ` style="font-size:${size.rank}px"` : "";
+  const sf = size ? ` style="font-size:${size.suit}px"` : "";
+  const jtopF = size ? ` style="font-size:${Math.max(6, Math.round(size.rank * 0.62))}px"` : ` style="font-size:8px"`;
 
   if (card.rank === "bigJoker" || card.rank === "smallJoker") {
     const label = card.rank === "bigJoker" ? "大" : "小";
     const jokerTop = card.rank === "bigJoker" ? "JOKER" : "Joker";
+    const jf = size ? ` style="font-size:${size.joker}px"` : "";
     return `
-      <div class="played-card joker ${jokerClass}">
+      <div class="played-card joker ${jokerClass}"${box}>
         <div class="card-corner">
-          <div class="card-rank" style="font-size:8px">${jokerTop}</div>
+          <div class="card-rank"${jtopF}>${jokerTop}</div>
         </div>
-        <div class="card-center joker-text">${label}王</div>
+        <div class="card-center joker-text"${jf}>${label}王</div>
         <div class="card-corner bottom">
-          <div class="card-rank" style="font-size:8px">${jokerTop}</div>
+          <div class="card-rank"${jtopF}>${jokerTop}</div>
         </div>
       </div>`;
   }
 
   return `
-    <div class="played-card ${colorClass}">
+    <div class="played-card ${colorClass}"${box}>
       <div class="card-corner">
-        <div class="card-rank">${rankText(card.rank)}</div>
-        <div class="card-suit-sm">${suitSymbol(card.suit)}</div>
+        <div class="card-rank"${rf}>${rankText(card.rank)}</div>
+        <div class="card-suit-sm"${sf}>${suitSymbol(card.suit)}</div>
       </div>
-      <div class="card-center">${suitSymbol(card.suit)}</div>
+      <div class="card-center"${cf}>${suitSymbol(card.suit)}</div>
       <div class="card-corner bottom">
-        <div class="card-rank">${rankText(card.rank)}</div>
-        <div class="card-suit-sm">${suitSymbol(card.suit)}</div>
+        <div class="card-rank"${rf}>${rankText(card.rank)}</div>
+        <div class="card-suit-sm"${sf}>${suitSymbol(card.suit)}</div>
       </div>
     </div>`;
 }
