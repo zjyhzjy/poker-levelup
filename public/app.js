@@ -59,6 +59,7 @@ let reconnectAttempts = 0;
 // NOT auto-reconnect us back in (the close callback captures the room `code` in a
 // closure, which otherwise pulls us straight back after 退出).
 let leavingRoom = false;
+let manualExitAt = 0;
 const animatedKillSeats = new Set();
 // Card ids that have already played their deal-in animation, so re-renders during
 // dealing don't make the whole hand flicker (only newly dealt cards animate).
@@ -196,6 +197,7 @@ function connectAndJoin(code, nickname, seatCount) {
     reconnectTimer = null;
   }
   state.nickname = nickname || "玩家";
+  manualExitAt = 0;
   state.createSeatCount = [4, 5, 6].includes(seatCount) ? seatCount : 5; // 仅创建房间时生效
   localStorage.setItem("szp.nickname", state.nickname);
   stopPingLoop();
@@ -235,6 +237,7 @@ function connectAndJoin(code, nickname, seatCount) {
       receivePong(msg.payload);
     }
     if (msg.type === "state") {
+      if (manualExitAt && Date.now() - manualExitAt < 5000) return;
       handleAudioEvents(msg.payload);
       setMusicPhase(msg.payload.phase === "lobby" ? "lobby" : "game"); // 大厅放开场，开打后切牌局曲
       state.room = msg.payload;
@@ -258,6 +261,7 @@ function connectAndJoin(code, nickname, seatCount) {
 }
 
 function scheduleReconnect(code) {
+  if (manualExitAt && Date.now() - manualExitAt < 5000) return;
   const roomCode = String(code || "").trim().toUpperCase();
   if (!roomCode || reconnectTimer) return;
   const delay = Math.min(10000, 800 * (2 ** reconnectAttempts));
@@ -1081,10 +1085,10 @@ function renderPlayedCards(cards, opts = {}) {
   const size = {
     w: cardW,
     h: cardH,
-    center: Math.round(cardW * 0.5),
+    center: Math.max(10, Math.round(cardW * (n > 6 ? 0.34 : 0.42))),
     rank: Math.max(8, Math.round(cardW * 0.26)),
     suit: Math.max(7, Math.round(cardW * 0.2)),
-    joker: Math.max(9, Math.round(cardW * 0.27))
+    joker: Math.max(8, Math.round(cardW * (n > 6 ? 0.22 : 0.27)))
   };
 
   const inner = cards.map((card, i) =>
@@ -1711,7 +1715,7 @@ function renderPreviousTrick(room, el) {
   if (!info || !plays.length) { el.innerHTML = `<div class="history-empty">还没有上一墩记录</div>`; return; }
   const rows = plays.map((p) => {
     const cards = p.cards.map((c) => `<span class="hcard ${isRed(c) ? "red" : "black"}">${cardShortLabel(c)}</span>`).join(" ");
-    return `<div class="history-play${p.seat === info.winner ? " win" : ""}"><span class="hseat">${seatName(room, p.seat)}</span><span>${cards}</span></div>`;
+    return `<div class="history-play${p.seat === info.winner ? " win" : ""}"><span class="hseat">${seatName(room, p.seat)}</span><span class="hcards">${cards}</span></div>`;
   }).join("");
   el.innerHTML = `<div class="history-trick"><div class="history-head">第 ${info.seq} 墩 · ${seatName(room, info.winner)} +${info.points}</div>${rows}</div>`;
 }
@@ -1766,6 +1770,7 @@ window.addEventListener("resize", () => {
 // On mobile, switching away can suspend or kill the WebSocket; on return the UI
 // looks frozen. Re-open the connection (the server re-seats us via our playerId).
 function reconnectIfNeeded() {
+  if (manualExitAt && Date.now() - manualExitAt < 5000) return;
   if (!state.room?.code) return;
   const ws = state.ws;
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
@@ -1884,6 +1889,7 @@ function exitRoom() {
   // Stop auto-reconnect from pulling us back in: flag the intentional exit, drop
   // the saved room, and cancel any pending reconnect timer.
   leavingRoom = true;
+  manualExitAt = Date.now();
   localStorage.removeItem("szp.roomCode");
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   state.room = null;

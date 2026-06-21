@@ -163,7 +163,10 @@ function serveStatic(urlPath, res) {
   try { decoded = decodeURIComponent(urlPath); } catch (_) { /* malformed % — use raw */ }
   const safePath = decoded === "/" ? "/index.html" : decoded; // 解码后才能命中中文文件名（语音录音）
   const filePath = path.normalize(path.join(publicDir, safePath));
-  if (!filePath.startsWith(publicDir)) {
+  // 必须落在 publicDir 之内：用「完全相等 或 以 publicDir+分隔符 开头」判断，
+  // 不能只 startsWith(publicDir)——否则同级的 public-secret / public.bak 等
+  // 兄弟目录（名字以 public 开头）也会通过，导致目录外文件被读出。
+  if (filePath !== publicDir && !filePath.startsWith(publicDir + path.sep)) {
     res.writeHead(403);
     res.end("Forbidden");
     return;

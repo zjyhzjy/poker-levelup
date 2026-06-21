@@ -652,13 +652,19 @@ button, input, select { font: inherit; }
 .seat-actions {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 3px;
   margin-top: 3px;
+  width: 112px;
+  max-width: 112px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .seat-btn {
   padding: 4px 8px;
   font-size: 10px;
+  min-width: 46px;
   background: rgba(200,144,45,.25);
   border: 1px solid rgba(200,144,45,.4);
   border-radius: 4px;
@@ -673,17 +679,20 @@ button, input, select { font: inherit; }
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 3px;
+  width: 100%;
 }
 .ai-add-label {
   font-size: 10px;
   color: rgba(255,255,255,.6);
+  flex: 0 0 auto;
 }
 .seat-btn.ai-lv {
   padding: 4px 6px;
   min-width: 20px;
   text-align: center;
+  flex: 0 0 auto;
 }
 .seat-btn.ai-lv-master {
   background: linear-gradient(135deg, rgba(200,144,45,.55), rgba(150,60,160,.55));
@@ -1780,7 +1789,7 @@ body.desktop .friend-pop { font-size: 30px; }
   right: 0;
   bottom: auto;
   z-index: 20;
-  width: min(140px, 80vw);
+  width: min(200px, calc(100vw - 12px));
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
@@ -1817,16 +1826,17 @@ body.desktop .friend-pop { font-size: 30px; }
   border-radius: 0 0 8px 8px;
 }
 
-.log-panel.open { max-height: 110px; overflow-y: auto; }
+.log-panel.open { max-height: 210px; overflow-y: auto; }
 
 .history-list { padding: 6px 8px; font-size: 11px; color: #ddd; }
 .history-empty { padding: 12px; color: var(--muted-felt); text-align: center; }
 .history-trick { padding: 5px 2px; border-bottom: 1px solid rgba(200,144,45,.15); }
 .history-head { color: var(--gold); font-weight: 600; margin-bottom: 2px; }
-.history-play { display: flex; gap: 6px; align-items: baseline; padding: 1px 3px; border-radius: 4px; }
+.history-play { display: flex; gap: 6px; align-items: baseline; padding: 1px 3px; border-radius: 4px; white-space: nowrap; }
 .history-play.win { background: rgba(255,216,77,.12); }
 .history-play .hseat { min-width: 4.5em; color: #aaa; flex-shrink: 0; }
 .history-play.win .hseat::after { content: " 👑"; }
+.history-play .hcards { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .hcard { font-weight: 700; }
 .hcard.red { color: #ff7a7a; }
 .hcard.black { color: #ededed; }
@@ -1950,6 +1960,18 @@ body.desktop .turn-info  { font-size: 16px; }
 body.desktop .bid-reveal-label { font-size: 18px; }
 
 body.desktop .seat-btn { font-size: 14px; padding: 6px 12px; }
+body.desktop .seat-btn:not(.ai-lv) { min-width: 72px; }
+body.desktop .seat-actions {
+  width: 176px;
+  max-width: 176px;
+}
+body.desktop .seat-btn.ai-lv {
+  padding: 6px 10px;
+}
+body.desktop .seat-btn.ai-lv-master {
+  padding-left: 9px;
+  padding-right: 9px;
+}
 body.desktop .context-controls button,
 body.desktop .context-controls select { font-size: 16px; padding: 10px 18px; }
 body.desktop .context-controls:not(:empty) { margin-bottom: 4px; }
