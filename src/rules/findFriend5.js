@@ -21,9 +21,12 @@ export function upgradeResultFindFriend5(attackers) {
 
 export function buryMultiplierFindFriend5(shape) {
   if (!shape) return 2;
-  if (shape.type === "pair") return 4;
-  if (shape.type === "triple") return 8;
-  if (shape.type === "tractor") return 2 ** (shape.unit * shape.count);
+  if (shape.type === "pair") return 3;
+  if (shape.type === "triple") return 4;
+  if (shape.type === "tractor") {
+    if (shape.unit === 2) return shape.count + 3;
+    if (shape.unit === 3) return 2 * shape.count + 2;
+  }
   return 2;
 }
 

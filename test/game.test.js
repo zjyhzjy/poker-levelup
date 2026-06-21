@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createDeck } from "../src/cards.js";
 import { addAiPlayer, analyzeShape, buryKitty, dominantThrowShape, callSixTrump, chooseAiFriendCard, chooseAiPlay, chooseForcedTrump, confirmDealer, createRoom, crossesChampion, dealRound, decideAiBid, decideAiSixTrump, determineTrickWinner, evaluateBid, forceDealer, kickSeatByVote, makeBid, passBid, passSixTrump, playCards, publicState, recommendPlay, recomputeScores, revealKittyCard, runAiStep, setTrustee, sit, startAuction, startRound, takeoverAiSeat, upgradeResult, upgradeResultClassic4, upgradeResultSix, validatePlay } from "../src/game.js";
 import { buryMultiplierClassic4 } from "../src/rules/classic4.js";
+import { buryMultiplierFindFriend5 } from "../src/rules/findFriend5.js";
 import { buryMultiplierFixedTeam6 } from "../src/rules/fixedTeam6.js";
 
 test("三副牌共 162 张", () => {
@@ -303,7 +304,7 @@ test("AI 跟单张时自然单张只有分牌，才考虑拆对子出非分牌",
   assert.equal(play[0].rank, "4");
 });
 
-test("推荐跟单张时选择自然单张最小非分牌", () => {
+test("推荐跟单张时选择本门花色最小牌", () => {
   const room = createRoom("HINTSINGLE1");
   room.phase = "playing";
   room.levelRank = "2";
@@ -323,10 +324,10 @@ test("推荐跟单张时选择自然单张最小非分牌", () => {
   const ids = recommendPlay(room, "p1");
   const card = seat.hand.find((c) => c.id === ids[0]);
   assert.equal(ids.length, 1);
-  assert.equal(card.rank, "6");
+  assert.equal(card.rank, "4");
 });
 
-test("推荐默认不带分，必要带分时从小到大", () => {
+test("推荐跟牌不避开分牌，只选本门最小", () => {
   const room = createRoom("HINTPOINTS");
   room.phase = "playing";
   room.levelRank = "2";
@@ -346,7 +347,7 @@ test("推荐默认不带分，必要带分时从小到大", () => {
   assert.equal(card.rank, "5");
 });
 
-test("推荐首出时避开分牌，先出最小非分单张", () => {
+test("推荐首出选择手中最小牌", () => {
   const room = createRoom("HINTLEAD");
   room.phase = "playing";
   room.levelRank = "2";
@@ -361,7 +362,32 @@ test("推荐首出时避开分牌，先出最小非分单张", () => {
   const ids = recommendPlay(room, "p0");
   const recommended = seat.hand.find((c) => c.id === ids[0]);
   assert.equal(ids.length, 1);
-  assert.equal(recommended.rank, "6");
+  assert.equal(recommended.rank, "5");
+});
+
+test("真人托管出牌与推荐一致，跟本门花色最小牌", () => {
+  const room = createRoom("TRUSTEEHINT");
+  room.phase = "playing";
+  room.levelRank = "2";
+  room.trumpSuit = "hearts";
+  const deck = createDeck();
+  const cardsOf = (rank, suit, n = 1) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, n);
+  const lead = cardsOf("A", "clubs", 1)[0];
+  const leader = room.seats[0];
+  leader.playerId = "p0";
+  const seat = room.seats[1];
+  seat.playerId = "p1";
+  seat.trustee = true;
+  seat.isAi = false;
+  seat.hand = [cardsOf("5", "clubs", 1)[0], cardsOf("10", "clubs", 1)[0], cardsOf("K", "clubs", 1)[0]];
+  room.currentTrick = [{ seat: 0, cards: [lead], shape: analyzeShape([lead], room), points: 0 }];
+  room.turnSeat = 1;
+
+  const acted = runAiStep(room);
+
+  assert.equal(acted, true);
+  assert.equal(room.currentTrick[1].cards.length, 1);
+  assert.equal(room.currentTrick[1].cards[0].rank, "5");
 });
 
 test("AI 抢庄只用手里真实的常主牌", () => {
@@ -510,7 +536,7 @@ test("AI 首出会甩出全大组合（甩牌兑现）", () => {
   assert.ok(threw > 0, `应当至少有时甩出全大的黑桃 A+K，实际 ${threw}/40`);
 });
 
-test("弱 AI 偶尔会下注（避免叫牌阶段毫无对抗）", () => {
+test("5 人弱 AI 不主动亮主", () => {
   const room = createRoom("EASYSOMETIMES");
   const deck = createDeck();
   const seat = room.seats[0];
@@ -520,9 +546,38 @@ test("弱 AI 偶尔会下注（避免叫牌阶段毫无对抗）", () => {
     ...deck.filter((c) => c.suit === "spades" && c.rank !== "K").slice(0, 10),
     ...deck.filter((c) => c.suit === "clubs").slice(0, 12)
   ];
-  let bids = 0;
-  for (let k = 0; k < 60; k++) { seat.aiRngState = (k * 40503 + 5) | 0; if (decideAiBid(room, seat)) bids++; }
-  assert.ok(bids > 0 && bids < 60, `弱 AI 应当偶尔下注但非每次，实际 ${bids}/60`);
+  for (let k = 0; k < 60; k++) {
+    seat.aiRngState = (k * 40503 + 5) | 0;
+    assert.equal(decideAiBid(room, seat), null);
+  }
+});
+
+test("5 人弱 AI 被强制坐庄时可以亮主", () => {
+  const room = createRoom("EASYFORCED");
+  const deck = createDeck();
+  for (let i = 0; i < 5; i += 1) {
+    const seat = room.seats[i];
+    seat.playerId = `p${i}`;
+    seat.nickname = `P${i}`;
+    seat.level = "7";
+  }
+  room.starterSeat = 0;
+  const lastKittyCard = deck.find((c) => c.rank === "A" && c.suit === "spades");
+  forceDealer(room, lastKittyCard);
+  room.forceSpin.startedAt = Date.now() - room.forceSpin.count * room.forceSpin.intervalMs - 1;
+  const dealer = room.seats[room.dealerSeat];
+  dealer.isAi = true;
+  dealer.aiLevel = "easy";
+  dealer.hand = [
+    ...deck.filter((c) => c.rank === "7" && c.suit === "hearts").slice(0, 2),
+    ...deck.filter((c) => c.suit === "hearts" && c.rank !== "7").slice(0, 8)
+  ];
+
+  const acted = runAiStep(room);
+
+  assert.equal(acted, true);
+  assert.equal(room.currentBid.trumpSuit, "hearts");
+  assert.equal(room.currentBid.cards.length, 2);
 });
 
 test("三条锁定剩两张时不死锁：锁定对不强制跟对，单张合法", () => {
@@ -2634,6 +2689,18 @@ test("6 人扣底倍率按维基三副牌表", () => {
   assert.equal(buryMultiplierFixedTeam6(tractor(2, 3)), 6);
   assert.equal(buryMultiplierFixedTeam6(tractor(3, 2)), 6);
   assert.equal(buryMultiplierFixedTeam6(tractor(3, 3)), 8);
+});
+
+test("5 人扣底倍率沿用 6 人三副牌表", () => {
+  const tractor = (unit, count) => ({ type: "tractor", unit, count });
+  assert.equal(buryMultiplierFindFriend5(null), 2);
+  assert.equal(buryMultiplierFindFriend5({ type: "single" }), 2);
+  assert.equal(buryMultiplierFindFriend5({ type: "pair" }), 3);
+  assert.equal(buryMultiplierFindFriend5({ type: "triple" }), 4);
+  assert.equal(buryMultiplierFindFriend5(tractor(2, 2)), 5);
+  assert.equal(buryMultiplierFindFriend5(tractor(2, 3)), 6);
+  assert.equal(buryMultiplierFindFriend5(tractor(3, 2)), 6);
+  assert.equal(buryMultiplierFindFriend5(tractor(3, 3)), 8);
 });
 
 test("5 人房间默认配置不变（回归）", () => {

@@ -958,7 +958,10 @@ export function runAiStep(room) {
     if ((room.trickPauseUntil || 0) > Date.now()) return false;
     const seat = room.seats[room.turnSeat];
     const leaderCards = room.currentTrick[0]?.cards ?? null;
-    const cards = chooseAiPlay(room, seat, leaderCards);
+    let cards = seat.trustee && !seat.isAi
+      ? chooseRecommendedPlay(room, seat, leaderCards)
+      : chooseAiPlay(room, seat, leaderCards);
+    if (!cards || !cards.length) cards = safeAiPlay(room, seat, leaderCards);
     playCards(room, seat.playerId, cards.map((card) => card.id));
     return true;
   }
@@ -977,28 +980,15 @@ export function setTrustee(room, playerId, on) {
   return seat.trustee;
 }
 
-// 推荐出牌（提示按钮）：给出一手"强档"的合法好牌（赢墩/喂分/做空门等策略，与强
-// AI 同源），而非过去的"规则内最小组合"。同步执行（用户点击触发），用启发式选牌器
-// 即可，足够快且永远合法、绝不抛错。服务端的 hint 处理器会在此基础上再叠加一层轻量
-// PIMC 搜索（带记牌器）以进一步提升，搜索失败时回退到这里的启发式结果。
+// 推荐出牌（提示按钮）：按规则内的本门花色最小合法组合给出提示。
+// 真人托管出牌也复用这套逻辑，避免托管替玩家做额外策略选择。
 export function recommendPlay(room, playerId) {
   if (room.phase !== PHASES.PLAYING) return null;
   const seat = room.seats.find((s) => s.playerId === playerId);
   if (!seat || seat.index !== room.turnSeat) return null;
   const leaderCards = room.currentTrick[0]?.cards ?? null;
   let cards = null;
-  try {
-    // 以"强"档视角选牌：临时把座位看作 hard AI（不改动真实座位的任何字段），
-    // 让 aiProfile 走 hard 档启发式（赢墩/喂分/控分/做空门 + 低温≈argmax 决策）。
-    const strongSeat = { ...seat, aiLevel: "hard", aiBias: 0 };
-    cards = chooseAiPlay(room, strongSeat, leaderCards);
-    // 保险：用真实座位再校验一次合法性（strongSeat 与真实座位手牌同源，正常必合法）。
-    if (cards && cards.length && !validatePlay(room, seat, cards, leaderCards).ok) cards = null;
-  } catch (_) { cards = null; }
-  if (!cards || !cards.length) {
-    // 任何意外都回退到"规则内最小合法组合"，保证提示永远给得出且合法。
-    try { cards = chooseRecommendedPlay(room, seat, leaderCards); } catch (_) { cards = null; }
-  }
+  try { cards = chooseRecommendedPlay(room, seat, leaderCards); } catch (_) { cards = null; }
   if (!cards || !cards.length) {
     try { cards = safeAiPlay(room, seat, leaderCards); } catch (_) { cards = null; }
   }
@@ -1007,21 +997,11 @@ export function recommendPlay(room, playerId) {
 
 function chooseRecommendedPlay(room, seat, leaderCards = null) {
   if (!leaderCards) return [lowestRecommendedCard(seat.hand, room)];
-  if (leaderCards.length === 1) {
-    const single = chooseRecommendedSingleFollow(room, seat, leaderCards);
-    if (single) return single;
-  }
   const length = leaderCards.length;
-  const noScore = findRecommendedLegalCombination(
-    room,
-    seat,
-    leaderCards,
-    length,
-    seat.hand.filter((card) => cardScore(card) === 0)
-  );
-  if (noScore) return noScore;
-
-  const any = findRecommendedLegalCombination(room, seat, leaderCards, length, seat.hand);
+  const ledSuit = playSuit(leaderCards[0], room);
+  const sameSuit = seat.hand.filter((card) => playSuit(card, room) === ledSuit);
+  const pool = sameSuit.length ? sameSuit : seat.hand;
+  const any = findRecommendedLegalCombination(room, seat, leaderCards, length, pool);
   if (any) return any;
 
   const fallbackCandidates = [
@@ -1030,26 +1010,6 @@ function chooseRecommendedPlay(room, seat, leaderCards = null) {
     safeAiPlay(room, seat, leaderCards)
   ];
   return bestRecommendedCandidate(room, seat, leaderCards, fallbackCandidates);
-}
-
-function chooseRecommendedSingleFollow(room, seat, leaderCards) {
-  const ledSuit = playSuit(leaderCards[0], room);
-  const sameSuit = seat.hand.filter((card) => playSuit(card, room) === ledSuit);
-  const pool = sameSuit.length ? sameSuit : seat.hand;
-  const naturalSingles = rankSuitGroups(pool).filter((group) => group.length === 1).map((group) => group[0]);
-  const stages = [
-    naturalSingles.filter((card) => cardScore(card) === 0),
-    pool.filter((card) => cardScore(card) === 0),
-    naturalSingles,
-    pool
-  ];
-  for (const stage of stages) {
-    const sorted = sortRecommendedCards(stage, room);
-    for (const card of sorted) {
-      if (validatePlay(room, seat, [card], leaderCards).ok) return [card];
-    }
-  }
-  return null;
 }
 
 function findRecommendedLegalCombination(room, seat, leaderCards, length, pool = seat.hand) {
@@ -1092,9 +1052,6 @@ function bestRecommendedCandidate(room, seat, leaderCards, candidates) {
 }
 
 function compareRecommendedPlays(a, b, room) {
-  const scoreA = a.reduce((sum, card) => sum + cardScore(card), 0);
-  const scoreB = b.reduce((sum, card) => sum + cardScore(card), 0);
-  if (scoreA !== scoreB) return scoreA - scoreB;
   const aa = sortRecommendedCards(a, room);
   const bb = sortRecommendedCards(b, room);
   for (let i = 0; i < Math.min(aa.length, bb.length); i += 1) {
@@ -1113,20 +1070,10 @@ function sortRecommendedCards(cards, room) {
 }
 
 function compareRecommendedCards(a, b, room) {
-  return cardScore(a) - cardScore(b)
-    || cardOrderValue(a, room) - cardOrderValue(b, room)
+  return cardOrderValue(a, room) - cardOrderValue(b, room)
     || String(a.suit).localeCompare(String(b.suit))
+    || cardScore(a) - cardScore(b)
     || String(a.id).localeCompare(String(b.id));
-}
-
-function rankSuitGroups(cards) {
-  const groups = new Map();
-  for (const card of cards) {
-    const key = `${card.rank}|${card.suit}`;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(card);
-  }
-  return [...groups.values()];
 }
 
 // ─── AI difficulty profiles ─────────────────────────────────
@@ -2460,7 +2407,7 @@ function chooseAiForcedTrump(room, dealer) {
     }
     return best ? best.suit : SUITS[0];
   }
-  if (!profile.pull) return null; // easy doesn't manage trump — keep the kitty suit
+  if (!profile.pull && !hasFriendMode(room)) return null; // easy doesn't manage trump — keep the kitty suit
   // Use the round's level rank (what chooseForcedTrump validates against) so we
   // never propose a suit the dealer can't actually reveal a level card for.
   let best = null;
@@ -2470,6 +2417,7 @@ function chooseAiForcedTrump(room, dealer) {
     if (!best || strength > best.strength) best = { suit: s, strength };
   }
   if (!best) return null;
+  if (!profile.pull && hasFriendMode(room)) return best.suit;
   const curStrength = room.trumpSuit ? suitStrength(room.trumpSuit) : 0;
   return best.strength > curStrength + 1 ? best.suit : null;
 }
@@ -2494,6 +2442,7 @@ function auctionStrength(hand, level, suit, W) {
 
 export function decideAiBid(room, seat) {
   const profile = aiProfile(seat);
+  if (hasFriendMode(room) && profile.autoBid === false) return null;
   // easy normally doesn't auto-bid, but a table where easy NEVER bids reads as
   // broken (total auction pushover). Let it place an occasional weak bid: a random
   // roll must pass AND it still needs a legal bid + minimal strength below.

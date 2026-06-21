@@ -1,9 +1,9 @@
 /* ─── Variables ─────────────────────────────────────────── */
 :root {
-  --felt:        #1a5c3a;
-  --felt-dark:   #0f3d26;
-  --felt-light:  #226b47;
-  --felt-edge:   #0a2a1a;
+  --felt:        #2f7666;
+  --felt-dark:   #18483f;
+  --felt-light:  #6fa58d;
+  --felt-edge:   #0d2f2b;
   --gold:        #c8902d;
   --gold-light:  #e8b84b;
   --gold-dim:    rgba(200,144,45,.35);
@@ -305,7 +305,12 @@ button, input, select { font: inherit; }
 }
 .topbar-btn:active { background: rgba(200,144,45,.2); }
 .topbar-btn.audio-off { opacity: .45; }
-.audio-menu { position: relative; display: inline-block; }
+.topbar-btn.music-btn {
+  color: var(--gold);
+  font-weight: 800;
+  text-shadow: 0 1px 2px rgba(0,0,0,.55);
+}
+.audio-menu { position: relative; display: inline-block; z-index: 120; }
 .join-screen .join-audio-menu {
   position: absolute;
   top: calc(12px + env(safe-area-inset-top));
@@ -313,7 +318,7 @@ button, input, select { font: inherit; }
   z-index: 3;
 }
 .audio-panel {
-  position: absolute; top: 132%; right: 0; z-index: 60;
+  position: absolute; top: 132%; right: 0; z-index: 500;
   min-width: 190px; max-width: 84vw; padding: 11px 13px;
   background: rgba(20,16,10,.97); border: 1px solid rgba(200,144,45,.45);
   border-radius: 9px; box-shadow: 0 8px 22px rgba(0,0,0,.55);
@@ -335,6 +340,7 @@ button, input, select { font: inherit; }
 
 /* Top bar */
 .topbar {
+  position: relative;
   flex-shrink: 0;
   height: 38px;
   display: flex;
@@ -345,7 +351,7 @@ button, input, select { font: inherit; }
   background: linear-gradient(180deg, rgba(10,30,18,.92) 0%, rgba(0,0,0,.55) 100%);
   border-bottom: 1px solid rgba(200,144,45,.45);
   box-shadow: 0 2px 12px rgba(0,0,0,.4), 0 1px 0 rgba(200,144,45,.15);
-  z-index: 10;
+  z-index: 100;
 }
 
 .topbar-left {
@@ -497,29 +503,27 @@ button, input, select { font: inherit; }
   position: relative;
   flex: 1;
   overflow: hidden;
-  background:
-    radial-gradient(ellipse at 50% 45%, var(--felt-light) 0%, var(--felt) 45%, var(--felt-dark) 100%);
+  background: #2a160b url("/table-bg-bamboo-alt.png?v=20260620") center / cover no-repeat;
 }
 
-/* Felt texture overlay */
+/* Subtle lighting overlay; the detailed table art lives in table-bg-bamboo.png. */
 .table-felt::before {
   content: '';
-  position: absolute; inset: 0;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4'%3E%3Ccircle cx='1' cy='1' r='.6' fill='rgba(0,0,0,.08)'/%3E%3C/svg%3E");
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 42%, rgba(255,255,255,.08) 0%, transparent 38%),
+    radial-gradient(ellipse at 50% 50%, transparent 58%, rgba(0,0,0,.26) 100%);
   pointer-events: none;
   z-index: 0;
 }
 
-/* Oval table edge */
 .table-felt::after {
   content: '';
   position: absolute;
-  inset: 8px;
-  border: 2px solid rgba(200,144,45,.25);
-  border-radius: 50%;
+  inset: 0;
   pointer-events: none;
   z-index: 0;
-  box-shadow: inset 0 0 60px rgba(0,0,0,.3), 0 0 0 1px rgba(200,144,45,.1);
 }
 
 /* ─── Seats ──────────────────────────────────────────────── */
