@@ -2,6 +2,7 @@ server-out.txt
 server-err.txt
 node_modules/
 .env
+.data/
 .DS_Store
 .run/
 bench/tune-progress.log

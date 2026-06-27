@@ -39,6 +39,7 @@ import {
   loadAiWeights
 } from "./src/game.js";
 import { pimcChoosePlay } from "./src/ai/pimc.js";
+import { saveStandings, loadStandings, roomFromStandings, sweepExpiredStandings } from "./src/persistence.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,6 +68,21 @@ process.on("unhandledRejection", (reason) => {
 const port = Number(process.env.PORT || 3000);
 const rooms = new Map();
 const sockets = new Map();
+
+// Look up a live room, OR resurrect one from persisted standings (战绩/等级) when it
+// isn't in memory — e.g. after a server restart or after the 10-min empty-room sweep.
+// The restored room is a between-rounds lobby with levels intact; players reconnect
+// by playerId and the host starts the next round. Returns null if no such room exists.
+function getOrLoadRoom(code) {
+  let room = rooms.get(code);
+  if (room) return room;
+  const saved = loadStandings(code);
+  if (!saved) return null;
+  room = roomFromStandings(saved);
+  if (!room) return null;
+  rooms.set(room.code, room);
+  return room;
+}
 const BID_RESPONSE_TIMEOUT_MS = 10000;
 // 单帧负载上限：防止伪造超大长度头让 recvBuffer 无限累积（内存耗尽 / DoS）。
 // 6 人长局的 state 广播也远小于此。
@@ -156,6 +172,7 @@ setInterval(() => {
       rooms.delete(code);
     }
   }
+  sweepExpiredStandings(); // drop on-disk standings whose snapshot has aged past the TTL
 }, ROOM_SWEEP_MS).unref?.();
 
 function serveStatic(urlPath, res) {
@@ -219,7 +236,7 @@ function handleMessage(client, message) {
       const storedId = String(payload.playerId || "").trim();
       const code = String(payload.code || "").trim().toUpperCase();
       if (!storedId) throw new Error("无效的玩家ID");
-      const room = rooms.get(code);
+      const room = getOrLoadRoom(code);
       if (!room) throw new Error("房间不存在");
 
       // Find the seat that held this playerId
@@ -254,7 +271,7 @@ function handleMessage(client, message) {
     }
     if (type === "joinRoom") {
       const code = String(payload.code || "").trim().toUpperCase();
-      const room = rooms.get(code);
+      const room = getOrLoadRoom(code);
       if (!room) throw new Error("房间不存在");
       // Try reconnect by playerId first
       const storedId = String(payload.playerId || "").trim();
@@ -432,6 +449,7 @@ function currentRoom(client) {
 }
 
 function broadcast(room) {
+  saveStandings(room); // durably persist 战绩/等级 on every change (signature-gated, best-effort)
   if (!room.clients || room.clients.size === 0) return;
   const shared = buildSharedState(room); // heavy work done once, reused per viewer
   for (const client of room.clients) {
