@@ -7,6 +7,8 @@
     "start": "node server.js",
     "test": "node --test",
     "bench": "node bench/ai-eval.mjs",
+    "ai:rollout": "node bench/learning/rollout.mjs",
+    "ai:evaluate": "node bench/learning/evaluate.mjs",
     "voices": "node scripts/generate-voices.mjs"
   },
   "license": "MIT",

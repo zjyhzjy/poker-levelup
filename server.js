@@ -39,9 +39,16 @@ import {
   loadAiWeights
 } from "./src/game.js";
 import { pimcChoosePlay } from "./src/ai/pimc.js";
+import { chooseLearnedPlay, validateModel } from "./src/ai/learning/network.js";
 import { saveStandings, loadStandings, roomFromStandings, sweepExpiredStandings } from "./src/persistence.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Explicit opt-in only. Short training runs are experimental, so existing AI
+// remains the default. A malformed requested checkpoint fails startup clearly.
+const learnedModel = process.env.LEARNED_AI_MODEL
+  ? validateModel(JSON.parse(fs.readFileSync(path.resolve(process.env.LEARNED_AI_MODEL), "utf8")))
+  : null;
+if (learnedModel) console.log("Experimental learned AI enabled for 5/6-player master seats");
 
 // 自对弈调参权重默认【关闭】：它在自对弈指标上看着更强(+0.46)，但实为过拟合——
 // 把"给敌家送分"的惩罚调到几乎为 0(fGiftPts 3.5→0.2)、不保护自己分(fRiskOwnPts→0)，
@@ -684,6 +691,15 @@ function searchStep(room) {
   const opts = SEARCH_OPTS[seat.aiLevel];
   if (!opts) return false; // 弱/中：纯启发式，不搜索
   try {
+    if (learnedModel && seat.aiLevel === "master" && [5, 6].includes(room.seatCount)) {
+      try {
+        const learned = chooseLearnedPlay(room, room.turnSeat, learnedModel);
+        playCards(room, seat.playerId, learned.map(c => c.id));
+        return true;
+      } catch (error) {
+        console.error("[learned AI] falling back to PIMC:", error.message);
+      }
+    }
     const cards = pimcChoosePlay(room, room.turnSeat, opts);
     if (!cards || !cards.length) return false;
     playCards(room, seat.playerId, cards.map((c) => c.id));
