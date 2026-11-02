@@ -13,7 +13,7 @@ reserve.listen(0,'127.0.0.1');await once(reserve,'listening');
 const port=reserve.address().port;
 await new Promise(resolve=>reserve.close(resolve));
 const child=spawn(process.execPath,['server.js'],{cwd:root,windowsHide:true,
-  env:{...process.env,PORT:String(port),LEARNED_AI_MODEL:path.resolve(model)},stdio:['ignore','pipe','pipe']});
+  env:{...process.env,PORT:String(port),AUTO_LEARNING:'0',LEARNED_AI_MODEL:path.resolve(model)},stdio:['ignore','pipe','pipe']});
 let output='';
 child.stdout.on('data',chunk=>{output+=chunk;});
 child.stderr.on('data',chunk=>{output+=chunk;});

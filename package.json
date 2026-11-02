@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
+    "start:learning": "node scripts/start-learning.mjs",
     "test": "node --test",
     "bench": "node bench/ai-eval.mjs",
     "ai:rollout": "node bench/learning/rollout.mjs",

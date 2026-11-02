@@ -10,6 +10,7 @@ os.environ.setdefault('OMP_NUM_THREADS', '2')
 os.environ.setdefault('MKL_NUM_THREADS', '2')
 import argparse
 import json
+import gzip
 import pathlib
 import shutil
 import subprocess
@@ -102,6 +103,46 @@ class Network:
                 'hiddenSize':len(self.p['encoderB']), 'actionHiddenSize':len(self.p['qB']),
                 'seatCounts':[5,6], 'metadata':metadata or {}, **{k:v.tolist() for k,v in self.p.items()}}
 
+    @classmethod
+    def from_checkpoint(cls, checkpoint, seed=1):
+        if (checkpoint.get('schema') != SCHEMA or checkpoint.get('observationSize') != OBSERVATION_SIZE
+                or checkpoint.get('actionSize') != ACTION_SIZE or checkpoint.get('seatCounts') != [5,6]):
+            raise ValueError('Incompatible checkpoint')
+        model=cls(seed, checkpoint['hiddenSize'], checkpoint['actionHiddenSize'])
+        for name in PARAMS:
+            value=np.asarray(checkpoint[name], dtype=np.float32)
+            if value.shape != model.p[name].shape or not np.isfinite(value).all():
+                raise ValueError('Invalid checkpoint parameter '+name)
+            model.p[name]=value
+        return model
+
+
+def load_live_rounds(manifest):
+    rows=[]
+    files=json.loads(pathlib.Path(manifest).read_text(encoding='utf8'))
+    if not isinstance(files,list) or len(files)>100:
+        raise ValueError('Invalid live-round manifest')
+    for file in files:
+        # Bound decompression before parsing; never accept arbitrary huge replay blobs.
+        with gzip.open(file,'rb') as stream:
+            raw=stream.read(4*1024*1024+1)
+        if len(raw)>4*1024*1024:
+            raise ValueError('Oversized live round')
+        record=json.loads(raw)
+        if (record.get('schema')!=SCHEMA or record.get('recordType')!='completed-live-round-v1'
+                or record.get('seatCount') not in (5,6) or record.get('humanActions',0)<1):
+            raise ValueError('Not a complete supported human round')
+        samples=record['samples']
+        if not 1<=len(samples)<=200:
+            raise ValueError('Invalid round length')
+        data=arrays(samples)
+        for i,width in [(0,OBSERVATION_SIZE),(1,ACTION_SIZE),(3,378),(4,378),(5,6)]:
+            if data[i].shape!=(len(samples),width):raise ValueError('Invalid live sample shape')
+        if not all(np.isfinite(a).all() for a in data):raise ValueError('Non-finite live sample')
+        if ((data[5]<-1)|(data[5]>7)).any():raise ValueError('Invalid behavior target')
+        rows.extend(samples)
+    return rows,len(files)
+
 
 def arrays(samples):
     names = ['observation', 'action', 'reward', 'belief', 'beliefMask', 'behavior']
@@ -126,6 +167,8 @@ def main():
     parser.add_argument('--sample-rate', type=float, default=.25)
     parser.add_argument('--out', default='.run/learning')
     parser.add_argument('--node', default=shutil.which('node') or 'node')
+    parser.add_argument('--init', help='Warm-start weights; optimizer is intentionally reset')
+    parser.add_argument('--live-manifest', help='JSON list of completed anonymous .json.gz rounds')
     args = parser.parse_args()
     if (args.iterations<1 or args.games<2 or args.games%2 or args.epochs<1 or args.batch_size<1
             or not 0<args.sample_rate<=1 or not 1<=args.hidden<=512 or not np.isfinite(args.lr) or args.lr<=0
@@ -137,16 +180,19 @@ def main():
     candidate = out/'candidate.json'
     if candidate.exists():
         parser.error('Output already has a candidate.json; choose a fresh --out directory to preserve existing training')
-    model = Network(args.seed, args.hidden)
-    history, replay, seeds = [], [], []
+    checkpoint=json.loads(pathlib.Path(args.init).read_text(encoding='utf8')) if args.init else None
+    model = Network.from_checkpoint(checkpoint,args.seed) if checkpoint else Network(args.seed, args.hidden)
+    live,live_rounds=load_live_rounds(args.live_manifest) if args.live_manifest else ([],0)
+    inherited=checkpoint.get('metadata',{}).get('trainingSeeds',[]) if checkpoint else []
+    history, replay, seeds = [], [], list(inherited)
     for iteration in range(args.iterations):
         data_path = out/f'rollout-{iteration:03}.jsonl'
         iteration_seed = args.seed+iteration*10000000
         command = [args.node, str(root/'bench/learning/rollout.mjs'), '--games', str(args.games),
                    '--seed', str(iteration_seed), '--sample-rate', str(args.sample_rate),
                    '--out', str(data_path), '--epsilon', str(max(.05, .25/(1+iteration)))]
-        if iteration:
-            command += ['--model', str(candidate)]
+        if iteration or args.init:
+            command += ['--model', str(candidate if iteration else pathlib.Path(args.init).resolve())]
         if iteration>1:
             command += ['--previous', str(out/f'checkpoint-{iteration-2:03}.json')]
         result = subprocess.run(command, cwd=root, check=True, capture_output=True, text=True)
@@ -157,7 +203,12 @@ def main():
         seeds += [iteration_seed+i*7919 for i in range(args.games)]
         replay.append(current)
         replay = replay[-3:]
-        data = arrays([s for chunk in replay for s in chunk])
+        simulated=[s for chunk in replay for s in chunk]
+        # Real-world trajectories are capped at 40% of examples, so a small group
+        # of players cannot completely replace self-play in the training distribution.
+        live_count=min(len(live),int(len(simulated)*2/3))
+        selected=[live[i] for i in model.rng.choice(len(live),live_count,replace=False)] if live_count else []
+        data = arrays(simulated+selected)
         for _ in range(args.epochs):
             order = model.rng.permutation(len(data[0]))
             for start in range(0, len(order), args.batch_size):
@@ -171,6 +222,7 @@ def main():
         metadata = {'algorithm':'multi-task deep Monte-Carlo policy iteration', 'experimental':True,
                     'trainingSeeds':seeds, 'iterations':history, 'seed':args.seed,
                     'games':args.games*(iteration+1), 'optimizerSteps':model.step,
+                    'liveRounds':live_rounds,'liveExamplesAvailable':len(live),'liveExamplesThisIteration':live_count,
                     'scope':'play phase only; bounded engine candidates; no optimality or strength guarantee'}
         save_json(candidate, model.export(metadata))
         save_json(out/f'checkpoint-{iteration:03}.json', model.export(metadata))

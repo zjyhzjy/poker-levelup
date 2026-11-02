@@ -4,8 +4,9 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import gzip
 import numpy as np
-from train import Network, OBSERVATION_SIZE, ACTION_SIZE
+from train import Network, OBSERVATION_SIZE, ACTION_SIZE, load_live_rounds, SCHEMA
 
 
 class TrainingTests(unittest.TestCase):
@@ -42,6 +43,28 @@ class TrainingTests(unittest.TestCase):
             _,grad,_=model.loss_grad(batch)
             model.update(grad,.01)
         self.assertLess(model.loss_grad(batch)[0],before*.5)
+
+    def test_warm_start_preserves_weights_and_rejects_incompatible_schema(self):
+        original=Network(hidden=4,action_hidden=4)
+        restored=Network.from_checkpoint(original.export())
+        x,a,*_=self.batch()
+        np.testing.assert_allclose(original.forward(x,a)[3],restored.forward(x,a)[3])
+        bad=original.export();bad['schema']='wrong'
+        with self.assertRaises(ValueError):Network.from_checkpoint(bad)
+
+    def test_live_loader_accepts_only_bounded_complete_rounds(self):
+        x,a,y,b,mask,labels=self.batch()
+        sample={'observation':x[0].tolist(),'action':a[0].tolist(),'reward':float(y[0]),
+                'belief':b[0].tolist(),'beliefMask':mask[0].tolist(),'behavior':labels[0].tolist()}
+        record={'schema':SCHEMA,'recordType':'completed-live-round-v1','seatCount':5,'humanActions':1,'samples':[sample]}
+        with tempfile.TemporaryDirectory() as folder:
+            file=pathlib.Path(folder)/'round.json.gz';manifest=pathlib.Path(folder)/'manifest.json'
+            manifest.write_text(json.dumps([str(file)]),encoding='utf8')
+            with gzip.open(file,'wt',encoding='utf8') as stream:json.dump(record,stream)
+            rows,count=load_live_rounds(manifest);self.assertEqual(count,1);self.assertEqual(len(rows),1)
+            record['recordType']='partial-round'
+            with gzip.open(file,'wt',encoding='utf8') as stream:json.dump(record,stream)
+            with self.assertRaises(ValueError):load_live_rounds(manifest)
 
     def test_missing_behavior_targets_are_masked(self):
         model=Network(hidden=4,action_hidden=4)

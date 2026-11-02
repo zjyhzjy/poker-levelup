@@ -40,6 +40,7 @@ import {
 } from "./src/game.js";
 import { pimcChoosePlay } from "./src/ai/pimc.js";
 import { chooseLearnedPlay, validateModel } from "./src/ai/learning/network.js";
+import { AutomaticLearning } from "./src/ai/learning/automatic.js";
 import { saveStandings, loadStandings, roomFromStandings, sweepExpiredStandings } from "./src/persistence.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -49,6 +50,15 @@ const learnedModel = process.env.LEARNED_AI_MODEL
   ? validateModel(JSON.parse(fs.readFileSync(path.resolve(process.env.LEARNED_AI_MODEL), "utf8")))
   : null;
 if (learnedModel) console.log("Experimental learned AI enabled for 5/6-player master seats");
+let automaticLearning = null;
+if (process.env.AUTO_LEARNING === "1") {
+  const configFile = path.join(__dirname, ".run", "auto-learning.json");
+  const config = fs.existsSync(configFile) ? JSON.parse(fs.readFileSync(configFile, "utf8")) : {};
+  automaticLearning = await new AutomaticLearning({root:__dirname, ...config,
+    fallbackModel:learnedModel, fallbackPath:process.env.LEARNED_AI_MODEL ? path.resolve(process.env.LEARNED_AI_MODEL) : null,
+    onError:error=>console.error("[automatic learning]", error.message)}).start();
+  console.log("Automatic learning enabled: anonymous complete rounds, gated background updates");
+}
 
 // 自对弈调参权重默认【关闭】：它在自对弈指标上看着更强(+0.46)，但实为过拟合——
 // 把"给敌家送分"的惩罚调到几乎为 0(fGiftPts 3.5→0.2)、不保护自己分(fRiskOwnPts→0)，
@@ -87,6 +97,7 @@ function getOrLoadRoom(code) {
   if (!saved) return null;
   room = roomFromStandings(saved);
   if (!room) return null;
+  automaticLearning?.attach(room);
   rooms.set(room.code, room);
   return room;
 }
@@ -114,6 +125,7 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname === "/api/rooms" && req.method === "POST") {
     const room = createRoom(undefined, { seatCount: Number(url.searchParams.get("seatCount")) });
+    automaticLearning?.attach(room);
     rooms.set(room.code, room);
     sendJson(res, { code: room.code });
     return;
@@ -205,7 +217,9 @@ function serveStatic(urlPath, res) {
     // 首页里给 app.js / style.css 注入“按文件 mtime 计算的版本号”，改了前端就自动 bust
     // 浏览器/Cloudflare 缓存（首页本身 no-cache，所以每次都拿到最新版本号，无需手动改）。
     if (filePath === path.join(publicDir, "index.html")) {
-      try { body = Buffer.from(data.toString("utf8").replace(/\?v=[\w.]+/g, `?v=${assetVersion()}`)); }
+      try { body = Buffer.from(data.toString("utf8").replace(/\?v=[\w.]+/g, `?v=${assetVersion()}`)
+        .replace("<!-- automatic-learning-notice -->", automaticLearning
+          ? '<p class="learning-notice">本服会将已结束的五／六人对局用于本机 AI 训练，不保存昵称、玩家身份或 IP。未完成对局不入库。</p>' : "")); }
       catch (_) { /* 注入失败就原样发送 */ }
     }
     res.writeHead(200, { "Content-Type": contentType(filePath), "Cache-Control": cacheControl(filePath) });
@@ -269,6 +283,7 @@ function handleMessage(client, message) {
 
     if (type === "createRoom") {
       const room = createRoom(undefined, { seatCount: Number(payload.seatCount) });
+      automaticLearning?.attach(room);
       rooms.set(room.code, room);
       // Adopt the client-owned stable id so future reconnects map to this seat.
       const stableId = String(payload.playerId || "").trim();
@@ -355,7 +370,7 @@ function handleMessage(client, message) {
       addAi:            () => addAiPlayer(room, Number(payload.seatIndex), payload.level),
       kickAi:           () => kickAi(room, Number(payload.seatIndex)),
       leaveSeat:        () => leaveSeat(room, client.playerId),
-      startRound:       () => startRound(room, Math.random, { deal: false }),
+      startRound:       () => { startRound(room, Math.random, { deal: false }); automaticLearning?.pin(room); },
       bid:              () => makeBid(room, client.playerId, payload.cardIds || []),
       passBid:          () => passBid(room, client.playerId),
       sixCallTrump:     () => callSixTrump(room, client.playerId, payload.cardIds || []),
@@ -691,9 +706,10 @@ function searchStep(room) {
   const opts = SEARCH_OPTS[seat.aiLevel];
   if (!opts) return false; // 弱/中：纯启发式，不搜索
   try {
-    if (learnedModel && seat.aiLevel === "master" && [5, 6].includes(room.seatCount)) {
+    const roundModel = automaticLearning ? automaticLearning.modelFor(room) : learnedModel;
+    if (roundModel && seat.aiLevel === "master" && [5, 6].includes(room.seatCount)) {
       try {
-        const learned = chooseLearnedPlay(room, room.turnSeat, learnedModel);
+        const learned = chooseLearnedPlay(room, room.turnSeat, roundModel);
         playCards(room, seat.playerId, learned.map(c => c.id));
         return true;
       } catch (error) {

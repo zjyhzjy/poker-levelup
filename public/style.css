@@ -2193,3 +2193,5 @@ body.desktop .emote-proj { font-size: 46px; }
 body.desktop .emote-particle { font-size: 26px; }
 body.desktop .emote-splat { width: 96px; height: 96px; }
 body.desktop .emote-btn { font-size: 30px; width: 52px; height: 52px; }
+/* Learning disclosure is shown only when the server enables local collection. */
+.learning-notice { font-size: 12px; line-height: 1.5; opacity: .8; margin: 0 0 10px; }

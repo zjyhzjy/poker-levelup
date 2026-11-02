@@ -2,6 +2,7 @@ import { addAiPlayer, callSixTrump, chooseAiPlay, createRoom, decideAiSixTrump, 
   passSixTrump, playCards, runAiStep, startRound, validatePlay } from '../../src/game.js';
 import { behaviorClass, counts, decisionInput, informationSet, encodeAction } from '../../src/ai/learning/observation.js';
 import { scoreActions } from '../../src/ai/learning/network.js';
+import { pimcChoosePlay } from '../../src/ai/pimc.js';
 import { mulberry32, runAuction, resolveForcedSuit } from '../lib/pimc-deal.mjs';
 
 export {mulberry32};
@@ -69,7 +70,8 @@ export function terminalReward(room, viewer) {
   return (dealerTeamSeats(room).includes(viewer)?dealerNet:-dealerNet)/3;
 }
 
-export function playEpisode({seed,seatCount,policies,model=null,epsilon=0,sampleRate=0,collect=false}) {
+export function playEpisode({seed,seatCount,policies,model=null,epsilon=0,sampleRate=0,collect=false,
+  masterOptions={determinizations:64,maxCandidates:8,timeBudgetMs:1300,rolloutLevel:'master'}}) {
   return withSeed(seed^0x5f3759df,rng=>{
     const room=prepareRoom(seed,seatCount), samples=[], moves=[];
     let latencyMs=0, learnedMoves=0;
@@ -85,7 +87,8 @@ export function playEpisode({seed,seatCount,policies,model=null,epsilon=0,sample
         const values=scoreActions(model,input.observation,input.features);
         const index=rng()<epsilon?Math.floor(rng()*values.length):values.indexOf(Math.max(...values));
         cards=input.actions[index]; latencyMs+=performance.now()-start; learnedMoves++;
-      } else if(policy==='random') cards=input.actions[Math.floor(rng()*input.actions.length)];
+      } else if(policy==='master') {seat.aiLevel='master';cards=pimcChoosePlay(room,viewer,{...masterOptions,rng});}
+      else if(policy==='random') cards=input.actions[Math.floor(rng()*input.actions.length)];
       else {
         const view=input?.view||informationSet(room,viewer);
         view.seats[viewer].aiLevel=policy==='easy'?'easy':'hard';

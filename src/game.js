@@ -793,6 +793,14 @@ export function callFriend(room, playerId, call) {
   room.tableLog.push(`${dealer.nickname} 叫朋友：第 ${ordinal} 张 ${calledCardLabel(room.friendCall)}`);
 }
 
+// Observers are external to room state, so search clones never record simulated
+// moves. A broken observer cannot change legality or interrupt the game.
+const playObservers = new WeakMap();
+export function observeRoomPlays(room, observer) {
+  if (observer) playObservers.set(room, observer);
+  else playObservers.delete(room);
+}
+
 export function playCards(room, playerId, cardIds) {
   assertPhase(room, PHASES.PLAYING);
   const seat = findSeatByPlayer(room, playerId);
@@ -803,7 +811,20 @@ export function playCards(room, playerId, cardIds) {
   autoPlayRestOfLastTrick(room);
 }
 
-function playCardsInternal(room, seat, cardIds) {
+function playCardsInternal(room, seat, cardIds, forced = false) {
+  const observer = playObservers.get(room);
+  let token;
+  const notify = (method, ...args) => {
+    try { return observer?.[method]?.(...args); }
+    catch (error) { console.error('[play observer]', error.message); return undefined; }
+  };
+  token = notify('before', room, seat, cardIds, forced);
+  try { applyPlayCards(room, seat, cardIds); }
+  catch (error) { notify('cancel', token); throw error; }
+  notify('after', room, token);
+}
+
+function applyPlayCards(room, seat, cardIds) {
   const cards = pickCards(seat.hand, cardIds);
   if (!cards.length) throw new Error("请选择要出的牌");
   const leaderPlay = room.currentTrick[0]?.cards ?? null;
@@ -906,7 +927,7 @@ function autoPlayRestOfLastTrick(room) {
     const seat = room.seats[room.turnSeat];
     const leaderCards = room.currentTrick[0]?.cards ?? null;
     if (!seat || !leaderCards || seat.hand.length !== leaderCards.length) break;
-    playCardsInternal(room, seat, seat.hand.map((card) => card.id));
+    playCardsInternal(room, seat, seat.hand.map((card) => card.id), true);
   }
   if (room.currentTrick.length === 0 || room.phase !== PHASES.PLAYING) {
     room.autoFinishLastTrick = false;
