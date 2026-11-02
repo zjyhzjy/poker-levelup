@@ -12,3 +12,5 @@ public/voice/cand2/
 .claude/
 screenshots/
 Domain.pdf
+worker/avatars.gen.js
+.wrangler/

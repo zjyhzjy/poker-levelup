@@ -203,7 +203,7 @@ function connectAndJoin(code, nickname, seatCount) {
   stopPingLoop();
   updatePingStatus("connecting");
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${proto}://${location.host}`);
+  const ws = new WebSocket(`${proto}://${location.host}/ws`);
   state.ws = ws;
   ws.addEventListener("open", () => {
     reconnectAttempts = 0;

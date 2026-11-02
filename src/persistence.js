@@ -7,22 +7,19 @@
 // playerId and the host starts the next round from the correct levels. This keeps
 // the on-disk shape tiny and avoids serialising mid-trick state, timers and sockets.
 //
-// Files live one-JSON-per-room under .data/rooms/<CODE>.json (gitignored). Writes are
-// signature-gated (only when standings actually change) and atomic (tmp + rename), so
-// the frequent broadcast() hook is cheap and a crash mid-write never corrupts a file.
+// Where snapshots live is up to the host: a store is { read(code) → string|null,
+// write(code, text), remove(code), list() → codes }, all synchronous. The Node server
+// uses one-JSON-per-room files under .data/rooms/ (src/fileStore.js); the Cloudflare
+// Worker uses Durable Object storage. Writes are signature-gated (only when standings
+// actually change), so the frequent broadcast() hook is cheap.
 
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { createRoom } from "./game.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, "..", ".data", "rooms");
 const TTL_MS = 14 * 24 * 60 * 60 * 1000; // standings older than 14 days are treated as expired
 
-function ensureDir() { try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (_) { /* best-effort */ } }
 const safeCode = (code) => String(code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-const fileFor = (code) => path.join(DATA_DIR, `${safeCode(code)}.json`);
+let store = null; // no store configured → persistence is a no-op
+export function setStandingsStore(s) { store = s; }
 
 // The persisted snapshot: levels + seat occupancy + round/dealer bookkeeping only.
 export function standingsOf(room) {
@@ -63,7 +60,7 @@ function signature(room) {
 }
 
 // Persist a room's standings if (a) it has a real human seat and (b) something we
-// persist actually changed. Never throws — disk errors must not break the game.
+// persist actually changed. Never throws — storage errors must not break the game.
 export function saveStandings(room) {
   if (!room || !room.code) return;
   if (!room.seats.some((s) => s.playerId && !s.isAi)) return; // no human → nothing worth saving
@@ -71,18 +68,14 @@ export function saveStandings(room) {
   if (sig === room._standSig) return; // unchanged since last write
   room._standSig = sig;
   try {
-    ensureDir();
-    const f = fileFor(room.code);
-    const tmp = `${f}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(standingsOf(room)));
-    fs.renameSync(tmp, f); // atomic replace on the same filesystem
+    store?.write(safeCode(room.code), JSON.stringify(standingsOf(room)));
   } catch (_) { /* swallow — persistence is best-effort */ }
 }
 
 // Read a saved snapshot for a code, or null if missing / corrupt / expired.
 export function loadStandings(code) {
   try {
-    const d = JSON.parse(fs.readFileSync(fileFor(code), "utf8"));
+    const d = JSON.parse(store?.read(safeCode(code)) ?? "null");
     if (!d || d.v !== 1) return null;
     if (d.savedAt && Date.now() - d.savedAt > TTL_MS) return null;
     return d;
@@ -116,13 +109,11 @@ export function roomFromStandings(d) {
   return room;
 }
 
-// Best-effort removal of standings files whose snapshot is older than the TTL.
+// Best-effort removal of stored snapshots that are older than the TTL.
 export function sweepExpiredStandings() {
   try {
-    for (const name of fs.readdirSync(DATA_DIR)) {
-      if (!name.endsWith(".json")) continue;
-      const code = name.slice(0, -5);
-      if (loadStandings(code) === null) { try { fs.unlinkSync(fileFor(code)); } catch (_) {} }
+    for (const code of store?.list() ?? []) {
+      if (loadStandings(code) === null) { try { store.remove(code); } catch (_) {} }
     }
-  } catch (_) { /* dir may not exist yet */ }
+  } catch (_) { /* nothing stored yet */ }
 }
