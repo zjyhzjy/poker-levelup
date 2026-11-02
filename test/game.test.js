@@ -1567,6 +1567,169 @@ test("手里有长拖拉机时，跟短拖拉机可选择任意连续短段", ()
   assert.equal(validatePlay(room, follower, brokenPairs, lead).ok, false);
 });
 
+for (const seatCount of [5, 6]) {
+  for (const scenario of [
+    { name: "同为六张时首家对子车头较大则比对子拖拉机", leadPairs: ["Q", "K", "A"], leadTriples: ["3", "4"], aPairs: ["5", "6", "7"], aTriples: ["Q", "K"], bPairs: ["9", "10", "J"], bTriples: ["3", "4"], winner: 2 },
+    { name: "同为六张时首家三条车头较大则比三条拖拉机", leadPairs: ["3", "4", "5"], leadTriples: ["K", "A"], aPairs: ["5", "6", "7"], aTriples: ["Q", "K"], bPairs: ["9", "10", "J"], bTriples: ["3", "4"], winner: 1 },
+    { name: "六张三条拖拉机优先于四张高对子拖拉机", leadPairs: ["K", "A"], leadTriples: ["3", "4"], aPairs: ["6", "7"], aTriples: ["9", "10"], bPairs: ["Q", "K"], bTriples: ["3", "4"], winner: 1 },
+    { name: "八张对子拖拉机优先于六张三条拖拉机", leadPairs: ["J", "Q", "K", "A"], leadTriples: ["3", "4"], aPairs: ["5", "6", "7", "8"], aTriples: ["Q", "K"], bPairs: ["8", "9", "10", "J"], bTriples: ["3", "4"], winner: 2 },
+    { name: "同为对子拖拉机时优先比较六张而非四张", leadPairs: ["Q", "K", "A"], leadTriples: [], leadShortPairs: ["3", "4"], aPairs: ["3", "4", "5"], aTriples: [], aShortPairs: ["Q", "K"], bPairs: ["8", "9", "10"], bTriples: [], bShortPairs: ["5", "6"], winner: 2 }
+  ]) {
+    test(`${seatCount} 人甩牌主杀按组件张数比较：${scenario.name}`, () => {
+      const room = createRoom(`TRSIZE${seatCount}`, { seatCount });
+      room.levelRank = "2"; room.trumpSuit = "hearts";
+      const deck = createDeck();
+      const make = (suit, pairs, triples, shortPairs = []) => [
+        ...[...pairs, ...shortPairs].flatMap((rank) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, 2)),
+        ...triples.flatMap((rank) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, 3))
+      ];
+      const lead = make("clubs", scenario.leadPairs, scenario.leadTriples, scenario.leadShortPairs);
+      const a = make("hearts", scenario.aPairs, scenario.aTriples, scenario.aShortPairs);
+      const b = make("hearts", scenario.bPairs, scenario.bTriples, scenario.bShortPairs);
+      const plays = [lead, a, b].map((cards, seat) => ({ seat, cards, shape: analyzeShape(cards, room), points: 0 }));
+      assert.equal(plays[0].shape.type, "throw");
+      assert.equal(determineTrickWinner(room, plays), scenario.winner);
+      assert.equal(determineTrickWinner(room, [plays[0], plays[2], plays[1]]), scenario.winner,
+        "改变两家主杀顺序不影响大小判断");
+    });
+  }
+
+  for (const noTrump of [false, true]) {
+    test(`${seatCount} 人${noTrump ? "无主" : "有主"}常主两对显示为两对，不误标单牌`, () => {
+      const room = createPlayRuleRoom("LEVELPAIRLABEL", seatCount, { levelRank: "9", trumpSuit: "hearts" });
+      room.noTrump = noTrump;
+      const deck = createDeck();
+      const pair = (rank, suit) => deck.filter((c) => c.rank === rank && c.suit === suit).slice(0, 2);
+      const lead = [...pair("bigJoker", "joker"), ...pair("smallJoker", "joker")];
+      const pairs = [...pair("9", "clubs"), ...pair("9", "spades")];
+      const seat = room.seats[1];
+      seat.hand = [...pairs, deck.find((c) => c.rank === "A" && c.suit === "diamonds")];
+      room.turnSeat = 1;
+      room.currentTrick = [{ seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 }];
+      assert.equal(analyzeShape(lead, room).type, "tractor");
+      playCards(room, "p1", pairs.map((c) => c.id));
+      assert.equal(room.currentTrick[1].shape.type, "throw", "同级常主两对不是拖拉机");
+      assert.equal(room.currentTrick[1].shapeLabel, "两对9");
+      assert.equal(publicState(room, "p1").currentTrick[1].shapeLabel, "两对9");
+
+      const cases = [
+        { cards: pairs, locks: ["9|clubs", "9|spades"], label: "4张单9" },
+        { cards: pairs, locks: ["9|clubs"], label: "甩牌" },
+        { cards: ["clubs", "spades", "hearts", "diamonds"].map((suit) => pair("9", suit)[0]), locks: [], label: "4张单9" },
+        { cards: [...deck.filter((c) => c.rank === "9" && c.suit === "clubs").slice(0, 3), pair("9", "spades")[0]], locks: [], label: "甩牌" }
+      ];
+      for (const { cards, locks, label } of cases) {
+        seat.hand = [...cards, deck.find((c) => c.rank === "A" && c.suit === "diamonds")];
+        seat.lockedTriples = locks;
+        room.turnSeat = 1;
+        room.currentTrick = [{ seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 }];
+        playCards(room, "p1", cards.map((c) => c.id));
+        assert.equal(room.currentTrick[1].shapeLabel, label, "单牌、锁定对子和三条混合均按实际结构标注");
+      }
+    });
+  }
+
+  for (const count of [4, 5]) {
+    test(`${seatCount} 人跟 ${count} 连对：长拖拉机同样强制天然对子`, () => {
+      const room = createRoom(`TRLONG${seatCount}${count}`, { seatCount });
+      room.levelRank = "2"; room.trumpSuit = "clubs";
+      const deck = createDeck();
+      const cardsOf = (rank, n = 2) => deck.filter((c) => c.rank === rank && c.suit === "clubs").slice(0, n);
+      const lead = ["A", "K", "Q", "J", "10"].slice(0, count).flatMap((r) => cardsOf(r));
+      const pairs = [...cardsOf("8"), ...cardsOf("5")];
+      const triple = cardsOf("7", 3);
+      const singles = ["3", "4", "6", "9", "10", "J"].map((r) => cardsOf(r, 1)[0]);
+      const seat = room.seats[1];
+      seat.hand = [...pairs, ...triple, ...singles];
+      assert.equal(analyzeShape(lead, room).count, count);
+      assert.equal(validatePlay(room, seat, [...pairs, ...singles.slice(0, count * 2 - 4)], lead).ok, true);
+      assert.equal(validatePlay(room, seat, [...pairs, ...triple.slice(0, 2), ...singles.slice(0, count * 2 - 6)], lead).ok, true);
+      assert.equal(validatePlay(room, seat, [...pairs.slice(0, 2), ...triple.slice(0, 2), ...singles.slice(0, count * 2 - 4)], lead).ok, false);
+      assert.equal(validatePlay(room, seat, [...pairs.slice(0, 2), ...triple, ...singles.slice(0, count * 2 - 5)], lead).ok, false);
+    });
+  }
+
+  test(`${seatCount} 人跟四连对加三条：额外三条不能替代天然对子`, () => {
+    const room = createRoom(`TRMIXED${seatCount}`, { seatCount });
+    room.levelRank = "2"; room.trumpSuit = "clubs";
+    const deck = createDeck();
+    const cardsOf = (rank, n = 2) => deck.filter((c) => c.rank === rank && c.suit === "clubs").slice(0, n);
+    const lead = [...["A", "K", "Q", "J"].flatMap((r) => cardsOf(r)), ...cardsOf("3", 3)];
+    const pairs = [...cardsOf("10"), ...cardsOf("7"), ...cardsOf("4")];
+    const triple = cardsOf("9", 3);
+    const extraTriple = cardsOf("6", 3);
+    const singles = [cardsOf("8", 1)[0], cardsOf("5", 1)[0]];
+    const seat = room.seats[1];
+    seat.hand = [...pairs, ...triple, ...extraTriple, ...singles];
+    assert.equal(analyzeShape(lead, room).type, "throw");
+    assert.equal(validatePlay(room, seat, [...pairs, ...triple, ...singles], lead).ok, true);
+    assert.equal(validatePlay(room, seat, [...pairs, ...triple, ...extraTriple.slice(0, 2)], lead).ok, true);
+    assert.equal(validatePlay(room, seat, [...pairs.slice(0, 4), ...triple, ...extraTriple.slice(0, 2), ...singles], lead).ok, false);
+    assert.equal(validatePlay(room, seat, [...pairs, ...extraTriple.slice(0, 2), ...triple.slice(0, 1), ...singles], lead).ok, false,
+      "有三条时必须满足首家的三条结构");
+
+    const tractor = ["10", "9", "8", "7"].flatMap((r) => cardsOf(r));
+    const followTriple = cardsOf("6", 3);
+    seat.hand = [...tractor, ...cardsOf("4"), ...followTriple];
+    assert.equal(validatePlay(room, seat, [...tractor, ...followTriple], lead).ok, true);
+    assert.equal(validatePlay(room, seat, [...tractor.slice(0, 6), ...cardsOf("4"), ...followTriple], lead).ok, false,
+      "对子数量足够也不能绕过手里的完整四连拖拉机");
+
+    const fillers = ["6", "5", "3"].map((r) => cardsOf(r, 1)[0]);
+    seat.hand = [...tractor, ...cardsOf("4"), ...fillers];
+    assert.equal(validatePlay(room, seat, [...tractor, ...cardsOf("4"), fillers[0]], lead).ok, true,
+      "没有三条时，三条需求降级为对子，必须跟满五对");
+    assert.equal(validatePlay(room, seat, [...tractor, ...fillers], lead).ok, false,
+      "不能只跟四连对而留下第五副天然对子");
+  });
+
+  test(`${seatCount} 人跟主牌三连对：天然对子必须跟出，不能用三条替代`, () => {
+    const room = createRoom(`TRNATURAL${seatCount}`, { seatCount });
+    room.levelRank = "7"; room.trumpSuit = "clubs";
+    const deck = createDeck();
+    const cardsOf = (rank, n = 2) => deck.filter((c) => c.rank === rank && c.suit === "clubs").slice(0, n);
+    const lead = [...cardsOf("A"), ...cardsOf("K"), ...cardsOf("Q")];
+    const pairs = [cardsOf("10"), cardsOf("6")];
+    const triple = cardsOf("9", 3);
+    const singles = [cardsOf("5", 1)[0], cardsOf("3", 1)[0]];
+    const follower = room.seats[1];
+    follower.hand = [...pairs.flat(), ...triple, ...singles];
+    follower.lockedTriples = [];
+
+    assert.equal(analyzeShape(lead, room).type, "tractor");
+    for (const pair of pairs) {
+      assert.equal(validatePlay(room, follower, [...pair, ...triple.slice(0, 2), ...singles], lead).ok, false,
+        "不能用拆三条得到的对子替代天然对子");
+      assert.equal(validatePlay(room, follower, [...pair, ...triple, singles[0]], lead).ok, false,
+        "不能出整副三条加单张而留下天然对子");
+    }
+    assert.equal(validatePlay(room, follower, [...pairs.flat(), ...triple.slice(0, 2)], lead).ok, true,
+      "出两副天然对子，并自愿拆三条凑齐三对");
+    assert.equal(validatePlay(room, follower, [...pairs.flat(), ...singles], lead).ok, true,
+      "出两副天然对子加两张单牌，可以完全保留三条");
+    assert.equal(validatePlay(room, follower, [...pairs.flat(), triple[0], singles[0]], lead).ok, true,
+      "出两副天然对子后，也可从三条取一张作为单牌");
+
+    room.phase = "playing";
+    room.turnSeat = 1;
+    follower.playerId = "p1";
+    room.currentTrick = [{ seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 }];
+    const recommended = recommendPlay(room, "p1");
+    assert.equal(recommended.length, lead.length);
+    for (const card of pairs.flat()) {
+      assert.ok(recommended.includes(card.id), "推荐跟牌也必须包含两副天然对子");
+    }
+    const recommendedCards = follower.hand.filter((c) => recommended.includes(c.id));
+    assert.equal(validatePlay(room, follower, recommendedCards, lead).ok, true);
+
+    // 天然对子本身构成完整拖拉机时，仍须优先跟拖拉机。
+    const tractor = [...cardsOf("6"), ...cardsOf("5"), ...cardsOf("4")];
+    follower.hand = [...tractor, ...cardsOf("10"), ...triple, ...singles.slice(1)];
+    assert.equal(validatePlay(room, follower, [...cardsOf("10"), ...cardsOf("6"), ...cardsOf("4")], lead).ok, false);
+    assert.equal(validatePlay(room, follower, tractor, lead).ok, true);
+  });
+}
+
 test("跟三连对拖拉机时，三条不算强制对子，可选择不拆三条", () => {
   const room = createRoom("TRPAIRTRIPLE");
   room.levelRank = "7"; room.trumpSuit = "clubs";

@@ -828,7 +828,7 @@ function playCardsInternal(room, seat, cardIds) {
     const validation = validateThrow(room, seat, cards);
     // Show all thrown cards on table first regardless
     removeCards(seat.hand, cardIds);
-    const play = { seat: seat.index, cards, shape, shapeLabel: describePlayShape(shape, cards), points: cards.reduce((sum, card) => sum + cardScore(card), 0) };
+    const play = { seat: seat.index, cards, shape, shapeLabel: describePlayShape(shape, cards, seat.lockedTriples), points: cards.reduce((sum, card) => sum + cardScore(card), 0) };
 
     if (!validation.ok) {
       // Throw failed — find the minimum card to keep, return rest to hand
@@ -852,7 +852,7 @@ function playCardsInternal(room, seat, cardIds) {
 
       // Push only kept cards as the play
       const keepShape = analyzeShapeWithLockedTriples(keepCards, room, seat.lockedTriples || []);
-      const keepPlay = { seat: seat.index, cards: keepCards, shape: keepShape, shapeLabel: describePlayShape(keepShape, keepCards), points: keepCards.reduce((sum, card) => sum + cardScore(card), 0) };
+      const keepPlay = { seat: seat.index, cards: keepCards, shape: keepShape, shapeLabel: describePlayShape(keepShape, keepCards, seat.lockedTriples), points: keepCards.reduce((sum, card) => sum + cardScore(card), 0) };
       room.currentTrick.push(keepPlay);
       updateFriend(room, keepPlay);
       room.tableLog.push(`${seat.nickname} 甩牌失败（${validation.reason}），仅保留 ${keepCards.map((c) => c.label).join("、")}`);
@@ -868,7 +868,7 @@ function playCardsInternal(room, seat, cardIds) {
     if (leaderPlay) recordTripleLockDecision(room, seat, cards, leaderPlay);
     removeCards(seat.hand, cardIds);
     const playShape = analyzeShapeWithLockedTriples(cards, room, seat.lockedTriples || []);
-    const play = { seat: seat.index, cards, shape: playShape, shapeLabel: describePlayShape(playShape, cards), points: cards.reduce((sum, card) => sum + cardScore(card), 0) };
+    const play = { seat: seat.index, cards, shape: playShape, shapeLabel: describePlayShape(playShape, cards, seat.lockedTriples), points: cards.reduce((sum, card) => sum + cardScore(card), 0) };
     room.currentTrick.push(play);
     updateFriend(room, play);
     room.tableLog.push(`${seat.nickname} 出牌：${cards.map((card) => card.label).join("、")}`);
@@ -884,11 +884,21 @@ function playCardsInternal(room, seat, cardIds) {
   }
 }
 
-function describePlayShape(shape, cards) {
+function describePlayShape(shape, cards, lockedTriples = []) {
   if (!shape || !cards?.length) return "";
   if (shape.type === "throw" && cards.length > 1 && cards.every((card) => card.rank === cards[0].rank)) {
-    const countText = cards.length === 2 ? "两" : cards.length === 3 ? "三" : `${cards.length}`;
-    return `${countText}张单${cards[0].rank}`;
+    // 同点数常主可能按不同花色各自成对，不能一律标成单牌。
+    const groups = new Map();
+    for (const card of cards) {
+      const key = `${card.rank}|${card.suit}`;
+      groups.set(key, (groups.get(key) || 0) + 1);
+    }
+    const lockedSet = new Set(lockedTriples);
+    const sizes = [...groups].flatMap(([key, count]) =>
+      count === 2 && lockedSet.has(key) ? [1, 1] : [count]);
+    const countText = (count) => count === 2 ? "两" : count === 3 ? "三" : `${count}`;
+    if (sizes.every((size) => size === 1)) return `${countText(cards.length)}张单${cards[0].rank}`;
+    if (sizes.every((size) => size === 2)) return `${countText(sizes.length)}对${cards[0].rank}`;
   }
   if (shape.type === "single") return "单张";
   if (shape.type === "pair") return "对子";

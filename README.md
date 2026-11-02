@@ -37,3 +37,5 @@ PS C:\cloudflared> .\cloudflared.exe tunnel --url http://localhost:3000
 - AI 补座、托管和推荐出牌
 
 详细规则见 [docs/rules.md](docs/rules.md)，其中 4 人、5 人和 6 人规则已分开整理，方便新手按玩法阅读。
+
+更新明细见 [UPDATE.md](UPDATE.md)。

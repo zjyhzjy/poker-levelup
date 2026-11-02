@@ -315,6 +315,7 @@ export function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, ava
   const availPairs   = availGroups.filter(g => g.length === 2 && !isLockedGroup(g)).length;
   const availTriples = availGroups.filter(g => g.length >= 3).length;
   const playedSameSuit = cards.filter(c => playSuit(c, room) === ledSuit);
+  const naturalIds = new Set(naturalPairPool(available, room, lockedSet).map((c) => c.id));
 
   // 甩牌里如果包含拖拉机组件，跟家手里有对应拖拉机时必须优先跟拖拉机；
   // 不能只用散对子凑数量（例如首家 7788，跟家有 991010 时不能出 9944）。
@@ -326,7 +327,7 @@ export function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, ava
       ? naturalPairPool(available, room, lockedSet)
       : available;
     const playedPool = comp.unit === 2
-      ? naturalPairPool(playedSameSuit, room, lockedSet)
+      ? playedSameSuit.filter((c) => naturalIds.has(c.id))
       : playedSameSuit;
     if (findTractors(pool, room, need).length && !findTractors(playedPool, room, need).length) {
       return { ok: false, reason: "需要优先跟拖拉机" };
@@ -352,7 +353,8 @@ export function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, ava
     [...playedSameSuit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)),
     lockedSet
   );
-  const playedPairs   = playedGroups.filter(g => g.length === 2).length;
+  // 甩牌同样要跟出原有天然对子，额外三条拆出的对子不能替代它们。
+  const playedPairs   = playedGroups.filter(g => g.length === 2 && g.every((c) => naturalIds.has(c.id))).length;
   const playedTriples = playedGroups.filter(g => g.length >= 3).length;
 
   if (playedTriples < mustTriples) return { ok: false, reason: `需要出 ${mustTriples} 个三条跟甩牌` };
@@ -605,9 +607,8 @@ export function lockedTriplesForPlay(room, play) {
   return room.seats?.[play.seat]?.lockedTriples || [];
 }
 
-// For throw tricks: first identify the leader's highest component tier, then
-// compare only that tier. If the leader threw only singles (e.g. A+K), a later
-// pair is just two single cards; the pair tier must not outrank the leader.
+// 甩牌先按首家组件总张数选比较对象；张数相同取首家车头较大的组件。
+// 后续只比较对应结构的车头，不再用其他组件破同分。
 export function compareByHighestTier(challengerCards, bestCards, room, leaderCards, options = {}) {
   const leaderInfo = highestThrowTier(leaderCards, room, options.leaderLockedTriples || []);
   const c = matchingThrowTierValue(challengerCards, room, leaderInfo, options.challengerLockedTriples || [], options);
@@ -620,14 +621,16 @@ export function highestThrowTier(cards, room, lockedTriples = []) {
   const ledSuit = playSuit(cards[0], room);
   const components = decomposeThrowComponents(cards, room, ledSuit, lockedTriples);
   let best = { tier: 1, unit: 1, count: 1, value: 0 };
+  let bestSize = 0;
   for (const comp of components) {
     const headValue = cardOrderValue(comp.cards[0], room);
     const tier = comp.kind === "tractor" ? 4 : comp.unit === 3 ? 3 : comp.unit === 2 ? 2 : 1;
     if (
-      tier > best.tier ||
-      (tier === best.tier && (headValue > best.value || (comp.count || 1) > best.count))
+      comp.cards.length > bestSize ||
+      (comp.cards.length === bestSize && headValue > best.value)
     ) {
       best = { tier, unit: comp.unit, count: comp.count || 1, value: headValue };
+      bestSize = comp.cards.length;
     }
   }
   return best;
@@ -912,8 +915,12 @@ export function shapeSatisfies(actual, wanted, cards, available, room, lockedTri
   }
 
   if (wanted.type === "pairs") {
-    // 对子要求只认天然对子；三条不能被强制拆成对子。
-    return groups.filter((g) => wanted.unit === 2 ? g.length === 2 : g.length >= wanted.unit).length >= wanted.count;
+    // 强制对子必须来自出牌前的天然对子，不能用自愿拆三条得到的对子替代。
+    if (wanted.unit === 2) {
+      const naturalIds = new Set(naturalPairPool(available, room, lockedSet).map((c) => c.id));
+      return groups.filter((g) => g.length === 2 && g.every((c) => naturalIds.has(c.id))).length >= wanted.count;
+    }
+    return groups.filter((g) => g.length >= wanted.unit).length >= wanted.count;
   }
 
   if (wanted.type === "tripleFallback") {
