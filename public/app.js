@@ -1970,7 +1970,7 @@ function closeKickDialog() {
 
 function showKickVotePrompt(vote) {
   if (!vote?.voteId) return;
-  const ok = confirm(`${vote.initiatorName} 玩家发起对 ${vote.targetName} 的踢人，是否同意？`);
+  const ok = confirm(`${vote.initiatorName} 发起踢出 ${vote.targetName} 的投票，需要另外 ${vote.additionalApprovals} 名玩家同意。你是否同意？`);
   if (ok) send("kickAgree", { voteId: vote.voteId });
 }
 

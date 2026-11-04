@@ -3,6 +3,7 @@ import { cardScore, createDeck, levelAdvance, LEVEL_RANKS, rankNumber, RANKS, sh
 import * as classic4Mode from "./rules/classic4.js";
 import * as findFriend5Mode from "./rules/findFriend5.js";
 import * as fixedTeam6Mode from "./rules/fixedTeam6.js";
+import { throwGroupDemands } from "./rules/tractor-follow.js";
 
 const DEFAULT_SEATS = 5;
 const BID_RESPONSE_TIMEOUT_MS = 10000;
@@ -806,11 +807,9 @@ export function playCards(room, playerId, cardIds) {
 function playCardsInternal(room, seat, cardIds) {
   const cards = pickCards(seat.hand, cardIds);
   if (!cards.length) throw new Error("请选择要出的牌");
+  if (cards.length !== cardIds.length) throw new Error("选牌不在手牌中或有重复");
   const leaderPlay = room.currentTrick[0]?.cards ?? null;
   const wasLead = !leaderPlay;
-
-  // Clear previous throwResult whenever a new card is played
-  room.throwResult = null;
 
   const shape = wasLead
     ? analyzeShapeWithLockedTriples(cards, room, seat.lockedTriples || [])
@@ -865,6 +864,7 @@ function playCardsInternal(room, seat, cardIds) {
   } else {
     const validation = validatePlay(room, seat, cards, leaderPlay);
     if (!validation.ok) throw new Error(validation.reason);
+    room.throwResult = null;
     if (leaderPlay) recordTripleLockDecision(room, seat, cards, leaderPlay);
     removeCards(seat.hand, cardIds);
     const playShape = analyzeShapeWithLockedTriples(cards, room, seat.lockedTriples || []);
@@ -1298,7 +1298,10 @@ function buildForcedFollow(room, seat, leaderCards) {
   const lk = seat.lockedTriples || [];
   const lockedSet = new Set(lk);
   const isLocked = (g) => lockedSet.has(`${g[0].rank}|${g[0].suit}`);
-  const wanted = forcedRequirement(analyzeShape(leaderCards, room), available, room, lk);
+  const leadPlay = room.currentTrick[0];
+  const leaderLocks = leadPlay?.cards === leaderCards ? lockedTriplesForPlay(room, leadPlay) : [];
+  const leaderShape = analyzeShapeWithLockedTriples(leaderCards, room, leaderLocks);
+  const wanted = forcedRequirement(leaderShape, available, room, lk);
   const asc = [...available].sort((a, b) => cardOrderValue(a, room) - cardOrderValue(b, room));
   const desc = [...asc].reverse();
 
@@ -1306,22 +1309,47 @@ function buildForcedFollow(room, seat, leaderCards) {
   const used = new Set();
   const take = (cards) => { for (const c of cards) if (!used.has(c.id)) { used.add(c.id); chosen.push(c); } };
 
-  if (wanted.type === "tractor") {
+  if (leaderShape.type === "throw") {
+    const groups = groupCards(desc);
+    const pairGroups = groups.filter((g) => g.length === 2 && !isLocked(g));
+    const tripleGroups = groups.filter((g) => g.length === 3);
+    const leadDesc = [...leaderCards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+    const leadGroups = groupCardsRespectingLockedTriples(leadDesc, leaderLocks);
+    const demand = throwGroupDemands(leadGroups, pairGroups, tripleGroups);
+    const components = decomposeThrowComponents(leaderCards, room, ledSuit, leaderLocks);
+    const runs = modeRules(room).planThrowTractors(groups, components, room, ledSuit, lockedSet);
+    take(runs.flat(2));
+    for (const [pool, required] of [[pairGroups, demand.pairs], [tripleGroups, demand.triples]]) {
+      const missing = required - pool.filter((group) => used.has(group[0].id)).length;
+      if (missing > 0) {
+        for (const group of pool.filter((g) => !used.has(g[0].id)).slice(-missing)) take(group);
+      }
+    }
+  } else if (wanted.type === "tractor") {
     const need = wanted.count * wanted.unit;
-    const pool = wanted.unit === 2 ? available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`)) : available;
-    const found = wanted.unit === 3 ? findBestTractorRun(pool, room, 3) : findTractors(pool, room, need)[0];
+    const pool = wanted.unit === 2 ? modeRules(room).naturalPairPool(available, room, lockedSet) : available;
+    const found = findBestTractorRun(pool, room, wanted.unit);
     if (found) take(found.flatMap((g) => g.slice(0, wanted.unit)).slice(-need)); // 取最小的连续段
   } else if (wanted.type === "tripleFallback") {
     const groups = groupCards(desc);
-    for (const g of groups.filter((gr) => gr.length >= 3).slice(-wanted.triples)) take(g.slice(0, 3));
+    const run = wanted.tractorTriples && findBestTractorRun(available, room, 3);
+    if (run) take(run.slice(-wanted.tractorTriples).flat());
+    const missing = wanted.triples - (run ? wanted.tractorTriples : 0);
+    if (missing > 0) {
+      for (const g of groups.filter((gr) => gr.length === 3 && !used.has(gr[0].id)).slice(-missing)) take(g);
+    }
     for (const g of groups.filter((gr) => gr.length >= 2 && !isLocked(gr) && !used.has(gr[0].id)).slice(-wanted.pairs)) take(g.slice(0, 2));
   } else if (wanted.type === "pairTractorFallback") {
-    const run = findBestTractorRun(available.filter((c) => !lockedSet.has(`${c.rank}|${c.suit}`)), room, 2);
-    if (run) take(run.slice(-wanted.tractorPairs).flatMap((g) => g.slice(0, 2)));
-    const groups = groupCards(desc).filter((g) => g.length >= 2 && !isLocked(g) && !g.some((c) => used.has(c.id)));
-    for (const g of groups.slice(-(wanted.pairs - wanted.tractorPairs))) take(g.slice(0, 2));
+    const pool = modeRules(room).naturalPairPool(available, room, lockedSet);
+    const run = findBestTractorRun(pool, room, 2);
+    if (run) take(run.slice(-wanted.tractorPairs).flat());
+    const missing = wanted.pairs - wanted.tractorPairs;
+    if (missing > 0) {
+      const groups = groupCards(desc).filter((g) => g.length === 2 && !isLocked(g) && !used.has(g[0].id));
+      for (const g of groups.slice(-missing)) take(g);
+    }
   } else if (wanted.type === "pairs") {
-    const groups = groupCards(desc).filter((g) => g.length >= wanted.unit && !isLocked(g));
+    const groups = groupCards(desc).filter((g) => g.length === wanted.unit && !isLocked(g));
     for (const g of groups.slice(-wanted.count)) take(g.slice(0, wanted.unit)); // 最小的 count 组
   } else if (wanted.type === "triple") {
     const g = groupCards(desc).find((gr) => gr.length >= 3);
@@ -2874,12 +2902,12 @@ function pickCards(hand, ids) {
 
 function removeCards(hand, ids) {
   const set = new Set(ids);
-  const removed = [];
+  const removed = hand.filter((card) => set.has(card.id));
+  if (removed.length !== ids.length) throw new Error("选牌不在手牌中或有重复");
   for (let i = hand.length - 1; i >= 0; i -= 1) {
-    if (set.has(hand[i].id)) removed.push(hand.splice(i, 1)[0]);
+    if (set.has(hand[i].id)) hand.splice(i, 1);
   }
-  if (removed.length !== set.size) throw new Error("选牌不在手牌中");
-  return removed.reverse();
+  return removed;
 }
 
 function findSeatByPlayer(room, playerId) {

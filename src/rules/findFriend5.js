@@ -1,4 +1,5 @@
 import { rankNumber, RANKS } from "../cards.js";
+import { comparePlans, planTractorRuns, splitThrowGroups, throwGroupDemands } from "./tractor-follow.js";
 
 export const findFriend5Rules = {
   mode: "findFriend5",
@@ -149,6 +150,7 @@ export function isTrueTractor(groups, room) {
 
 // 裁判机：判定在当前定主状态下，两张牌在同一个花色序列里是否绝对紧邻
 export function isConsecutiveInRules(cardA, cardB, ledSuit, room) {
+  if (playSuit(cardA, room) !== ledSuit || playSuit(cardB, room) !== ledSuit) return false;
   const valA = cardOrderValue(cardA, room);
   const valB = cardOrderValue(cardB, room);
   
@@ -219,6 +221,8 @@ export function getNextImmediateTrumpValue(currentValue, room) {
 
 
 export function validatePlay(room, seat, cards, leaderCards) {
+  const leadPlay = room.currentTrick?.[0];
+  const leaderLocks = leadPlay && leadPlay.cards === leaderCards ? lockedTriplesForPlay(room, leadPlay) : [];
   // 三条锁定：若本局某副三条曾在“可不拆”的选择时刻被保留（没拆），则之后
   // 不能再把它拆成对子出。领牌永不强制，故直接拒绝；跟牌时只在“竞争性场合”
   // （同门跟牌、或全主牌杀副牌）判违规——普通垫牌里两张同点牌不构成“拆对”。
@@ -244,7 +248,7 @@ export function validatePlay(room, seat, cards, leaderCards) {
     const forced = (seat.hand.length - lockedInHand) < leaderCards.length
       || (lockedSuit === ledSuitForLock && availForLock.length <= leaderCards.length)
       || (availForLock.length > 0 && availForLock.every((c) => c.rank === lr && c.suit === ls));
-    const leaderShapeForLock = analyzeShape(leaderCards, room);
+    const leaderShapeForLock = analyzeShapeWithLockedTriples(leaderCards, room, leaderLocks);
     const wantedForLock = forcedRequirement(leaderShapeForLock, availForLock, room, seat.lockedTriples || []);
     const lockedPairNeeded = !requirementSatisfiedWithoutLockedPair(cards, wantedForLock, room, lockedKey);
     if (competitive && !forced && lockedPairNeeded) {
@@ -275,14 +279,11 @@ export function validatePlay(room, seat, cards, leaderCards) {
   if (available.length >= cards.length && following.length !== cards.length) return { ok: false, reason: "有同门牌时必须跟同门" };
   if (available.length < cards.length && following.length !== available.length) return { ok: false, reason: "同门牌不足时要尽量跟完" };
   
-  const leaderShape = analyzeShape(leaderCards, room);
+  const leaderShape = analyzeShapeWithLockedTriples(leaderCards, room, leaderLocks);
 
   // Special case: leader played a throw — validate each atomic group independently
   if (leaderShape.type === "throw" && following.length === cards.length) {
-    const leaderLockedTriples = room.currentTrick[0]?.cards === leaderCards
-      ? lockedTriplesForPlay(room, room.currentTrick[0])
-      : [];
-    return validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available, leaderLockedTriples);
+    return validateThrowFollow(room, seat, cards, leaderCards, ledSuit, available, leaderLocks);
   }
 
   if (following.length === cards.length) {
@@ -302,57 +303,33 @@ export function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, ava
   const leaderSorted = [...leaderCards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
   const leaderGroups = groupCardsRespectingLockedTriples(leaderSorted, leaderLockedTriples); // e.g. [[A,A,A],[Q,Q],[J]]
 
-  // Build what follower MUST contribute per group
-  let mustPairs = 0;    // number of pairs required
-  let mustTriples = 0;  // number of triples required
-  let mustSingles = 0;  // number of singles required
-
   const availGroups = groupCards([...available].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)));
   // 锁定的三条不能拆成对子出，不计入“可用对子”（计入会与锁定规则冲突造成死锁）；
   // 整组三张打出不算拆对，所以三条数照常统计。
   const lockedSet = new Set(seat.lockedTriples || []);
   const isLockedGroup = (g) => lockedSet.has(`${g[0].rank}|${g[0].suit}`);
-  const availPairs   = availGroups.filter(g => g.length === 2 && !isLockedGroup(g)).length;
-  const availTriples = availGroups.filter(g => g.length >= 3).length;
+  const pairGroups = availGroups.filter((g) => g.length === 2 && !isLockedGroup(g));
+  const tripleGroups = availGroups.filter((g) => g.length === 3);
+  const { pairs: mustPairs, triples: mustTriples } = throwGroupDemands(leaderGroups, pairGroups, tripleGroups);
   const playedSameSuit = cards.filter(c => playSuit(c, room) === ledSuit);
   const naturalIds = new Set(naturalPairPool(available, room, lockedSet).map((c) => c.id));
 
-  // 甩牌里如果包含拖拉机组件，跟家手里有对应拖拉机时必须优先跟拖拉机；
-  // 不能只用散对子凑数量（例如首家 7788，跟家有 991010 时不能出 9944）。
   const components = decomposeThrowComponents(leaderCards, room, ledSuit, leaderLockedTriples);
-  for (const comp of components) {
-    if (comp.kind !== "tractor") continue;
-    const need = comp.unit * comp.count;
-    const pool = comp.unit === 2
-      ? naturalPairPool(available, room, lockedSet)
-      : available;
-    const playedPool = comp.unit === 2
-      ? playedSameSuit.filter((c) => naturalIds.has(c.id))
-      : playedSameSuit;
-    if (findTractors(pool, room, need).length && !findTractors(playedPool, room, need).length) {
-      return { ok: false, reason: "需要优先跟拖拉机" };
-    }
-  }
-
-  for (const lg of leaderGroups) {
-    if (lg.length >= 3) {
-      // Needs a triple; fall back to pair, then single
-      if (availTriples > mustTriples) mustTriples++;
-      else if (availPairs > mustPairs) mustPairs++;
-      else mustSingles++;
-    } else if (lg.length === 2) {
-      if (availPairs > mustPairs) mustPairs++;
-      else mustSingles += 2;
-    } else {
-      mustSingles++;
-    }
-  }
 
   // Check follower's actual played cards satisfy the requirement
   const playedGroups = groupCardsRespectingLockedTriples(
     [...playedSameSuit].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room)),
     lockedSet
   );
+  const availablePlan = planThrowTractors(availGroups, components, room, ledSuit, lockedSet);
+  const playedIds = new Set(playedSameSuit.map((card) => card.id));
+  const playedPlan = planThrowTractors(
+    availGroups.filter((group) => group.every((card) => playedIds.has(card.id))),
+    components, room, ledSuit, lockedSet
+  );
+  if (comparePlans(playedPlan, availablePlan) < 0) {
+    return { ok: false, reason: "需要优先跟出互不重叠的拖拉机" };
+  }
   // 甩牌同样要跟出原有天然对子，额外三条拆出的对子不能替代它们。
   const playedPairs   = playedGroups.filter(g => g.length === 2 && g.every((c) => naturalIds.has(c.id))).length;
   const playedTriples = playedGroups.filter(g => g.length >= 3).length;
@@ -363,42 +340,27 @@ export function validateThrowFollow(room, seat, cards, leaderCards, ledSuit, ava
   return { ok: true };
 }
 
+export function planThrowTractors(groups, components, room, ledSuit, lockedSet) {
+  return [2, 3].flatMap((unit) => {
+    const counts = components.filter((comp) => comp.kind === "tractor" && comp.unit === unit)
+      .map((comp) => comp.count);
+    const pool = groups.filter((group) => group.length === unit &&
+      (unit !== 2 || !lockedSet.has(`${group[0].rank}|${group[0].suit}`)));
+    return planTractorRuns(pool, counts, (a, b) => isConsecutiveInRules(a, b, ledSuit, room));
+  });
+}
+
 // 【彻底修复 3】：精准拆解甩牌组合，防止非对应牌型发生阻挡误判
 // Decompose a throw into its structural components: tractors (≥2 consecutive
 // same-size groups), standalone pairs/triples, and singles. This is the crux of
 // correct throw validation — a pair that is part of a tractor (e.g. the 1010 in
 // JJ1010) must be beaten by a bigger TRACTOR, not merely by a higher lone pair.
 export function decomposeThrowComponents(cards, room, ledSuit, lockedTriples = []) {
-  const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
+  const sorted = [...cards].sort((a, b) =>
+    cardOrderValue(b, room) - cardOrderValue(a, room) || a.suit.localeCompare(b.suit));
   const groups = groupCardsRespectingLockedTriples(sorted, lockedTriples);
-  const components = [];
-  let i = 0;
-  while (i < groups.length) {
-    const g = groups[i];
-    if (g.length >= 2) {
-      let j = i;
-      const run = [g];
-      while (
-        j + 1 < groups.length &&
-        groups[j + 1].length === g.length &&
-        isConsecutiveInRules(groups[j][0], groups[j + 1][0], ledSuit, room)
-      ) {
-        run.push(groups[j + 1]);
-        j++;
-      }
-      if (run.length >= 2) {
-        components.push({ kind: "tractor", unit: g.length, count: run.length, cards: run.flat() });
-        i = j + 1;
-        continue;
-      }
-      components.push({ kind: "group", unit: g.length, count: 1, cards: g });
-      i++;
-    } else {
-      components.push({ kind: "single", unit: 1, count: 1, cards: g });
-      i++;
-    }
-  }
-  return components;
+  return splitThrowGroups(groups, (a, b) => isConsecutiveInRules(a, b, ledSuit, room),
+    (card) => cardOrderValue(card, room));
 }
 
 // Does an opponent's same-suit hand hold a tractor of unit≥`unit`, length≥`count`,
@@ -412,26 +374,9 @@ export function opponentHasBetterTractor(otherSameSuit, room, unit, count, headV
     if (g.length < unit) return false;
     return unit !== 2 || !lockedSet.has(`${g[0].rank}|${g[0].suit}`);
   };
-  let i = 0;
-  while (i < oGroups.length) {
-    if (canUseGroup(oGroups[i])) {
-      let j = i;
-      const run = [oGroups[i]];
-      while (
-        j + 1 < oGroups.length &&
-        canUseGroup(oGroups[j + 1]) &&
-        isConsecutiveInRules(oGroups[j][0], oGroups[j + 1][0], ledSuit, room)
-      ) {
-        run.push(oGroups[j + 1]);
-        j++;
-      }
-      if (run.length >= count && cardOrderValue(run[0][0], room) > headValue) return true;
-      i = j + 1;
-    } else {
-      i++;
-    }
-  }
-  return false;
+  const [run] = planTractorRuns(oGroups.filter(canUseGroup), [count],
+    (a, b) => isConsecutiveInRules(a, b, ledSuit, room));
+  return run.length === count && cardOrderValue(run[0][0], room) > headValue;
 }
 
 // Returns { ok, reason, blockedGroup } — blockedGroup is the SMALLEST component beaten,
@@ -670,10 +615,10 @@ export function throwStructureMatch(trumpCards, leaderCards, room, trumpLockedTr
   const getStructure = (cards, lockedTriples = []) => {
     const ledSuit = playSuit(cards[0], room);
     const components = decomposeThrowComponents(cards, room, ledSuit, lockedTriples);
-    const counts = { tractor: 0, triple: 0, pair: 0, single: 0, tripleUnits: 0, pairUnits: 0 };
+    const counts = { tractors: [], triple: 0, pair: 0, single: 0, tripleUnits: 0, pairUnits: 0 };
     for (const comp of components) {
       if (comp.kind === "tractor") {
-        counts.tractor++;
+        counts.tractors.push(`${comp.unit}x${comp.count}`);
         if (comp.unit === 3) counts.tripleUnits += comp.count;
         if (comp.unit === 2) counts.pairUnits += comp.count;
       } else if (comp.unit >= 3) {
@@ -690,8 +635,8 @@ export function throwStructureMatch(trumpCards, leaderCards, room, trumpLockedTr
   };
   const ls = getStructure(leaderCards, leaderLockedTriples);
   const ts = getStructure(trumpCards, trumpLockedTriples);
-  if (ls.tractor > 0) {
-    return ls.tractor === ts.tractor && ls.triple === ts.triple &&
+  if (ls.tractors.length > 0) {
+    return ls.tractors.sort().join(",") === ts.tractors.sort().join(",") && ls.triple === ts.triple &&
            ls.pair === ts.pair && ls.single === ts.single;
   }
   // 非拖拉机甩牌：总张数已在外层校验相等。主牌只要有足够的三条/对子覆盖甩牌的
@@ -781,7 +726,9 @@ export function requirementSatisfiedWithoutLockedPair(cards, wanted, room, locke
 // 若对子需求已由天然对子满足，三条没有参与选择，不锁；
 // 若天然对子不足而玩家没有把某副三条拆成对子，则这副三条本局之后不得再拆成对子。
 export function recordTripleLockDecision(room, seat, cards, leaderCards) {
-  const leaderShape = analyzeShape(leaderCards, room);
+  const leadPlay = room.currentTrick[0];
+  const leaderLocks = leadPlay?.cards === leaderCards ? lockedTriplesForPlay(room, leadPlay) : [];
+  const leaderShape = analyzeShapeWithLockedTriples(leaderCards, room, leaderLocks);
   const ledSuit = playSuit(leaderCards[0], room);
   const playedAllTrumpCut = ledSuit !== "trump" && cards.every((c) => playSuit(c, room) === "trump");
   const poolSuit = playedAllTrumpCut ? "trump" : ledSuit;
@@ -836,7 +783,10 @@ export function forcedRequirement(leaderShape, available, room, lockedTriples = 
       if (tripleCount > 0) {
         const remaining = total - tripleCount * 3;
         const pairAvail = groups.filter((g) => g.length >= 2 && g.length < 3 && !isLockedGroup(g)).length;
-        return { type: "tripleFallback", triples: tripleCount, pairs: Math.min(Math.floor(remaining / 2), pairAvail) };
+        return {
+          type: "tripleFallback", triples: tripleCount, tractorTriples: tripleRun?.length || 0,
+          pairs: Math.min(Math.floor(remaining / 2), pairAvail)
+        };
       }
 
       const pairSlots = Math.floor(total / 2);
@@ -856,12 +806,13 @@ export function forcedRequirement(leaderShape, available, room, lockedTriples = 
     const tractorPool = leaderShape.unit === 2
       ? naturalPairPool(available, room, lockedSet)
       : available;
-    const tractors = findTractors(tractorPool, room, leaderShape.count * leaderShape.unit);
-    if (tractors.length) return { type: "tractor", unit: leaderShape.unit, count: leaderShape.count };
+    const run = findBestTractorRun(tractorPool, room, 2);
+    if (run?.length >= leaderShape.count) return { type: "tractor", unit: 2, count: leaderShape.count };
     const pairsAvail = groupCards(available).filter((g) =>
       leaderShape.unit === 2 ? g.length === 2 && !isLockedGroup(g) : g.length >= leaderShape.unit && !isLockedGroup(g)
     );
     const pairCount = Math.min(leaderShape.count, pairsAvail.length);
+    if (run) return { type: "pairTractorFallback", tractorPairs: run.length, pairs: pairCount };
     if (pairCount > 0) return { type: "pairs", unit: leaderShape.unit, count: pairCount };
     return { type: "any" };
   }
@@ -924,14 +875,17 @@ export function shapeSatisfies(actual, wanted, cards, available, room, lockedTri
   }
 
   if (wanted.type === "tripleFallback") {
+    if (wanted.tractorTriples && (findBestTractorRun(cards, room, 3)?.length || 0) < wanted.tractorTriples) return false;
     const triples = groups.filter((g) => g.length >= 3).length;
     const pairs = groups.filter((g) => g.length >= 2 && g.length < 3).length;
     return triples >= wanted.triples && pairs >= wanted.pairs;
   }
 
   if (wanted.type === "pairTractorFallback") {
-    const run = findBestTractorRun(naturalPairPool(cards, room, lockedSet), room, 2);
-    const pairs = groups.filter((g) => g.length === 2).length;
+    const naturalIds = new Set(naturalPairPool(available, room, lockedSet).map((card) => card.id));
+    const naturalCards = cards.filter((card) => naturalIds.has(card.id));
+    const run = findBestTractorRun(naturalCards, room, 2);
+    const pairs = groups.filter((g) => g.length === 2 && g.every((card) => naturalIds.has(card.id))).length;
     return !!run && run.length >= wanted.tractorPairs && pairs >= wanted.pairs;
   }
 
@@ -950,25 +904,13 @@ export function shapeSatisfies(actual, wanted, cards, available, room, lockedTri
 
 // 辅助函数：将相同点数和花色的牌归类到一个组中
 export function groupCards(sortedCards) {
-  const groups = [];
-  let currentGroup = [];
-  
+  const groups = new Map();
   for (const card of sortedCards) {
-    if (currentGroup.length === 0) {
-      currentGroup.push(card);
-    } else {
-      const prev = currentGroup[0];
-      // 只有花色和点数完全一致的牌，才算进同一个对子或三条组（三副牌规则）
-      if (card.rank === prev.rank && card.suit === prev.suit) {
-        currentGroup.push(card);
-      } else {
-        groups.push(currentGroup);
-        currentGroup = [card];
-      }
-    }
+    const key = `${card.rank}|${card.suit}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(card);
   }
-  if (currentGroup.length > 0) groups.push(currentGroup);
-  return groups;
+  return [...groups.values()];
 }
 
 export function groupCardsRespectingLockedTriples(sortedCards, lockedTriples = []) {
@@ -1067,25 +1009,11 @@ export function findBestTractorRun(cards, room, unit = 2) {
   const sorted = [...cards].sort((a, b) => cardOrderValue(b, room) - cardOrderValue(a, room));
   const groups = groupCards(sorted).filter((group) => group.length >= unit);
   if (groups.length < 2) return null;
-  let best = null;
-  let i = 0;
-  while (i < groups.length) {
-    let j = i;
-    const run = [groups[i]];
-    const ledSuit = playSuit(groups[i][0], room);
-    while (
-      j + 1 < groups.length &&
-      groups[j + 1].length >= unit &&
-      playSuit(groups[j + 1][0], room) === ledSuit &&
-      isConsecutiveInRules(groups[j][0], groups[j + 1][0], ledSuit, room)
-    ) {
-      run.push(groups[j + 1]);
-      j++;
-    }
-    if (run.length >= 2 && (!best || run.length > best.length)) best = run;
-    i = j + 1;
-  }
-  return best;
+  const [run] = planTractorRuns(groups, [groups.length], (a, b) => {
+    const suit = playSuit(a, room);
+    return playSuit(b, room) === suit && isConsecutiveInRules(a, b, suit, room);
+  });
+  return run.length ? run : null;
 }
 
 export function hasGroup(cards, size) {
