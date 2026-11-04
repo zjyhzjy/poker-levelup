@@ -75,6 +75,41 @@
 
    打开 `https://poker.zifanzhang.com` 即可，网址永远不变。
 
+### A 不在时轮流开服
+
+可把 [开服交接说明](tunnel-handoff-guide.md) 直接发给 A、B、C，里面包含给 Codex 或 Claude 的操作指令。
+
+以下脚本用于这个项目的本地管理命名隧道。A 和开服者需安装
+`age`（Mac 可用 `brew install age`）、Node.js 和 cloudflared。
+
+**A 一次性发布。** 在已与 GitHub 同步、工作区干净的 `main` 上运行，
+Mac 上可直接双击项目里的 **Publish Poker Tunnel.command**。它从
+`~/.cloudflared/config.yml` 或 `config.yaml` 找到域名对应的凭据，
+用 Homebrew 安装缺少的 `age`，自动生成口令并推送加密文件。
+首次推送可能需要 GitHub 登录。把窗口里的口令私下发给开服者。
+
+也可以手动运行以下命令，把路径换成实际的隧道凭据：
+
+```bash
+bash tunnel-handoff.sh publish ~/.cloudflared/<UUID>.json
+```
+
+用实际 UUID 替换 `<UUID>`，并在 `age` 提示口令时直接回车生成强口令。
+脚本只提交并推送加密后的 `poker-tunnel.json.age` 到 `origin/main`。
+A 私下把口令交给开服者。原始 JSON、口令和 Cloudflare 账户证书 `cert.pem` 都应留在 GitHub 之外。
+如果提交成功但推送失败，修复 GitHub 写入权限后运行 `git push origin main`。
+
+**其他人开服。** 等上一台主机退出隧道后，在项目目录运行：
+
+```bash
+git pull --ff-only
+bash tunnel-handoff.sh start
+```
+
+输入口令后，脚本在本机已被 Git 忽略的 `.run/` 目录生成凭据和配置，
+再启动游戏及固定域名隧道。玩家访问 `https://poker.zifanzhang.com`。
+结束后运行 `bash stop.sh`，再让下一台主机接手。同一时间只保留一台连接该隧道的游戏主机。
+
 ### 为什么不能简单地在 Namecheap 上加一条 CNAME 指向 trycloudflare 网址？
 
 - **临时隧道的网址会变**：`https://<随机>.trycloudflare.com` 每次重启都不一样，

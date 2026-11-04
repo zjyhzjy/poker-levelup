@@ -65,7 +65,11 @@ if [ -n "$TUNNEL_NAME" ]; then
   else
     echo "→ 启动命名隧道 ($TUNNEL_NAME)..."
     : > "$TUNNEL_LOG"
-    nohup "$CLOUDFLARED" tunnel run "$TUNNEL_NAME" > "$TUNNEL_LOG" 2>&1 &
+    tunnel_args=(tunnel)
+    if [ -n "${TUNNEL_CONFIG:-}" ]; then
+      tunnel_args+=(--config "$TUNNEL_CONFIG")
+    fi
+    nohup "$CLOUDFLARED" "${tunnel_args[@]}" run "$TUNNEL_NAME" > "$TUNNEL_LOG" 2>&1 &
     disown 2>/dev/null || true
   fi
   URL="https://${TUNNEL_HOSTNAME:-<请设置 TUNNEL_HOSTNAME>}"
