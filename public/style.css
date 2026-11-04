@@ -2193,3 +2193,26 @@ body.desktop .emote-proj { font-size: 46px; }
 body.desktop .emote-particle { font-size: 26px; }
 body.desktop .emote-splat { width: 96px; height: 96px; }
 body.desktop .emote-btn { font-size: 30px; width: 52px; height: 52px; }
+.tractor-drive {
+  position: fixed;
+  top: 50%;
+  left: 0;
+  translate: 0 -50%;
+  width: clamp(100px, 23vw, 190px);
+  height: auto;
+  z-index: 300;
+  pointer-events: none;
+  animation: tractor-drive-across 1.6s linear both;
+}
+
+@keyframes tractor-drive-across {
+  0% { transform: translate3d(-105%, 0, 0) rotate(-3deg); }
+  24% { transform: translate3d(calc(24vw - 76%), -5px, 0) rotate(1deg); }
+  48% { transform: translate3d(calc(48vw - 52%), 1px, 0) rotate(-2deg); }
+  72% { transform: translate3d(calc(72vw - 28%), -4px, 0) rotate(1deg); }
+  100% { transform: translate3d(105vw, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tractor-drive { animation-duration: 1ms; opacity: 0; }
+}
