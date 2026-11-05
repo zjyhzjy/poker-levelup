@@ -1,5 +1,10 @@
 # 固定域名开服交接
 
+> **2026-11-04 起暂停使用。** poker.zifanzhang.com 现在跑在 Cloudflare Workers + Durable Objects 上
+> （`worker/`、`wrangler.toml`，部署命令 `npm run deploy:cf`），24 小时在线，不需要任何人开电脑当服务器，
+> 域名也不再指向隧道，下面的流程启动后打不开固定域名。房间逻辑在 `src/hub.js`，Node 版 `server.js` 与 Worker 共用。
+> 本地开服调试仍可用 `./start.sh`（临时 trycloudflare 网址）。
+
 游戏网址是 [poker.zifanzhang.com](https://poker.zifanzhang.com)，项目是
 [zjyhzjy/poker-levelup](https://github.com/zjyhzjy/poker-levelup)。A 发布一次加密隧道凭据，
 B、C 就能轮流在自己的电脑上开服。普通玩家只需要游戏网址。
