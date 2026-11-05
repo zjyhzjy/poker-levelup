@@ -222,6 +222,7 @@ function connectAndJoin(code, nickname, seatCount) {
   // Only join once per socket. The server may send another "hello" after a
   // reconnect join; without this guard we'd loop hello→join→hello forever.
   let joined = false;
+  let previousRoomState = null;
   ws.addEventListener("message", (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === "hello") {
@@ -238,6 +239,8 @@ function connectAndJoin(code, nickname, seatCount) {
     }
     if (msg.type === "state") {
       if (manualExitAt && Date.now() - manualExitAt < 5000) return;
+      handleTractorEffect(msg.payload, previousRoomState);
+      previousRoomState = msg.payload;
       handleAudioEvents(msg.payload);
       setMusicPhase(msg.payload.phase === "lobby" ? "lobby" : "game"); // 大厅放开场，开打后切牌局曲
       state.room = msg.payload;
@@ -334,6 +337,32 @@ function isTrumpCard(c, room) {
   if (!room.noTrump && c.suit === room.trumpSuit) return true;
   return false;
 }
+
+function handleTractorEffect(room, previous) {
+  if (!previous || room.code !== previous.code || room.round !== previous.round) return;
+  if (room.phase !== "playing" && room.phase !== "roundOver") return;
+
+  const previousCount = previous.currentTrick?.length || 0;
+  const completed = room.lastTrickWin?.seq || 0;
+  const previousCompleted = previous.lastTrickWin?.seq || 0;
+  const newPlays = completed === previousCompleted
+    ? room.currentTrick.slice(previousCount)
+    : [
+        ...room.lastTrick.slice(completed === previousCompleted + 1 ? previousCount : 0),
+        ...room.currentTrick
+      ];
+  if (!newPlays.some((play) => play.shape?.type === "tractor")) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+  document.querySelector(".tractor-drive")?.remove();
+  const tractor = document.createElement("img");
+  tractor.className = "tractor-drive";
+  tractor.src = "/tractor-effect.svg";
+  tractor.alt = "";
+  tractor.addEventListener("animationend", () => tractor.remove(), { once: true });
+  document.body.append(tractor);
+}
+
 function handleAudioEvents(room) {
   if (!room) return;
   const snap = {
@@ -1941,7 +1970,7 @@ function closeKickDialog() {
 
 function showKickVotePrompt(vote) {
   if (!vote?.voteId) return;
-  const ok = confirm(`${vote.initiatorName} 玩家发起对 ${vote.targetName} 的踢人，是否同意？`);
+  const ok = confirm(`${vote.initiatorName} 发起踢出 ${vote.targetName} 的投票，需要另外 ${vote.additionalApprovals} 名玩家同意。你是否同意？`);
   if (ok) send("kickAgree", { voteId: vote.voteId });
 }
 

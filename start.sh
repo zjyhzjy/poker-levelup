@@ -7,7 +7,7 @@
 #    每次重启都会变。适合临时分享。
 #  - 固定域名（命名隧道）：设置 TUNNEL_NAME 和 TUNNEL_HOSTNAME，得到一个稳定网址，
 #    例如：TUNNEL_NAME=poker TUNNEL_HOSTNAME=poker.zifanzhang.com ./start.sh
-#    详见 docs/deploy-domain.md。
+#    轮流开服见 docs/tunnel-handoff-guide.md。
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -65,7 +65,11 @@ if [ -n "$TUNNEL_NAME" ]; then
   else
     echo "→ 启动命名隧道 ($TUNNEL_NAME)..."
     : > "$TUNNEL_LOG"
-    nohup "$CLOUDFLARED" tunnel run "$TUNNEL_NAME" > "$TUNNEL_LOG" 2>&1 &
+    tunnel_args=(tunnel)
+    if [ -n "${TUNNEL_CONFIG:-}" ]; then
+      tunnel_args+=(--config "$TUNNEL_CONFIG")
+    fi
+    nohup "$CLOUDFLARED" "${tunnel_args[@]}" run "$TUNNEL_NAME" > "$TUNNEL_LOG" 2>&1 &
     disown 2>/dev/null || true
   fi
   URL="https://${TUNNEL_HOSTNAME:-<请设置 TUNNEL_HOSTNAME>}"
