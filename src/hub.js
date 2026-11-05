@@ -338,7 +338,7 @@ function broadcast(room) {
 
 function startKickVote(room, client, targetSeatIndex) {
   const initiator = room.seats.find((s) => s.playerId === client.playerId);
-  if (!initiator) throw new Error("只有入座玩家可以发起踢人");
+  if (!initiator || initiator.isAi) throw new Error("只有入座的真人玩家可以发起踢人");
   const target = room.seats[targetSeatIndex];
   if (!target || !target.playerId) throw new Error("目标玩家不存在");
   if (target.index === initiator.index) throw new Error("不能踢自己");
@@ -346,11 +346,14 @@ function startKickVote(room, client, targetSeatIndex) {
   const vote = {
     id: crypto.randomUUID(),
     initiatorSeat: initiator.index,
+    initiatorPlayerId: initiator.playerId,
     targetSeat: target.index,
+    targetOccupantId: target.playerId,
     initiatorName: initiator.nickname || `座位${initiator.index + 1}`,
     targetName: target.nickname || `座位${target.index + 1}`,
     targetPlayerId: target.isAi ? null : target.playerId,
-    approvals: new Set([initiator.index])
+    additionalApprovals: room.seatCount >= 5 ? 3 : 1,
+    approvals: new Set()
   };
   vote.timer = setTimeout(() => {
     if (room.kickVote?.id === vote.id) {
@@ -359,13 +362,14 @@ function startKickVote(room, client, targetSeatIndex) {
     }
   }, 20000);
   room.kickVote = vote;
-  room.tableLog.push(`${vote.initiatorName} 发起对 ${vote.targetName} 的踢人投票。`);
+  room.tableLog.push(`${vote.initiatorName} 发起对 ${vote.targetName} 的踢人投票，另需 ${vote.additionalApprovals} 人同意。`);
   const payload = {
     voteId: vote.id,
     initiatorSeat: vote.initiatorSeat,
     targetSeat: vote.targetSeat,
     initiatorName: vote.initiatorName,
-    targetName: vote.targetName
+    targetName: vote.targetName,
+    additionalApprovals: vote.additionalApprovals
   };
   for (const c of clients) {
     if (c.roomCode !== room.code) continue;
@@ -379,11 +383,20 @@ function agreeKickVote(room, client, voteId) {
   const vote = room.kickVote;
   if (!vote || vote.id !== voteId) throw new Error("踢人投票已失效");
   const voter = room.seats.find((s) => s.playerId === client.playerId);
-  if (!voter) throw new Error("只有入座玩家可以投票");
+  if (!voter || voter.isAi) throw new Error("只有入座的真人玩家可以投票");
+  if (room.seats[vote.targetSeat]?.playerId !== vote.targetOccupantId ||
+      !room.seats.some((s) => s.playerId === vote.initiatorPlayerId && !s.isAi)) {
+    clearTimeout(vote.timer);
+    room.kickVote = null;
+    throw new Error("发起者或目标玩家已离开座位，踢人投票已失效");
+  }
   if (voter.index === vote.targetSeat) throw new Error("被踢玩家不能参与投票");
-  vote.approvals.add(voter.index);
+  if (voter.playerId === vote.initiatorPlayerId || vote.approvals.has(voter.playerId)) return;
+  vote.approvals.add(voter.playerId);
   room.tableLog.push(`${voter.nickname} 同意踢出 ${vote.targetName}。`);
-  if (vote.approvals.size < 2) return;
+  const approvals = new Set(room.seats.filter((s) => !s.isAi && vote.approvals.has(s.playerId))
+    .map((s) => s.playerId)).size;
+  if (approvals < vote.additionalApprovals) return;
   if (vote.timer) clearTimeout(vote.timer);
   const targetPlayerId = vote.targetPlayerId;
   kickSeatByVote(room, vote.targetSeat);
