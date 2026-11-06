@@ -13,7 +13,7 @@ export function collectTableEvents(room, previous) {
   const add=(kind,key,detail={})=>events.push({kind,key:`${scope}:${key}`,...detail});
   const failed=room.throwResult?.failed;
   if (failed && throwKey(room)!==throwKey(previous)) {
-    add('throw-fail',`failed:${throwKey(room)}`,{title:'甩牌失败',subtitle:'绷不住了！退牌重来',tag:'−10 分'});
+    add('throw-fail',`failed:${throwKey(room)}`,{title:'甩牌失败',subtitle:'退回未生效的牌',tag:'−10 分'});
   }
   const groups=[];
   if (seq(room)>seq(previous)) groups.push({
@@ -31,19 +31,19 @@ export function collectTableEvents(room, previous) {
       if (group.kills.includes(play.seat)) {
         const priorKill=group.plays.slice(1,i).some(p=>group.kills.includes(p.seat));
         if (!priorKill || group.winner===play.seat) add(priorKill?'overkill':'bomb',key,
-          {title:priorKill?'反杀！':'毙了！',subtitle:priorKill?'后手压制 · 火力全开':'主牌轰炸 · 全场震撼'});
+          {title:priorKill?'反杀！':'毙了！',subtitle:priorKill?'更高主牌夺回本墩':'主牌压制'});
       } else if (shape.type==='tractor') {
         add('tractor',key,{title:shape.unit===3?'三条拖拉机':'拖拉机！',
           subtitle:`${play.cards.length} 张连击 · 全速碾压`,tag:`${shape.count||play.cards.length/(shape.unit||2)} 连发`});
       } else if (shape.type==='throw' && i===0) {
-        add('throw',key,{title:'甩牌成功',subtitle:'这一手，拿捏了！',tag:`${play.cards.length} 张齐出`});
+        add('throw',key,{title:'甩牌成功',subtitle:'全部牌张生效',tag:`${play.cards.length} 张齐出`});
       } else if (shape.type==='triple' && (i===0 || group.winner===play.seat)) {
-        add('triple',key,{title:'三条压阵',subtitle:'三倍气场 · 强势出击'});
+        add('triple',key,{title:'三条压阵',subtitle:'三张齐出'});
       }
     }
   }
   if (seq(room)>seq(previous) && room.lastTrickWin.points>=40 && room.phase!=='roundOver') {
-    add('harvest',`harvest:${seq(room)}`,{title:'大丰收！',subtitle:'这波血赚',tag:`+${room.lastTrickWin.points} 分`});
+    add('harvest',`harvest:${seq(room)}`,{title:'大丰收！',subtitle:'本墩收分',tag:`+${room.lastTrickWin.points} 分`});
   }
   if (room.phase==='roundOver' && previous.phase!=='roundOver' && room.lastResult) {
     const result=room.lastResult, viewer=room.viewerSeat;
@@ -61,10 +61,10 @@ export function collectTableEvents(room, previous) {
 }
 
 const CONFIG = {
-  tractor: {priority:60,sound:'tractor',duration:1500},
-  bomb: {priority:75,sound:'bomb',duration:1350},
-  overkill: {priority:80,sound:'bomb',duration:1450},
-  'throw-fail': {priority:90,sound:'throw-fail',duration:1500},
+  tractor: {priority:60,sound:'tractor',duration:1900},
+  bomb: {priority:75,sound:'bomb',duration:1700},
+  overkill: {priority:80,sound:'bomb',duration:1850},
+  'throw-fail': {priority:90,sound:'throw-fail',duration:1550},
   throw: {priority:65,sound:'throw-success',duration:1350},
   triple: {priority:45,sound:'triple',duration:1150},
   harvest: {priority:25,sound:'win',duration:1000},
@@ -72,18 +72,26 @@ const CONFIG = {
   defeat: {priority:100,duration:1300},
   finish: {priority:100,sound:'win',duration:1400}
 };
-const CARDS='<b class="fx-card">♠</b><b class="fx-card">♥</b><b class="fx-card">♣</b><b class="fx-card">♦</b><b class="fx-card">♠</b>';
+const REAL_SPRITES = {
+  tractor:'/effects/tractor-real-v1.png',
+  explosion:'/effects/explosion-real-v1.png',
+  smoke:'/effects/smoke-real-v1.png',
+  trophy:'/effects/trophy-real-v1.png'
+};
+const cardFace=(suit='♠',rank='A')=>`<span class="fx-card-corner">${rank}<small>${suit}</small></span><span class="fx-card-pip">${suit}</span><span class="fx-card-corner fx-card-bottom">${rank}<small>${suit}</small></span>`;
+const CARDS=['♠','♥','♣','♦','♠'].map((s,i)=>`<b class="fx-card ${s==='♥'||s==='♦'?'fx-red':''}">${cardFace(s,['A','K','Q','J','10'][i])}</b>`);
+const blast=`<span class="fx-blast-light"></span><img class="fx-fireball" src="${REAL_SPRITES.explosion}" alt="" draggable="false"><img class="fx-smoke-plume" src="${REAL_SPRITES.smoke}" alt="" draggable="false">`;
 const ART = {
-  tractor:'<div class="fx-track"></div><div class="fx-fire"></div><img class="fx-vehicle" src="/tractor-effect.svg" alt="" draggable="false">',
-  bomb:'<img class="fx-bomb" src="/bomb-effect.svg" alt="" draggable="false">',
-  overkill:'<img class="fx-bomb" src="/bomb-effect.svg" alt="" draggable="false"><span class="fx-cross">×</span>',
-  throw:`<div class="fx-fan">${CARDS}</div>`,
-  'throw-fail':'<div class="fx-shard fx-shard-left">♠</div><div class="fx-shard fx-shard-right">♠</div>',
-  triple:`<div class="fx-triplet">${CARDS.slice(0,CARDS.indexOf('<b class="fx-card">♦'))}</div>`,
-  harvest:'<span class="fx-symbol">✦</span>',
-  victory:'<span class="fx-symbol fx-trophy">🏆</span>',
-  defeat:'<span class="fx-symbol">♠</span>',
-  finish:'<span class="fx-symbol">✦</span>'
+  tractor:`<div class="fx-track"></div><div class="fx-vehicle-pass"><span class="fx-ground-shadow"></span><img class="fx-dust" src="${REAL_SPRITES.smoke}" alt="" draggable="false"><img class="fx-vehicle" src="${REAL_SPRITES.tractor}" alt="" draggable="false"></div>`,
+  bomb:blast,
+  overkill:blast+`<img class="fx-fireball fx-secondary-blast" src="${REAL_SPRITES.explosion}" alt="" draggable="false">`,
+  throw:`<div class="fx-fan">${CARDS.join('')}</div>`,
+  'throw-fail':`<div class="fx-shard fx-shard-left">${cardFace()}</div><div class="fx-shard fx-shard-right">${cardFace()}</div>`,
+  triple:`<div class="fx-triplet">${CARDS.slice(0,3).join('')}</div>`,
+  harvest:'<div class="fx-coins"><i>♠</i><i>♠</i><i>♠</i></div>',
+  victory:`<img class="fx-trophy" src="${REAL_SPRITES.trophy}" alt="" draggable="false"><span class="fx-trophy-light"></span>`,
+  defeat:`<div class="fx-resting-card">${cardFace()}</div>`,
+  finish:`<div class="fx-resting-card">${cardFace('♦')}</div>`
 };
 
 // One scene at a time, at most two waiting scenes, bounded particles and timers.
@@ -92,6 +100,14 @@ export function createTableEffects({document:doc,window:win,sound=()=>{},root=()
   let previous=null,scene=null,timer=null,queue=[],seen=new Set();
   let mode='full';
   try { const saved=win.localStorage.getItem('szp.effects');if(['full','lite','off'].includes(saved))mode=saved; } catch {}
+  let warmed=false;
+  function warmAssets() {
+    if(warmed || !win.Image || effectiveMode()!=='full' || doc.hidden)return;
+    warmed=true;
+    for(const src of Object.values(REAL_SPRITES)){
+      const image=new win.Image();image.decoding='async';image.fetchPriority='low';image.src=src;
+    }
+  }
   const effectiveMode=()=>mode==='off'?'off':win.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'lite':mode;
   function clear() {
     win.clearTimeout(timer);timer=null;queue=[];scene?.remove();scene=null;
@@ -100,9 +116,9 @@ export function createTableEffects({document:doc,window:win,sound=()=>{},root=()
     if (scene || !queue.length) return;
     const event=queue.shift(),config=CONFIG[event.kind],host=root(),effective=effectiveMode();
     if (!host || effective==='off' || doc.hidden) {queue=[];return;}
-    scene=doc.createElement('div');scene.className=`table-fx fx-${event.kind} ${effective==='lite'?'fx-lite':''}`;
+    scene=doc.createElement('div');scene.className=`table-fx fx-real fx-${event.kind} ${effective==='lite'?'fx-lite':''}`;
     scene.setAttribute('aria-hidden','true');scene.style.setProperty('--fx-duration',`${config.duration}ms`);
-    scene.innerHTML=`<div class="fx-vignette"></div><div class="fx-rays"></div><div class="fx-ring"></div><div class="fx-ring fx-ring-two"></div><div class="fx-art">${ART[event.kind]}</div>`;
+    scene.innerHTML=`<div class="fx-vignette"></div><div class="fx-atmosphere"></div><div class="fx-ring"></div><div class="fx-ring fx-ring-two"></div><div class="fx-art">${ART[event.kind]}</div>`;
     const copy=doc.createElement('div');copy.className='fx-copy';
     for (const [tagName,className,text] of [['strong','fx-title',event.title],['span','fx-subtitle',event.subtitle],['b','fx-tag',event.tag]]) {
       if(!text)continue;const el=doc.createElement(tagName);el.className=className;el.textContent=text;copy.appendChild(el);
@@ -111,10 +127,11 @@ export function createTableEffects({document:doc,window:win,sound=()=>{},root=()
     if(effective==='full') {
       const count=win.matchMedia?.('(pointer: coarse)').matches?12:20;
       for(let i=0;i<count;i++) {
-        const p=doc.createElement('i'),angle=i/count*Math.PI*2,distance=95+(i%4)*30;
+        const p=doc.createElement('i'),angle=-Math.PI+(i+.5)/count*Math.PI,distance=75+(i%5)*26;
         p.className='fx-spark';p.style.setProperty('--x',`${Math.cos(angle)*distance}px`);
         p.style.setProperty('--y',`${Math.sin(angle)*distance}px`);
-        p.style.setProperty('--spin',`${i*73}deg`);p.style.setProperty('--delay',`${(i%5)*24}ms`);
+        p.style.setProperty('--spin',`${i*73}deg`);p.style.setProperty('--fall',`${90+(i%4)*24}px`);
+        p.style.setProperty('--size',`${2+(i%3)}px`);p.style.setProperty('--drift',`${(i%2?1:-1)*(10+i*3)}px`);p.style.setProperty('--delay',`${(i%5)*24}ms`);
         p.style.setProperty('--hue',`${i*47}deg`);scene.appendChild(p);
       }
     }
@@ -137,6 +154,7 @@ export function createTableEffects({document:doc,window:win,sound=()=>{},root=()
     clear,
     play,
     update(room) {
+      warmAssets();
       if(sameRound(room,previous)&&seq(room)<seq(previous))return;
       const events=collectTableEvents(room,previous);
       if(!sameRound(room,previous)){clear();seen.clear();}

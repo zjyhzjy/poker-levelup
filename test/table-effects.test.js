@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
 import {collectTableEvents,createTableEffects} from '../public/table-effects.js';
 import {createRoom,publicState} from '../src/game.js';
 
@@ -86,7 +87,7 @@ function renderer({reduced=false,coarse=false}={}) {
     setTimeout:(fn,ms)=>{const id=++nextId;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)};
   const fx=createTableEffects({document:doc,window:win,sound:name=>sounds.push(name)});
   const tick=()=>{const first=timers.entries().next().value;if(first){timers.delete(first[0]);first[1].fn();}};
-  return {fx,root,doc,timers,sounds,saved,tick};
+  return {fx,root,doc,window:win,timers,sounds,saved,tick};
 }
 
 test('effects stay bounded during a burst, auto-clean and deduplicate sounds',()=>{
@@ -122,4 +123,27 @@ test('untrusted text is emitted as text, and stale state cannot rewind the event
   r.fx.reset();r.fx.update(state({lastTrickWin:{seq:2}}));
   r.fx.update(state({lastTrickWin:{seq:1}}));
   r.fx.update(state({lastTrickWin:{seq:2}}));assert.equal(r.root.children.length,0);
+});
+
+test('photographic sprites warm once in full mode and are real RGBA assets',async()=>{
+  const r=renderer(),loaded=[];
+  r.window.Image=class {set src(value){loaded.push(value);}};
+  r.fx.update(state({phase:'lobby'}));r.fx.update(state({phase:'lobby'}));
+  assert.equal(loaded.length,4);assert.equal(new Set(loaded).size,4);
+  for(const url of loaded){
+    const bytes=await fs.readFile(new URL(`../public${url}`,import.meta.url));
+    assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
+    assert.equal(bytes[25],6,'RGBA PNG retains generated transparency');
+    assert.ok(bytes.readUInt32BE(16)<=2048&&bytes.readUInt32BE(20)<=2048);
+  }
+});
+
+test('lightweight, reduced-motion and hidden pages do not preload photographic sprites',()=>{
+  for(const mode of ['lite','off','reduced','hidden']){
+    const r=renderer({reduced:mode==='reduced'}),loaded=[];
+    r.window.Image=class {set src(value){loaded.push(value);}};
+    if(['lite','off'].includes(mode))r.fx.setMode(mode);
+    if(mode==='hidden')r.doc.hidden=true;
+    r.fx.update(state({phase:'lobby'}));assert.equal(loaded.length,0,mode);
+  }
 });

@@ -9,25 +9,26 @@ const root=fileURLToPath(new URL('../',import.meta.url));
 const read=name=>fs.readFile(path.join(root,'public',name),'utf8');
 const css=await read('table-effects.css');
 let renderer=(await read('table-effects.js')).replace(/^export /gm,'');
-for(const name of ['tractor-effect.svg','bomb-effect.svg']){
-  const data=Buffer.from(await read(name)).toString('base64');
-  renderer=renderer.replaceAll(`/${name}`,`data:image/svg+xml;base64,${data}`);
+const spritePaths=[...new Set([...renderer.matchAll(/\/effects\/[\w.-]+\.png/g)].map(match=>match[0]))];
+for(const url of spritePaths){
+  const data=(await fs.readFile(path.join(root,'public',url.slice(1)))).toString('base64');
+  renderer=renderer.replaceAll(url,`data:image/png;base64,${data}`);
 }
 const audio=(await read('audio.js')).replace(/^export /gm,'').replaceAll('localStorage','previewStore');
 const examples=[
-  {kind:'tractor',title:'拖拉机！',subtitle:'四轮驱动 · 全速碾压',tag:'3 连发',label:'🚜 拖拉机'},
+  {kind:'tractor',title:'拖拉机！',subtitle:'发动机轰鸣 · 轮胎扬尘',tag:'3 连发',label:'🚜 拖拉机'},
   {kind:'tractor',title:'三条拖拉机',subtitle:'9 张连击 · 重装出击',tag:'3 连发',label:'🔥 三条拖拉机'},
-  {kind:'bomb',title:'毙了！',subtitle:'主牌轰炸 · 全场震撼',label:'💣 主牌爆破'},
-  {kind:'overkill',title:'反杀！',subtitle:'后手压制 · 火力全开',label:'⚡ 反杀'},
-  {kind:'throw',title:'甩牌成功',subtitle:'这一手，拿捏了！',tag:'8 张齐出',label:'🃏 甩牌成功'},
-  {kind:'throw-fail',title:'甩牌失败',subtitle:'绷不住了！退牌重来',tag:'−10 分',label:'💥 甩牌失败'},
+  {kind:'bomb',title:'毙了！',subtitle:'主牌压制',label:'💣 主牌爆破'},
+  {kind:'overkill',title:'反杀！',subtitle:'更高主牌夺回本墩',label:'⚡ 反杀'},
+  {kind:'throw',title:'甩牌成功',subtitle:'全部牌张生效',tag:'8 张齐出',label:'🃏 甩牌成功'},
+  {kind:'throw-fail',title:'甩牌失败',subtitle:'退回未生效的牌',tag:'−10 分',label:'💥 甩牌失败'},
   {kind:'triple',title:'三条压阵',subtitle:'三倍气场 · 强势出击',label:'♠ 三条'},
   {kind:'harvest',title:'大丰收！',subtitle:'这波血赚',tag:'+60 分',label:'✨ 大丰收'},
   {kind:'victory',title:'本局胜利！',subtitle:'这一局，打得漂亮',tag:'升 3 级',label:'🏆 胜利'},
   {kind:'defeat',title:'下局再战',subtitle:'调整一下，下把拿捏',label:'🌙 下局再战'}
 ];
 const html=`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>牌桌高能时刻 · 特效预览</title><style>
+<title>写实牌桌特效 · 预览</title><style>
 *{box-sizing:border-box}body{margin:0;background:#071b19;color:#f7e9c9;font-family:system-ui,'Microsoft YaHei',sans-serif}
 main{max-width:960px;margin:auto;padding:28px 18px 40px}header{margin-bottom:18px}.eyebrow{font-size:11px;letter-spacing:.3em;color:#cfab64}
 h1{margin:7px 0;font-size:clamp(26px,5vw,42px)}header p{color:#96b6ab;font-size:14px;line-height:1.6;margin:0}
@@ -43,7 +44,7 @@ button:hover{background:#285648}button:focus-visible,select:focus-visible{outlin
 .choices{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin-top:20px}.choices button{font-size:13px;padding:13px 5px}
 .note{font-size:12px;color:#8faea2;line-height:1.7;margin-top:17px}@media(max-width:580px){main{padding:20px 10px}.table-felt{height:480px;border-radius:50px;border-width:6px}.table-felt:before{border-radius:40px;inset:15px}.choices{grid-template-columns:repeat(2,minmax(0,1fr))}.demo-avatar.left{left:10%}.demo-avatar.right{left:90%}}
 ${css}</style>
-<main><header><div class="eyebrow">POKER LEVELUP / SHOWTIME</div><h1>牌桌高能时刻</h1><p>点播拖拉机、爆破、甩牌和结算效果。底部「出牌」按钮可在动画中点击。</p></header>
+<main><header><div class="eyebrow">POKER LEVELUP / CINEMATIC</div><h1>写实牌桌特效</h1><p>真实农机质感、火球烟尘、纸牌撕裂。底部「出牌」按钮可在动画中点击。</p></header>
 <div class="toolbar"><label>特效强度 <select id="mode"><option value="full">炸裂</option><option value="lite">轻量</option><option value="off">关闭</option></select></label><button id="sound">🔇 音效：关</button><button id="stop">停止动画</button></div>
 <div class="table-felt" id="demo-table"><div class="table-label">五人找朋友 · 特效预览</div><div class="demo-avatar">👑</div><div class="demo-avatar left">🦊</div><div class="demo-avatar right">🤖</div>
 <div class="demo-cards"><b class="demo-card">A<br>♠</b><b class="demo-card">A<br>♠</b></div>

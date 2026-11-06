@@ -1,5 +1,5 @@
-import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, previewVoice, setMusicVol, setFxVol, setMusicPhase, selectTrack, musicTracks, currentTrackId, audioState } from "./audio.js";
-import { createTableEffects } from "./table-effects.js";
+import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, previewVoice, setMusicVol, setFxVol, setMusicPhase, selectTrack, musicTracks, currentTrackId, audioState } from "./audio.js?v=20261106real2";
+import { createTableEffects } from "./table-effects.js?v=20261106real2";
 
 /* ─── State ──────────────────────────────────────────────── */
 // Stable, client-owned player identity. Generated once and reused forever so we
