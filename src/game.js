@@ -2998,6 +2998,11 @@ export function buildSharedState(room) {
     trumpKillSeats: (room.phase === PHASES.PLAYING && room.currentTrick.length > 1)
       ? (() => { try { return trumpKillSeats(room, room.currentTrick); } catch { return []; } })()
       : [],
+    // Keep legal kill metadata for the just-finished trick too: its final play
+    // may arrive in the same broadcast that clears currentTrick.
+    lastTrickKillSeats: room.lastTrick?.length > 1
+      ? (() => { try { return trumpKillSeats(room, room.lastTrick); } catch { return []; } })()
+      : [],
     throwResult: room.throwResult,
     scores: room.scores,
     throwPenaltyStats: room.throwPenaltyStats || { attackers: 0, dealerTeam: 0, netToAttackers: 0 },

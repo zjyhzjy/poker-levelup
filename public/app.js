@@ -1,4 +1,5 @@
 import { unlock, sfx, speak, pick, toggleMusic, toggleVoice, previewVoice, setMusicVol, setFxVol, setMusicPhase, selectTrack, musicTracks, currentTrackId, audioState } from "./audio.js";
+import { createTableEffects } from "./table-effects.js";
 
 /* ─── State ──────────────────────────────────────────────── */
 // Stable, client-owned player identity. Generated once and reused forever so we
@@ -44,6 +45,7 @@ const state = {
 };
 
 const $ = (sel) => document.querySelector(sel);
+const tableEffects = createTableEffects({document,window,sound:sfx});
 
 // Tracks the currently shown bid so the center reveal only re-animates on change
 let lastBidSig = "";
@@ -192,6 +194,8 @@ $("#roomBadge")?.addEventListener("click", copyInvite);
 })();
 
 function connectAndJoin(code, nickname, seatCount) {
+  tableEffects.reset();
+  lastTrickSeq=null;lastFriendSeq=null;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -222,7 +226,6 @@ function connectAndJoin(code, nickname, seatCount) {
   // Only join once per socket. The server may send another "hello" after a
   // reconnect join; without this guard we'd loop hello→join→hello forever.
   let joined = false;
-  let previousRoomState = null;
   ws.addEventListener("message", (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === "hello") {
@@ -239,8 +242,6 @@ function connectAndJoin(code, nickname, seatCount) {
     }
     if (msg.type === "state") {
       if (manualExitAt && Date.now() - manualExitAt < 5000) return;
-      handleTractorEffect(msg.payload, previousRoomState);
-      previousRoomState = msg.payload;
       handleAudioEvents(msg.payload);
       setMusicPhase(msg.payload.phase === "lobby" ? "lobby" : "game"); // 大厅放开场，开打后切牌局曲
       state.room = msg.payload;
@@ -254,6 +255,7 @@ function connectAndJoin(code, nickname, seatCount) {
         if (!handIds.has(id)) state.selected.delete(id);
       }
       render();
+      try { tableEffects.update(msg.payload); } catch (error) { console.error('table effects:', error); }
     }
     if (msg.type === "emote") playEmote(msg.payload);
     if (msg.type === "kickVote") showKickVotePrompt(msg.payload);
@@ -336,31 +338,6 @@ function isTrumpCard(c, room) {
   if (c.rank === room.levelRank) return true;
   if (!room.noTrump && c.suit === room.trumpSuit) return true;
   return false;
-}
-
-function handleTractorEffect(room, previous) {
-  if (!previous || room.code !== previous.code || room.round !== previous.round) return;
-  if (room.phase !== "playing" && room.phase !== "roundOver") return;
-
-  const previousCount = previous.currentTrick?.length || 0;
-  const completed = room.lastTrickWin?.seq || 0;
-  const previousCompleted = previous.lastTrickWin?.seq || 0;
-  const newPlays = completed === previousCompleted
-    ? room.currentTrick.slice(previousCount)
-    : [
-        ...room.lastTrick.slice(completed === previousCompleted + 1 ? previousCount : 0),
-        ...room.currentTrick
-      ];
-  if (!newPlays.some((play) => play.shape?.type === "tractor")) return;
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-
-  document.querySelector(".tractor-drive")?.remove();
-  const tractor = document.createElement("img");
-  tractor.className = "tractor-drive";
-  tractor.src = "/tractor-effect.svg";
-  tractor.alt = "";
-  tractor.addEventListener("animationend", () => tractor.remove(), { once: true });
-  document.body.append(tractor);
 }
 
 function handleAudioEvents(room) {
@@ -628,7 +605,7 @@ function render() {
   scheduleTrickPauseRefresh(room);
   scheduleForceSpinRefresh(room);
   const table = $(".table-felt");
-  if (table) table.dataset.phase = room.phase || "";
+  if (table) {table.dataset.phase = room.phase || "";table.dataset.effects=tableEffects.effectiveMode;}
   $("#roomBadge").textContent = `房间 ${room.code}`;
   $("#phaseBadge").textContent = phaseText(room.phase);
 
@@ -660,7 +637,6 @@ function render() {
   try { maybeAnimateFriendReveal(room); } catch(e) { console.error("friendReveal:", e); }
   if ($("#logPanel")?.classList.contains("open")) { try { renderLog(room); } catch(e) { console.error("renderLog:", e); } }
   if ($("#standingsPanel")?.classList.contains("open")) { try { renderStandings(room); } catch(e) { console.error("standings:", e); } }
-  try { maybeAnimateChampion(room); } catch(e) { console.error("champion:", e); }
   syncHandBand();
 }
 
@@ -824,7 +800,7 @@ function maybeAnimateFriendReveal(room) {
   if (lastFriendSeq === null) { lastFriendSeq = seq; return; } // 首帧同步，不补播历史
   if (seq === lastFriendSeq) return;
   lastFriendSeq = seq;
-  if (info) animateFriendReveal(info.seat);
+  if (info && tableEffects.effectiveMode==='full' && !document.hidden) animateFriendReveal(info.seat);
 }
 function animateFriendReveal(seatIndex) {
   const el = seatTokenEl(seatIndex);
@@ -857,7 +833,7 @@ function maybeAnimateTrickPoints(room) {
   if (lastTrickSeq === null) { lastTrickSeq = seq; return; } // first state: sync, no animation
   if (seq === lastTrickSeq) return;
   lastTrickSeq = seq;
-  if (info && info.points > 0) animateTrickPoints(info.winner, info.points);
+  if (info && info.points > 0 && tableEffects.effectiveMode==='full' && !document.hidden) animateTrickPoints(info.winner, info.points);
 }
 
 function animateTrickPoints(winnerSeat, points) {
@@ -1765,27 +1741,6 @@ function renderStandings(room) {
   el.innerHTML = `<div class="sd-head">各家等级</div>${levels}<div class="sd-head">历史对局</div>${rows}`;
 }
 
-// 通关庆祝：检测 champion 这一局首次出现，撒一阵金色彩屑。
-let lastChampRound = null;
-function maybeAnimateChampion(room) {
-  const r = room.lastResult;
-  if (!r || !r.champion || room.phase !== "roundOver") return;
-  if (room.round === lastChampRound) return;
-  lastChampRound = room.round;
-  for (let i = 0; i < 18; i++) {
-    const e = document.createElement("div");
-    e.className = "champ-confetti";
-    e.textContent = ["🎉", "🏆", "✨", "🎊", "⭐"][i % 5];
-    e.style.left = `${Math.random() * 100}vw`;
-    e.style.top = "-40px";
-    document.body.appendChild(e);
-    e.animate([
-      { transform: "translateY(0) rotate(0deg)", opacity: 1 },
-      { transform: `translateY(105vh) rotate(${(Math.random() * 720 - 360) | 0}deg)`, opacity: .85 }
-    ], { duration: 1800 + Math.random() * 1200, easing: "cubic-bezier(.3,.6,.5,1)", delay: Math.random() * 400 }).onfinish = () => e.remove();
-  }
-}
-
 // Re-render on orientation change so layout updates immediately
 window.addEventListener("orientationchange", () => {
   setTimeout(() => { if (state.room) render(); }, 150);
@@ -1806,6 +1761,7 @@ function reconnectIfNeeded() {
   connectAndJoin(state.room.code, state.nickname);
 }
 document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") tableEffects.reset();
   if (document.visibilityState === "visible") {
     reconnectIfNeeded();
     updatePingStatus();
@@ -1860,11 +1816,13 @@ const voiceChecks = [voiceChk, joinVoiceChk].filter(Boolean);
 const musicRanges = [musicVolRange, joinMusicVolRange].filter(Boolean);
 const fxRanges = [fxVolRange, joinFxVolRange].filter(Boolean);
 const trackSelects = [trackSel, joinTrackSel].filter(Boolean);
+const effectSelects = [$("#effectsMode"),$("#joinEffectsMode")].filter(Boolean);
 function refreshAudioBtn() {
   const s = audioState();
   for (const btn of audioButtons) btn.classList.toggle("audio-off", !s.musicOn && !s.voiceOn);
   for (const chk of musicChecks) chk.checked = s.musicOn;
   for (const chk of voiceChecks) chk.checked = s.voiceOn;
+  for (const sel of effectSelects) sel.value = tableEffects.mode;
   for (const range of musicRanges) range.value = String(Math.round(s.musicVol * 100));
   for (const range of fxRanges) range.value = String(Math.round(s.fxVol * 100));
   for (const sel of trackSelects) {
@@ -1873,6 +1831,11 @@ function refreshAudioBtn() {
   }
 }
 refreshAudioBtn();
+effectSelects.forEach(sel=>sel.addEventListener('change',()=>{
+  tableEffects.setMode(sel.value);for(const other of effectSelects)other.value=tableEffects.mode;
+  const felt=$('.table-felt');if(felt)felt.dataset.effects=tableEffects.effectiveMode;
+  if(tableEffects.effectiveMode!=='full')document.querySelectorAll('.points-fly,.friend-pop').forEach(el=>el.remove());
+}));
 trackSelects.forEach((sel) => sel.addEventListener("change", () => { unlock(); selectTrack(sel.value); refreshAudioBtn(); }));
 [
   [audioBtn, audioPanel],
@@ -1922,6 +1885,7 @@ function exitRoom() {
   localStorage.removeItem("szp.roomCode");
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   state.room = null;
+  tableEffects.reset();
   try { state.ws?.close(); } catch (_) {}
   state.ws = null;
   state.selected.clear();
@@ -1978,6 +1942,7 @@ function handleKicked(payload = {}) {
   alert(payload.message || "你已被移出房间。");
   localStorage.removeItem("szp.roomCode");
   state.room = null;
+  tableEffects.reset();
   state.selected.clear();
   try { state.ws?.close(); } catch (_) {}
   state.ws = null;

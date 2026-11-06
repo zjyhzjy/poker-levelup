@@ -221,6 +221,7 @@ function stopSynthMusic() {
 // Prefer a downloaded clip public/sfx/<name>.mp3 (real, polished); fall back to
 // the synth below if the file is absent.
 const sfxClips = {};
+const proceduralSfx = new Set(['tractor','bomb','throw-fail','throw-success','triple','celebrate']);
 function isTouchDevice() {
   return (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches) ||
     (typeof navigator !== "undefined" && navigator.maxTouchPoints > 0);
@@ -230,6 +231,7 @@ function sfxVolume(name) {
 }
 export function sfx(name) {
   if (!voiceOn || fxVol <= 0) return;
+  if (proceduralSfx.has(name)) { synthSfx(name); return; }
   if (sfxClips[name] !== "missing") {
     let c = sfxClips[name];
     if (!c) { c = new Audio(`/sfx/${name}.wav`); sfxClips[name] = c; }
@@ -255,6 +257,29 @@ function synthSfx(name) {
     pluckFx(120, t + 0.06, 0.22, 0.28, "sawtooth");
   } else if (name === "deal") {
     pluckFx(800, t, 0.05, 0.12, "square");
+  } else if (name === 'bomb') {
+    // Fuse rush, bass impact and a short debris tail. All follow the FX volume.
+    noiseBurst(t,0.13,0.09,3800);
+    const o=ctx.createOscillator(),g=ctx.createGain();
+    o.type='sine';o.frequency.setValueAtTime(150,t+0.18);
+    o.frequency.exponentialRampToValueAtTime(32,t+0.65);
+    g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(0.4,t+0.2);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.75);
+    o.connect(g);g.connect(master);o.start(t);o.stop(t+0.8);
+    noiseBurst(t+0.18,0.36,0.28,1900);
+    noiseBurst(t+0.35,0.24,0.1,3600);
+  } else if (name === 'throw-fail') {
+    noiseBurst(t,0.1,0.2,1300);
+    [392,330,247,131].forEach((f,i)=>pluckFx(f,t+i*0.1,0.2,0.16,'triangle'));
+  } else if (name === 'throw-success') {
+    [392,523,659,784].forEach((f,i)=>pluckFx(f,t+i*0.065,0.25,0.13,'triangle'));
+    noiseBurst(t,0.12,0.07,4200);
+  } else if (name === 'triple') {
+    [110,145,196].forEach((f,i)=>{
+      pluckFx(f,t+i*0.09,0.18,0.2,'sine');noiseBurst(t+i*0.09,0.05,0.08,1200);
+    });
+  } else if (name === 'celebrate') {
+    [523,659,784,1047,784,1047].forEach((f,i)=>pluckFx(f,t+i*0.1,0.35,0.15,'triangle'));
   } else if (name === "tractor") {
     // 拖拉机=连对：火车汽笛 + 哐当哐当（可被 /sfx/tractor.wav 覆盖）
     [349.23, 466.16].forEach((f) => {            // 双音汽笛 "呜——"

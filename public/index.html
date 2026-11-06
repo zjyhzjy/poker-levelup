@@ -15,6 +15,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/style.css?v=4">
+    <link rel="stylesheet" href="/table-effects.css?v=1">
   </head>
   <body>
     <main id="app">
@@ -28,6 +29,7 @@
             <label class="audio-row"><span>🎵 背景音乐</span><input type="checkbox" id="joinMusicChk"></label>
             <div class="audio-row"><span>🎶 曲目</span><select id="joinTrackSel"></select></div>
             <label class="audio-row"><span>🗣️ 语音播报</span><input type="checkbox" id="joinVoiceChk"></label>
+            <label class="audio-row"><span>✨ 牌桌特效</span><select id="joinEffectsMode"><option value="full">炸裂</option><option value="lite">轻量</option><option value="off">关闭</option></select></label>
             <div class="audio-row vol"><span>🎵 音乐音量</span><input type="range" id="joinMusicVolRange" min="0" max="100" step="1"></div>
             <div class="audio-row vol"><span>🔊 语音/音效</span><input type="range" id="joinFxVolRange" min="0" max="100" step="1"></div>
           </div>
@@ -98,6 +100,7 @@
                 <label class="audio-row"><span>🎵 背景音乐</span><input type="checkbox" id="musicChk"></label>
                 <div class="audio-row"><span>🎶 曲目</span><select id="trackSel"></select></div>
                 <label class="audio-row"><span>🗣️ 语音播报</span><input type="checkbox" id="voiceChk"></label>
+                <label class="audio-row"><span>✨ 牌桌特效</span><select id="effectsMode"><option value="full">炸裂</option><option value="lite">轻量</option><option value="off">关闭</option></select></label>
                 <div class="audio-row vol"><span>🎵 音乐音量</span><input type="range" id="musicVolRange" min="0" max="100" step="1"></div>
                 <div class="audio-row vol"><span>🔊 语音/音效</span><input type="range" id="fxVolRange" min="0" max="100" step="1"></div>
               </div>
