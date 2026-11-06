@@ -31,7 +31,7 @@ const { PLAYING, ROUND_OVER } = constants.PHASES;
 // Card objects are immutable and identified by `.id`, so structuredClone is both
 // correct (ids/ranks/suits preserved) and safe. We must first detach the fields
 // that hold non-cloneable runtime objects — spectators (Map), clients (Set of
-// live sockets), trusteeTimers / kickVote (Timeout handles) — all irrelevant to a
+// live sockets), aiTimer / trusteeTimers / kickVote (Timeout handles) — all irrelevant to a
 // rollout. CRITICAL: restore them in `finally`, so if structuredClone throws the
 // real room isn't left corrupted (that previously nulled room.spectators forever
 // and crashed the next broadcast, dropping every player).
@@ -39,11 +39,13 @@ function cloneRoom(room) {
   const detached = {
     spectators: room.spectators,
     clients: room.clients,
+    aiTimer: room.aiTimer,
     trusteeTimers: room.trusteeTimers,
     kickVote: room.kickVote
   };
   room.spectators = undefined;
   room.clients = undefined;
+  room.aiTimer = undefined;
   room.trusteeTimers = undefined;
   room.kickVote = undefined;
   let copy;
@@ -52,6 +54,7 @@ function cloneRoom(room) {
   } finally {
     room.spectators = detached.spectators;
     room.clients = detached.clients;
+    room.aiTimer = detached.aiTimer;
     room.trusteeTimers = detached.trusteeTimers;
     room.kickVote = detached.kickVote;
   }
