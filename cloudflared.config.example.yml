@@ -1,7 +1,7 @@
 # Cloudflare 命名隧道配置模板
 # 用法：复制本文件到 ~/.cloudflared/config.yml，再把下面的占位符替换成你自己的值。
 #   cp cloudflared.config.example.yml ~/.cloudflared/config.yml
-# 详细步骤见 docs/deploy-domain.md。
+# 已配置固定域名后的轮流开服说明见 docs/tunnel-handoff-guide.md。
 
 # 隧道的 UUID（执行 `cloudflared tunnel create poker` 后打印出来；
 # 也可用 `cloudflared tunnel list` 查看）。

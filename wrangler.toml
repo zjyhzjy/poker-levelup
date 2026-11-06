@@ -1,0 +1,19 @@
+# Cloudflare 部署（Mac 关机也能玩）：npm run deploy:cf
+name = "poker-levelup"
+main = "worker/index.js"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+routes = [{ pattern = "poker.zifanzhang.com", custom_domain = true }]
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+run_worker_first = ["/ws", "/api/*"]
+
+[[durable_objects.bindings]]
+name = "LOBBY"
+class_name = "Lobby"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Lobby"]

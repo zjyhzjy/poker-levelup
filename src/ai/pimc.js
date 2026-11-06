@@ -207,11 +207,13 @@ function selectCandidates(room, seat, leaderCards, opts) {
 }
 
 // ── public entry ───────────────────────────────────────────────────────────
-// Returns the chosen play as an array of card objects (from room's real hand),
-// or null if it's not viewIndex's turn / not the playing phase.
-export function pimcChoosePlay(room, viewIndex, opts = {}) {
+// The search itself is a generator that yields after every determinization (the
+// driver resumes it with `true` once the time budget is spent), so the same loop
+// can run synchronously (pimcChoosePlay) or cooperatively (pimcChoosePlayAsync).
+// Returns the chosen play as an array of card objects, or null if it's not
+// viewIndex's turn / not the playing phase.
+function* searchPlay(room, viewIndex, opts) {
   if (room.phase !== PLAYING || room.turnSeat !== viewIndex) return null;
-  const timeBudgetMs = opts.timeBudgetMs ?? 400;
   const maxDeterminizations = opts.determinizations ?? 80;
   const rolloutLevel = opts.rolloutLevel ?? "hard";
   const rng = opts.rng ?? Math.random;
@@ -225,10 +227,7 @@ export function pimcChoosePlay(room, viewIndex, opts = {}) {
   const totals = new Array(candidates.length).fill(0);
   const counts = new Array(candidates.length).fill(0);
 
-  const start = Date.now();
-  let d = 0;
-  while (d < maxDeterminizations && Date.now() - start < timeBudgetMs) {
-    d += 1;
+  for (let d = 0; d < maxDeterminizations; d += 1) {
     const base = cloneRoom(room);
     determinize(room, viewIndex, base, rng);
     makeAllAuto(base, rolloutLevel, rng);
@@ -244,6 +243,7 @@ export function pimcChoosePlay(room, viewIndex, opts = {}) {
         }
       } catch (_) { /* discard a broken rollout; others still count */ }
     }
+    if (d + 1 < maxDeterminizations && (yield)) break; // caller says the budget is spent
   }
 
   let best = 0;
@@ -253,6 +253,32 @@ export function pimcChoosePlay(room, viewIndex, opts = {}) {
     if (avg > bestAvg) { best = i; bestAvg = avg; }
   }
   return candidates[best];
+}
+
+export function pimcChoosePlay(room, viewIndex, opts = {}) {
+  const timeBudgetMs = opts.timeBudgetMs ?? 400;
+  const start = Date.now();
+  const search = searchPlay(room, viewIndex, opts);
+  let step = search.next();
+  while (!step.done) step = search.next(Date.now() - start >= timeBudgetMs);
+  return step.value;
+}
+
+// Cooperative variant: awaits `opts.pause()` between determinizations so other
+// rooms' messages and timers can run, and so the time budget works on runtimes
+// whose clock only advances across I/O (Cloudflare Workers). Searches a snapshot,
+// so changes to the live room while paused can't skew the sampling.
+export async function pimcChoosePlayAsync(room, viewIndex, opts = {}) {
+  const timeBudgetMs = opts.timeBudgetMs ?? 400;
+  const pause = opts.pause ?? (() => new Promise((resolve) => setTimeout(resolve, 0)));
+  const start = Date.now();
+  const search = searchPlay(cloneRoom(room), viewIndex, opts);
+  let step = search.next();
+  while (!step.done) {
+    await pause();
+    step = search.next(Date.now() - start >= timeBudgetMs);
+  }
+  return step.value;
 }
 
 // Diagnostics: same search but returns the per-candidate averages (for tuning /

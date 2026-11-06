@@ -41,3 +41,5 @@ PS C:\cloudflared> .\cloudflared.exe tunnel --url http://localhost:3000
 五人 / 六人的实验性强化学习 AI（信息隔离、行为预测、自对弈训练与评测）见 [docs/learned-ai.md](docs/learned-ai.md)。默认不会替换线上 AI。
 
 运行 `npm run start:learning` 可启用本地匿名对局采集与经过评测的自动训练更新，配置和停用方法见 [docs/automatic-learning.md](docs/automatic-learning.md)。
+
+更新明细见 [UPDATE.md](UPDATE.md)。
