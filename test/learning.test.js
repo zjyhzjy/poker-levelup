@@ -5,6 +5,7 @@ import {ACTION_SIZE,OBSERVATION_SIZE,SCHEMA,decisionInput,informationSet,encodeO
 import {scoreActions,validateModel,chooseLearnedPlay} from '../src/ai/learning/network.js';
 import {validatePlay,chooseAiPlay,playCards} from '../src/game.js';
 import {evaluate} from '../bench/learning/evaluate.mjs';
+import {compareIncumbent} from '../bench/learning/promotion.mjs';
 
 function zeroModel() {
   const matrix=(r,c)=>Array.from({length:r},()=>Array(c).fill(0));
@@ -121,6 +122,9 @@ test('model loading rejects wrong schema, missing mode and non-finite weights',(
 test('evaluation rejects training seed overlap and identical-policy control has exactly zero edge',()=>{
   const model=zeroModel();model.metadata={trainingSeeds:[123]};
   assert.throws(()=>evaluate({model,seeds:2,seed:123}),/used in training/);
+  model.metadata={selectionSeeds:[124]};
+  assert.throws(()=>evaluate({model,seeds:2,seed:124}),/selection/);
+  assert.throws(()=>compareIncumbent({candidate:zeroModel(),incumbent:model,seeds:2,seed:124}),/selection/);
   const report=evaluate({model,seeds:2,seed:1000000001,candidatePolicy:'hard'});
   for(const n of [5,6]) {
     assert.equal(report.modes[n].meanNetLevelDelta,0);

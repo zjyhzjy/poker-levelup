@@ -165,6 +165,8 @@ def main():
     parser.add_argument('--hidden', type=int, default=32)
     parser.add_argument('--lr', type=float, default=.001)
     parser.add_argument('--sample-rate', type=float, default=.25)
+    parser.add_argument('--belief-weight', type=float, default=.2)
+    parser.add_argument('--behavior-weight', type=float, default=.1)
     parser.add_argument('--out', default='.run/learning')
     parser.add_argument('--node', default=shutil.which('node') or 'node')
     parser.add_argument('--init', help='Warm-start weights; optimizer is intentionally reset')
@@ -172,8 +174,10 @@ def main():
     args = parser.parse_args()
     if (args.iterations<1 or args.games<2 or args.games%2 or args.epochs<1 or args.batch_size<1
             or not 0<args.sample_rate<=1 or not 1<=args.hidden<=512 or not np.isfinite(args.lr) or args.lr<=0
+            or not np.isfinite(args.belief_weight) or args.belief_weight<0
+            or not np.isfinite(args.behavior_weight) or args.behavior_weight<0
             or args.seed<0 or args.seed+(args.iterations-1)*10000000+(args.games-1)*7919>0xffffffff):
-        parser.error('iterations/epochs/batch must be positive; games even >=2; 0 < sample-rate <= 1')
+        parser.error('Positive iterations/epochs/batch/lr; games even >=2; 0 < sample-rate <= 1; finite nonnegative loss weights')
     root = pathlib.Path(__file__).resolve().parents[2]
     out = pathlib.Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -184,6 +188,10 @@ def main():
     model = Network.from_checkpoint(checkpoint,args.seed) if checkpoint else Network(args.seed, args.hidden)
     live,live_rounds=load_live_rounds(args.live_manifest) if args.live_manifest else ([],0)
     inherited=checkpoint.get('metadata',{}).get('trainingSeeds',[]) if checkpoint else []
+    reserved=set(inherited+(checkpoint.get('metadata',{}).get('selectionSeeds',[]) if checkpoint else []))
+    planned={args.seed+iteration*10000000+i*7919 for iteration in range(args.iterations) for i in range(args.games)}
+    if reserved & planned:
+        parser.error('Training seeds overlap warm-start training or selection seeds; choose a new --seed')
     history, replay, seeds = [], [], list(inherited)
     for iteration in range(args.iterations):
         data_path = out/f'rollout-{iteration:03}.jsonl'
@@ -213,16 +221,20 @@ def main():
             order = model.rng.permutation(len(data[0]))
             for start in range(0, len(order), args.batch_size):
                 ids = order[start:start+args.batch_size]
-                _, gradients, metrics = model.loss_grad(tuple(a[ids] for a in data))
+                _, gradients, metrics = model.loss_grad(tuple(a[ids] for a in data),args.belief_weight,args.behavior_weight)
                 model.update(gradients, args.lr)
         # Report complete current-batch loss rather than cherry-picking a minibatch.
         current_data = arrays(current)
-        _, _, metrics = model.loss_grad(current_data)
+        _, _, metrics = model.loss_grad(current_data,args.belief_weight,args.behavior_weight)
         history.append({'iteration':iteration, **rollout, **metrics})
         metadata = {'algorithm':'multi-task deep Monte-Carlo policy iteration', 'experimental':True,
                     'trainingSeeds':seeds, 'iterations':history, 'seed':args.seed,
+                    'selectionSeeds':checkpoint.get('metadata',{}).get('selectionSeeds',[]) if checkpoint else [],
                     'games':args.games*(iteration+1), 'optimizerSteps':model.step,
                     'liveRounds':live_rounds,'liveExamplesAvailable':len(live),'liveExamplesThisIteration':live_count,
+                    'trainingConfig':{'learningRate':args.lr,'epochs':args.epochs,'batchSize':args.batch_size,
+                                      'sampleRate':args.sample_rate,'beliefWeight':args.belief_weight,
+                                      'behaviorWeight':args.behavior_weight},
                     'scope':'play phase only; bounded engine candidates; no optimality or strength guarantee'}
         save_json(candidate, model.export(metadata))
         save_json(out/f'checkpoint-{iteration:03}.json', model.export(metadata))

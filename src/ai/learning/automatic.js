@@ -5,6 +5,7 @@ import {spawn} from 'node:child_process';
 import os from 'node:os';
 import {RoundRecorder} from './recorder.js';
 import {validateModel} from './network.js';
+import {SCHEMA} from './observation.js';
 
 export const sha256=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 export async function atomicJson(file,value) {
@@ -45,7 +46,8 @@ export class AutomaticLearning {
   }
   async status(extra={}) {
     await atomicJson(path.join(this.directory,'status.json'),{enabled:true,minRounds:this.minRounds,
-      cooldownHours:this.cooldownMs/3600000,activeModel:this.active?.sha256||'existing-server-policy',
+      cooldownHours:this.cooldownMs/3600000,
+      activeModel:this.active?.sha256??(this.fallbackModel?'configured-learned-model':'existing-server-policy'),
       pendingRun:this.state.pending?.id||null,updatedAt:new Date().toISOString(),...extra});
   }
   async persist(){await atomicJson(path.join(this.directory,'state.json'),this.state);}
@@ -102,7 +104,8 @@ export class AutomaticLearning {
       const activeBytes=await fs.readFile(activePath).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
       const incumbent=this.active?path.join(this.directory,'models',`${this.active.sha256}.json`):this.fallbackPath;
       const shadow=this.state.lastCandidate&&await fs.access(this.state.lastCandidate).then(()=>true,()=>false)?this.state.lastCandidate:null;
-      const config={root:this.root,directory:this.directory,runDir,python:this.python,initModel:shadow||incumbent||this.initModel,
+      const compatibleIncumbent=this.current?.schema===SCHEMA?incumbent:null;
+      const config={root:this.root,directory:this.directory,runDir,python:this.python,initModel:shadow||compatibleIncumbent||this.initModel,
         incumbent,expectedActiveDigest:activeBytes?sha256(activeBytes):null,evalSeeds:this.evalSeeds,
         masterOptions:{determinizations:64,maxCandidates:8,timeBudgetMs:Number(process.env.MASTER_PIMC_MS||1300),rolloutLevel:'master'}};
       await atomicJson(path.join(runDir,'job.json'),config);

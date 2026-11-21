@@ -22,7 +22,7 @@
 候选动作生成也使用脱敏视图，避免动作集合泄漏别人的牌。
 
 观测编码不使用牌的唯一 ID 或副牌编号，只编码牌面和数量。真实卡牌 ID 仅用于把自己的动作交给规则引擎。
-模型不会读取真人身份或跨局玩家资料，因此目前只适应本局行为。可选的本地真人对局采集与自动训练见 [automatic-learning.md](automatic-learning.md)；普通启动默认不采集。
+模型只使用本局行为。Node.js 默认启动的匿名对局采集与自动训练见 [automatic-learning.md](automatic-learning.md)。
 
 离线模拟器知道隐藏牌，用于计算辅助监督目标和最终奖励。训练目标与观测存放在不同字段。
 五人奖励按终局实际朋友身份计算；六人按与庄家座位的奇偶关系计算。
@@ -57,6 +57,22 @@ python bench/learning/train.py --iterations 20 --games 512 --epochs 4 --out .run
 
 这是训练命令示例，未承诺所需时间或棋力；应先观察本机吞吐与验证结果。
 
+### 自动比较训练设置并继续迭代
+
+```sh
+node bench/learning/iterate.mjs --init .run/learning/candidate.json --python python --out .run/iteration-v1 --seed 500001121
+```
+
+该离线流程实际训练 10,240 局，五人、六人各 5,120 局：先从相同权重分别训练两组 2,048 局，比较低学习率的多任务续训和只优化终局出牌收益的训练；随后从保留模型再进行三组各 2,048 局的续训。
+
+每阶段在固定开发集上比较，只有两种玩法均不退步且较弱玩法的平均收益提高才接受新版本。拒绝时保留原版、降低学习率继续。开发集会反复使用，因此这些阶段判断有过拟合风险；最终使用不同种子进行规则 AI、初始模型和随机策略对照，不能再用最终结果挑选另一检查点。
+
+`selected-model.json` 是筛选模型，`iteration-run.json` 记录所有训练阶段，`final-result.json` 记录独立评测。筛选模型只继承实际训练到其权重中的祖先数据，不一定包含全部 10,240 局；`metadata.trainingSeeds` 记录其训练种子，`metadata.selectionSeeds` 记录开发集种子。训练和最终评测会拒绝重用已有训练／筛选种子。再次运行须换新输出目录和不重叠的 `--seed`。
+
+单独训练时可用 `--belief-weight`、`--behavior-weight` 调整辅助损失，均默认为原有的 0.2、0.1，设为 0 则关闭对应损失。每次续训重新初始化优化器。
+
+此流程不安装线上模型。即使优于规则 AI，也需要通过默认大师 PIMC 的独立对照才能替换默认 AI。其目标是找出当前预算内测试较好的策略，不是求解或证明最优策略。终局回报与动作价值训练属于 Deep Monte Carlo 风格的方法，可参考 [DouZero（ICML 2021）](https://proceedings.mlr.press/v139/zha21a.html)。
+
 ## 独立评测
 
 ```sh
@@ -78,6 +94,7 @@ node bench/learning/evaluate.mjs --model .run/learning-smoke/candidate.json --se
 
 ```powershell
 $env:PORT = '3001'
+$env:AUTO_LEARNING = '0'
 $env:LEARNED_AI_MODEL = (Resolve-Path '.run/learning-smoke/candidate.json').Path
 npm start
 ```

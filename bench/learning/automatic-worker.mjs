@@ -34,9 +34,10 @@ try {
   const candidateBytes=await fs.readFile(path.join(output,'candidate.json'));
   const candidate=validateModel(JSON.parse(candidateBytes));
   const incumbent=job.incumbent?validateModel(JSON.parse(await fs.readFile(job.incumbent,'utf8'))):null;
-  const used=new Set([...(candidate.metadata?.trainingSeeds||[]),...(incumbent?.metadata?.trainingSeeds||[])]);
+  const used=new Set([...(candidate.metadata?.trainingSeeds||[]),...(incumbent?.metadata?.trainingSeeds||[]),
+    ...(candidate.metadata?.selectionSeeds||[]),...(incumbent?.metadata?.selectionSeeds||[])]);
   let seed;
-  do{seed=crypto.randomInt(500000000,3000000000);}while(Array.from({length:job.evalSeeds},(_,i)=>seed+i*7919).some(s=>used.has(s)));
+  do{seed=crypto.randomInt(500000000,3000000000);}while([0,1000000].some(offset=>Array.from({length:job.evalSeeds},(_,i)=>seed+offset+i*7919).some(s=>used.has(s))));
   await progress({phase:'evaluating-hard',seed});
   const hard=evaluate({model:candidate,seeds:job.evalSeeds,seed});
   await atomicJson(path.join(runDir,'evaluation-hard.json'),hard);

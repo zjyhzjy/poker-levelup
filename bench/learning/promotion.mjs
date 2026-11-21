@@ -12,13 +12,14 @@ export function promotionGate(reports) {
 }
 
 export function compareIncumbent({candidate,incumbent=null,seeds=24,seed,masterOptions=MASTER_OPTIONS,onProgress=()=>{}}) {
-  const used=new Set([...(candidate.metadata?.trainingSeeds||[]),...(incumbent?.metadata?.trainingSeeds||[])]),modes={};
+  const used=new Set([...(candidate.metadata?.trainingSeeds||[]),...(incumbent?.metadata?.trainingSeeds||[]),
+    ...(candidate.metadata?.selectionSeeds||[]),...(incumbent?.metadata?.selectionSeeds||[])]),modes={};
   if(!Number.isInteger(seeds)||seeds<2||!Number.isInteger(seed)||seed<0||seed+(seeds-1)*7919>0xffffffff)throw new Error('Invalid evaluation seeds');
   for(const n of [5,6]) {
     const deltas=[];
     for(let i=0;i<seeds;i++) {
       const dealSeed=seed+i*7919;
-      if(used.has(dealSeed))throw new Error('Evaluation overlaps training');
+      if(used.has(dealSeed))throw new Error('Evaluation overlaps training or selection');
       const rotated=[];
       for(let seat=0;seat<n;seat++) {
         const policies=Array(n).fill('hard');policies[seat]=incumbent?'learned':'master';

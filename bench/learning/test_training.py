@@ -75,6 +75,19 @@ class TrainingTests(unittest.TestCase):
         self.assertEqual(metrics['behavior_ce'],0)
         self.assertTrue(np.all(grad['behaviorW']==0))
 
+    def test_reward_only_training_preserves_auxiliary_heads(self):
+        model=Network(hidden=4,action_hidden=4)
+        batch=self.batch()
+        before={name:model.p[name].copy() for name in ('beliefW','beliefB','behaviorW','behaviorB')}
+        q_before=model.loss_grad(batch,belief_weight=0,behavior_weight=0)[2]['q_mse']
+        for _ in range(40):
+            loss,grad,metrics=model.loss_grad(batch,belief_weight=0,behavior_weight=0)
+            self.assertAlmostEqual(loss,metrics['q_mse'])
+            model.update(grad,.01)
+        for name,value in before.items():
+            np.testing.assert_array_equal(model.p[name],value)
+        self.assertLess(model.loss_grad(batch,belief_weight=0,behavior_weight=0)[2]['q_mse'],q_before*.5)
+
     @unittest.skipUnless(shutil.which('node'), 'Node.js required for inference parity')
     def test_export_matches_node_inference(self):
         model=Network(hidden=4,action_hidden=4)

@@ -1,7 +1,8 @@
 import { addAiPlayer, callSixTrump, chooseAiPlay, createRoom, decideAiSixTrump, dealerTeamSeats,
   passSixTrump, playCards, runAiStep, startRound, validatePlay } from '../../src/game.js';
 import { behaviorClass, counts, decisionInput, informationSet, encodeAction } from '../../src/ai/learning/observation.js';
-import { scoreActions } from '../../src/ai/learning/network.js';
+import { chooseLearnedPlay, scoreActions } from '../../src/ai/learning/network.js';
+import { SEARCH_POLICY_SCHEMA } from '../../src/ai/search-policy.js';
 import { pimcChoosePlay } from '../../src/ai/pimc.js';
 import { mulberry32, runAuction, resolveForcedSuit } from '../lib/pimc-deal.mjs';
 
@@ -81,8 +82,14 @@ export function playEpisode({seed,seatCount,policies,model=null,epsilon=0,sample
       const viewer=room.turnSeat, seat=room.seats[viewer], policy=policies[viewer];
       const keep=collect && rng()<sampleRate;
       let input=null, cards;
-      if(keep||policy==='learned'||policy==='random') input=decisionInput(room,viewer);
-      if(policy==='learned'&&model) {
+      const student=policy==='learned'&&model?.schema===SEARCH_POLICY_SCHEMA;
+      if(keep||(policy==='learned'&&!student)||policy==='random') input=decisionInput(room,viewer);
+      if(student) {
+        const start=performance.now();
+        cards=chooseLearnedPlay(room,viewer,model);
+        if(cards) { latencyMs+=performance.now()-start; learnedMoves++; }
+        else {seat.aiLevel='master';cards=pimcChoosePlay(room,viewer,{...masterOptions,rng});}
+      } else if(policy==='learned'&&model) {
         const start=performance.now();
         const values=scoreActions(model,input.observation,input.features);
         const index=rng()<epsilon?Math.floor(rng()*values.length):values.indexOf(Math.max(...values));

@@ -1262,6 +1262,15 @@ export function legalCandidatePlays(room, seat, leaderCards = null) {
   return out;
 }
 
+// Reuse the rule policy's scoring terms as inputs for supervised action ranking.
+export function heuristicActionScores(room, seat, actions) {
+  const profile = aiProfile(seat);
+  const seen = seenCounts(room, seat);
+  const standing = trickStanding(room, seat);
+  if (standing) return actions.map(cards => scoreFollow(room, seat, cards, standing, profile, seen));
+  return actions.map(cards => scoreLead(room, seat, cards, profile, seen));
+}
+
 // Conservative baseline (the original behaviour): follow with the lowest legal
 // cards; lead the single lowest card. Guaranteed legal or a last-resort slice.
 function safeAiPlay(room, seat, leaderCards) {

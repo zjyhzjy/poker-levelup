@@ -10,14 +10,13 @@ import { configureHub, connectClient, createApiRoom, disconnectClient, receiveMe
 import { createFileStore } from "./src/fileStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Explicit opt-in only. Short training runs are experimental, so existing AI
-// remains the default. A malformed requested checkpoint fails startup clearly.
+// A configured checkpoint is the starting policy until an approved model is available.
 const learnedModel = process.env.LEARNED_AI_MODEL
   ? validateModel(JSON.parse(fs.readFileSync(path.resolve(process.env.LEARNED_AI_MODEL), "utf8")))
   : null;
-if (learnedModel) console.log("Experimental learned AI enabled for 5/6-player master seats");
+if (learnedModel) console.log(`Experimental learned AI enabled for ${learnedModel.seatCounts.join('/')} player master seats`);
 let automaticLearning = null;
-if (process.env.AUTO_LEARNING === "1") {
+if ((process.env.AUTO_LEARNING ?? "1") === "1") {
   const configFile = path.join(__dirname, ".run", "auto-learning.json");
   const config = fs.existsSync(configFile) ? JSON.parse(fs.readFileSync(configFile, "utf8")) : {};
   automaticLearning = await new AutomaticLearning({root:__dirname, ...config,
@@ -76,7 +75,10 @@ configureHub({
     choosePlay: (room, seatIndex) => {
       const model = automaticLearning ? automaticLearning.modelFor(room) : learnedModel;
       if (!model || room.seats[seatIndex].aiLevel !== "master" || ![5, 6].includes(room.seatCount)) return null;
-      return chooseLearnedPlay(room, seatIndex, model);
+      return chooseLearnedPlay(room, seatIndex, model, {
+        pause: () => new Promise(resolve => setImmediate(resolve)),
+        timeBudgetMs: SEARCH_OPTS.master.timeBudgetMs
+      });
     }
   }
 });
@@ -161,7 +163,7 @@ function serveStatic(urlPath, res) {
     if (filePath === path.join(publicDir, "index.html")) {
       try { body = Buffer.from(data.toString("utf8").replace(/\?v=[\w.]+/g, `?v=${assetVersion()}`)
         .replace("<!-- automatic-learning-notice -->", automaticLearning
-          ? '<p class="learning-notice">本服会将已结束的五／六人对局用于本机 AI 训练，不保存昵称、玩家身份或 IP。未完成对局不入库。</p>' : "")); }
+          ? '<p class="learning-notice">本服会将已结束且有真人手动出牌的五／六人对局用于本机 AI 训练。训练记录只含匿名牌局特征。</p>' : "")); }
       catch (_) { /* 注入失败就原样发送 */ }
     }
     res.writeHead(200, { "Content-Type": contentType(filePath), "Cache-Control": cacheControl(filePath) });

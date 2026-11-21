@@ -582,12 +582,19 @@ async function searchStep(room) {
   if (!seat || !seat.isAi) return false;
   const opts = searchOpts[seat.aiLevel];
   if (!opts) return false; // 弱/中：纯启发式，不搜索
+  const { round } = room;
+  const { playerId } = seat;
+  const handSize = seat.hand.length;
+  const stillOnTurn = () => room.phase === "playing" && room.round === round &&
+    room.turnSeat === seatIndex && room.seats[seatIndex] === seat && seat.isAi &&
+    seat.playerId === playerId && seat.hand.length === handSize;
   try {
     let cards = null;
-    try { cards = learning?.choosePlay?.(room, seatIndex); } catch (_) { /* fall back to PIMC */ }
+    try { cards = await learning?.choosePlay?.(room, seatIndex); } catch (_) { /* fall back to PIMC */ }
+    if (!stillOnTurn()) return false;
     if (!cards?.length) cards = await pimcChoosePlayAsync(room, seatIndex, opts);
     // 搜索期间牌局可能已变（踢人/回大厅/换人接管），不再是这个 AI 的回合就作废。
-    if (!cards || !cards.length || room.phase !== "playing" || room.turnSeat !== seatIndex || room.seats[seatIndex] !== seat || !seat.isAi) return false;
+    if (!cards?.length || !stillOnTurn()) return false;
     playCards(room, seat.playerId, cards.map((c) => c.id));
     return true;
   } catch (_) {

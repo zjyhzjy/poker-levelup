@@ -1,5 +1,6 @@
 import { SCHEMA, OBSERVATION_SIZE, ACTION_SIZE, decisionInput, voidSuits, FACES } from './observation.js';
 import { playSuit } from '../../game.js';
+import { SEARCH_POLICY_SCHEMA, chooseSearchStudentPlay, validateSearchPolicy } from '../search-policy.js';
 
 const dot = (a,b) => {let s=0; for(let i=0;i<a.length;i++) s+=a[i]*b[i]; return s;};
 const dense = (x,w,b) => w.map((row,i)=>dot(row,x)+b[i]);
@@ -7,6 +8,7 @@ const tanh = xs => xs.map(Math.tanh);
 const softmax = xs => {const m=Math.max(...xs), e=xs.map(x=>Math.exp(x-m)), s=e.reduce((a,b)=>a+b,0);return e.map(v=>v/s);};
 
 export function validateModel(model) {
+  if (model?.schema === SEARCH_POLICY_SCHEMA) return validateSearchPolicy(model);
   if (model.schema !== SCHEMA || model.observationSize !== OBSERVATION_SIZE || model.actionSize !== ACTION_SIZE
     || ![5,6].every(n=>model.seatCounts?.includes(n))) throw new Error('Incompatible learned AI checkpoint');
   const h=model.hiddenSize, q=model.actionHiddenSize;
@@ -34,7 +36,8 @@ export function predictAuxiliary(model, observation) {
     nextActionProbabilities:Array.from({length:6},(_,i)=>softmax(logits.slice(i*8,(i+1)*8)))};
 }
 
-export function chooseLearnedPlay(room, viewer, model) {
+export function chooseLearnedPlay(room, viewer, model, options) {
+  if (model.schema === SEARCH_POLICY_SCHEMA) return chooseSearchStudentPlay(room, viewer, model, options);
   const input=decisionInput(room,viewer);
   const values=scoreActions(model,input.observation,input.features);
   if (values.some(v=>!Number.isFinite(v))) throw new Error('Non-finite learned action value');

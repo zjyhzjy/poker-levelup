@@ -10,12 +10,12 @@ export function evaluate({model,seeds=20,seed=1000000001,opponent='hard',candida
   if(!['learned','hard','easy','random'].includes(candidatePolicy)) throw new Error('Unsupported candidate policy');
   if(!Number.isSafeInteger(seed)||seed<0||seed+(seeds-1)*7919>0xffffffff) throw new Error('Invalid evaluation seed');
   if(!Number.isInteger(seeds)||seeds<2) throw new Error('Need at least 2 independent evaluation seeds');
-  const trained=new Set(model.metadata?.trainingSeeds||[]), modes={};
+  const trained=new Set([...(model.metadata?.trainingSeeds||[]),...(model.metadata?.selectionSeeds||[])]), modes={};
   for(const seatCount of [5,6]) {
     const deltas=[];let positive=0,negative=0,tied=0,latencyMs=0,learnedMoves=0,games=0;
     for(let i=0;i<seeds;i++) {
       const dealSeed=seed+i*7919;
-      if(trained.has(dealSeed)) throw new Error(`Evaluation seed ${dealSeed} was used in training`);
+      if(trained.has(dealSeed)) throw new Error(`Evaluation seed ${dealSeed} was used in training or selection`);
       const baseline=playEpisode({seed:dealSeed,seatCount,policies:Array(seatCount).fill(opponent)});
       games++;
       const rotations=[];
