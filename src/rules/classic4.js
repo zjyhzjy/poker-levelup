@@ -261,7 +261,12 @@ export function validatePlay(room, seat, cards, leaderCards) {
     const wanted = forcedRequirement(leaderShape, available, room, seat.lockedTriples || []);
     const actual = analyzeShapeWithLockedTriples(cards, room, seat.lockedTriples || []);
     const followingSameSuit = cards.filter((c) => playSuit(c, room) === ledSuit);
-    if (!shapeSatisfies(actual, wanted, followingSameSuit, available, room, seat.lockedTriples || [])) {
+    // 跟出与首家完全同型的牌一律合法：例如手里另有天然对子时，仍可自愿拆
+    // 未锁定的三条（JJJQQQ → JJQQ）组成拖拉机去压首家的拖拉机。锁定三条的两张
+    // 在 analyzeShapeWithLockedTriples 里已按单张处理，不会从这里绕过锁定。
+    const sameShapeAsLeader = actual.type !== "throw" && actual.type === leaderShape.type
+      && actual.unit === leaderShape.unit && (actual.count || 1) === (leaderShape.count || 1);
+    if (!sameShapeAsLeader && !shapeSatisfies(actual, wanted, followingSameSuit, available, room, seat.lockedTriples || [])) {
       return { ok: false, reason: "需要优先跟同类牌型" };
     }
   }

@@ -3077,3 +3077,29 @@ test("甩牌扣底倍率：只按其中最大的单一牌型计算", () => {
   const triplePlusPair = [...pick("10", 3), ...pick("K", 2)];
   assert.deepEqual(dominantThrowShape(triplePlusPair, room), { type: "triple", unit: 3, count: 1 });
 });
+
+for (const seatCount of [5, 6]) {
+  test(`${seatCount} 人跟拖拉机：有天然对子时仍可拆未锁定三条 JJJQQQ 出 JJQQ 压 5566`, () => {
+    const room = createPlayRuleRoom("SPLITTRIPLETRACTOR", seatCount);
+    const deck = createDeck();
+    const of = (rank, n) => deck.filter((c) => c.rank === rank && c.suit === "spades").slice(0, n);
+    const lead = [...of("5", 2), ...of("6", 2)];
+    const follower = room.seats[1];
+    follower.lockedTriples = [];
+    follower.hand = [...of("J", 3), ...of("Q", 3), ...of("9", 2), ...of("3", 2), of("7", 1)[0]];
+    room.currentTrick = [{ seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 }];
+    room.turnSeat = 1;
+    const split = [...of("J", 2), ...of("Q", 2)];
+    assert.equal(validatePlay(room, follower, split, lead).ok, true, "拆三条组成的拖拉机合法");
+    assert.equal(validatePlay(room, follower, [...of("J", 2), ...of("9", 2)], lead).ok, false, "非拖拉机时拆出的对子仍不能顶替天然对子");
+    playCards(room, "p1", split.map((c) => c.id));
+    assert.equal(room.currentTrick[1].shape.type, "tractor");
+    assert.equal(determineTrickWinner(room, room.currentTrick), 1, "JJQQ 大过 5566");
+    assert.deepEqual(follower.lockedTriples, []);
+
+    follower.hand = [...of("J", 3), ...of("Q", 3), ...of("9", 2)];
+    follower.lockedTriples = ["J|spades", "Q|spades"];
+    room.currentTrick = [{ seat: 0, cards: lead, shape: analyzeShape(lead, room), points: 0 }];
+    assert.equal(validatePlay(room, follower, split, lead).ok, false, "已锁定的三条不能借此拆成拖拉机");
+  });
+}
