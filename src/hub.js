@@ -46,8 +46,11 @@ const rooms = new Map();
 const clients = new Set();
 // 搜索型 AI 的 PIMC 预算（按难度档），由传输层按所在平台的算力配置。
 let searchOpts = {};
+// Optional host integration; Workers do not import filesystem/training modules.
+let learning = null;
 
 export function configureHub(options = {}) {
+  if (Object.hasOwn(options, "learning")) learning = options.learning;
   if (options.searchOpts) searchOpts = options.searchOpts;
   if (options.store) setStandingsStore(options.store);
 }
@@ -63,6 +66,7 @@ function getOrLoadRoom(code) {
   if (!saved) return null;
   room = roomFromStandings(saved);
   if (!room) return null;
+  learning?.attach?.(room);
   rooms.set(room.code, room);
   return room;
 }
@@ -72,6 +76,7 @@ const BURY_TIMEOUT_MS = 120000;
 // POST /api/rooms：建一个空房间，返回房间号。
 export function createApiRoom(seatCount) {
   const room = createRoom(undefined, { seatCount: Number(seatCount) });
+  learning?.attach?.(room);
   rooms.set(room.code, room);
   return room.code;
 }
@@ -140,6 +145,7 @@ export function receiveMessage(client, message) {
 
     if (type === "createRoom") {
       const room = createRoom(undefined, { seatCount: Number(payload.seatCount) });
+      learning?.attach?.(room);
       rooms.set(room.code, room);
       // Adopt the client-owned stable id so future reconnects map to this seat.
       const stableId = String(payload.playerId || "").trim();
@@ -226,7 +232,7 @@ export function receiveMessage(client, message) {
       addAi:            () => addAiPlayer(room, Number(payload.seatIndex), payload.level),
       kickAi:           () => kickAi(room, Number(payload.seatIndex)),
       leaveSeat:        () => leaveSeat(room, client.playerId),
-      startRound:       () => startRound(room, Math.random, { deal: false }),
+      startRound:       () => { startRound(room, Math.random, { deal: false }); learning?.pin?.(room); },
       bid:              () => makeBid(room, client.playerId, payload.cardIds || []),
       passBid:          () => passBid(room, client.playerId),
       sixCallTrump:     () => callSixTrump(room, client.playerId, payload.cardIds || []),
@@ -576,10 +582,19 @@ async function searchStep(room) {
   if (!seat || !seat.isAi) return false;
   const opts = searchOpts[seat.aiLevel];
   if (!opts) return false; // 弱/中：纯启发式，不搜索
+  const { round } = room;
+  const { playerId } = seat;
+  const handSize = seat.hand.length;
+  const stillOnTurn = () => room.phase === "playing" && room.round === round &&
+    room.turnSeat === seatIndex && room.seats[seatIndex] === seat && seat.isAi &&
+    seat.playerId === playerId && seat.hand.length === handSize;
   try {
-    const cards = await pimcChoosePlayAsync(room, seatIndex, opts);
+    let cards = null;
+    try { cards = await learning?.choosePlay?.(room, seatIndex); } catch (_) { /* fall back to PIMC */ }
+    if (!stillOnTurn()) return false;
+    if (!cards?.length) cards = await pimcChoosePlayAsync(room, seatIndex, opts);
     // 搜索期间牌局可能已变（踢人/回大厅/换人接管），不再是这个 AI 的回合就作废。
-    if (!cards || !cards.length || room.phase !== "playing" || room.turnSeat !== seatIndex || room.seats[seatIndex] !== seat || !seat.isAi) return false;
+    if (!cards?.length || !stillOnTurn()) return false;
     playCards(room, seat.playerId, cards.map((c) => c.id));
     return true;
   } catch (_) {

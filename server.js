@@ -3,11 +3,27 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { chooseLearnedPlay, validateModel } from "./src/ai/learning/network.js";
+import { AutomaticLearning } from "./src/ai/learning/automatic.js";
 import { loadAiWeights } from "./src/game.js";
 import { configureHub, connectClient, createApiRoom, disconnectClient, receiveMessage, startRoomSweeper } from "./src/hub.js";
 import { createFileStore } from "./src/fileStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// A configured checkpoint is the starting policy until an approved model is available.
+const learnedModel = process.env.LEARNED_AI_MODEL
+  ? validateModel(JSON.parse(fs.readFileSync(path.resolve(process.env.LEARNED_AI_MODEL), "utf8")))
+  : null;
+if (learnedModel) console.log(`Experimental learned AI enabled for ${learnedModel.seatCounts.join('/')} player master seats`);
+let automaticLearning = null;
+if ((process.env.AUTO_LEARNING ?? "1") === "1") {
+  const configFile = path.join(__dirname, ".run", "auto-learning.json");
+  const config = fs.existsSync(configFile) ? JSON.parse(fs.readFileSync(configFile, "utf8")) : {};
+  automaticLearning = await new AutomaticLearning({root:__dirname, ...config,
+    fallbackModel:learnedModel, fallbackPath:process.env.LEARNED_AI_MODEL ? path.resolve(process.env.LEARNED_AI_MODEL) : null,
+    onError:error=>console.error("[automatic learning]", error.message)}).start();
+  console.log("Automatic learning enabled: anonymous complete rounds, gated background updates");
+}
 
 // 自对弈调参权重默认【关闭】：它在自对弈指标上看着更强(+0.46)，但实为过拟合——
 // 把"给敌家送分"的惩罚调到几乎为 0(fGiftPts 3.5→0.2)、不保护自己分(fRiskOwnPts→0)，
@@ -50,7 +66,22 @@ const SEARCH_OPTS = {
   hard:   { determinizations: 40, maxCandidates: 6, timeBudgetMs: Number(process.env.HARD_PIMC_MS || 450),    rolloutLevel: "hard"   },
   master: { determinizations: 64, maxCandidates: 8, timeBudgetMs: Number(process.env.MASTER_PIMC_MS || 1300), rolloutLevel: "master" }
 };
-configureHub({ searchOpts: SEARCH_OPTS, store: createFileStore(path.join(__dirname, ".data", "rooms")) });
+configureHub({
+  searchOpts: SEARCH_OPTS,
+  store: createFileStore(path.join(__dirname, ".data", "rooms")),
+  learning: {
+    attach: room => automaticLearning?.attach(room),
+    pin: room => automaticLearning?.pin(room),
+    choosePlay: (room, seatIndex) => {
+      const model = automaticLearning ? automaticLearning.modelFor(room) : learnedModel;
+      if (!model || room.seats[seatIndex].aiLevel !== "master" || ![5, 6].includes(room.seatCount)) return null;
+      return chooseLearnedPlay(room, seatIndex, model, {
+        pause: () => new Promise(resolve => setImmediate(resolve)),
+        timeBudgetMs: SEARCH_OPTS.master.timeBudgetMs
+      });
+    }
+  }
+});
 startRoomSweeper().unref?.();
 
 const server = http.createServer((req, res) => {
@@ -130,7 +161,9 @@ function serveStatic(urlPath, res) {
     // 首页里给 app.js / style.css 注入“按文件 mtime 计算的版本号”，改了前端就自动 bust
     // 浏览器/Cloudflare 缓存（首页本身 no-cache，所以每次都拿到最新版本号，无需手动改）。
     if (filePath === path.join(publicDir, "index.html")) {
-      try { body = Buffer.from(data.toString("utf8").replace(/\?v=[\w.]+/g, `?v=${assetVersion()}`)); }
+      try { body = Buffer.from(data.toString("utf8").replace(/\?v=[\w.]+/g, `?v=${assetVersion()}`)
+        .replace("<!-- automatic-learning-notice -->", automaticLearning
+          ? '<p class="learning-notice">本服会将已结束且有真人手动出牌的五／六人对局用于本机 AI 训练。训练记录只含匿名牌局特征。</p>' : "")); }
       catch (_) { /* 注入失败就原样发送 */ }
     }
     res.writeHead(200, { "Content-Type": contentType(filePath), "Cache-Control": cacheControl(filePath) });

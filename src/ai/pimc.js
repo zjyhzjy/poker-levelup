@@ -20,10 +20,10 @@
 // simpler than a full ISMCTS tree but strong for trick-taking games, and easy to
 // verify against the existing engine. It can be upgraded to a tree search later.
 
-import { createDeck, shuffle } from "../cards.js";
 import {
-  chooseAiPlay, playCards, runAiStep, legalCandidatePlays, playSuit, constants
+  chooseAiPlay, playCards, runAiStep, legalCandidatePlays, dealerTeamSeats, constants
 } from "../game.js";
+import {determinizePublicWorld} from './hidden-world.js';
 
 const { PLAYING, ROUND_OVER } = constants.PHASES;
 
@@ -31,76 +31,25 @@ const { PLAYING, ROUND_OVER } = constants.PHASES;
 // Card objects are immutable and identified by `.id`, so structuredClone is both
 // correct (ids/ranks/suits preserved) and safe. We must first detach the fields
 // that hold non-cloneable runtime objects — spectators (Map), clients (Set of
-// live sockets), trusteeTimers / kickVote (Timeout handles) — all irrelevant to a
+// live sockets), aiTimer / trusteeTimers / kickVote (Timeout handles) — all irrelevant to a
 // rollout. CRITICAL: restore them in `finally`, so if structuredClone throws the
 // real room isn't left corrupted (that previously nulled room.spectators forever
 // and crashed the next broadcast, dropping every player).
 function cloneRoom(room) {
-  const detached = {
-    spectators: room.spectators,
-    clients: room.clients,
-    trusteeTimers: room.trusteeTimers,
-    kickVote: room.kickVote
-  };
-  room.spectators = undefined;
-  room.clients = undefined;
-  room.trusteeTimers = undefined;
-  room.kickVote = undefined;
+  const keys=['spectators','clients','aiTimer','trusteeTimers','kickVote'];
+  const detached=keys.map(key=>({key,present:Object.hasOwn(room,key),value:room[key]}));
+  for(const {key} of detached)room[key]=undefined;
   let copy;
   try {
     copy = structuredClone(room);
   } finally {
-    room.spectators = detached.spectators;
-    room.clients = detached.clients;
-    room.trusteeTimers = detached.trusteeTimers;
-    room.kickVote = detached.kickVote;
+    for(const {key,present,value} of detached)if(present)room[key]=value;else delete room[key];
   }
   copy.spectators = new Map();
   return copy;
 }
 
-// Infer which effective suits each OTHER seat has emptied: in a trick led with
-// effective-suit X, a seat that played fewer than the led length in suit X must
-// have run out of X (the follow rule forces playing all you hold), so it holds
-// none of X going forward. This is the card counter's void memory.
-function inferVoids(room, viewIndex) {
-  const voids = {};
-  for (const s of room.seats) if (s.index !== viewIndex) voids[s.index] = new Set();
-  const scan = (plays) => {
-    if (!plays.length) return;
-    const ledSuit = playSuit(plays[0].cards[0], room);
-    const ledLen = plays[0].cards.length;
-    for (const p of plays) {
-      if (p.seat === viewIndex || !voids[p.seat]) continue;
-      const ledCount = p.cards.reduce((n, c) => n + (playSuit(c, room) === ledSuit ? 1 : 0), 0);
-      if (ledCount < ledLen) voids[p.seat].add(ledSuit);
-    }
-  };
-  for (const t of room.finishedTricks) scan(t.plays);
-  scan(room.currentTrick);
-  return voids;
-}
-
-// Constrained deal: assign every pooled card to a target (seat hand or kitty)
-// respecting counts and void constraints. Most-constrained cards first; returns
-// null on a dead-end so the caller can retry / fall back.
-function assignConstrained(pool, targets, room, rng) {
-  const esCache = new Map();
-  const es = (c) => { let v = esCache.get(c.id); if (v === undefined) { v = playSuit(c, room); esCache.set(c.id, v); } return v; };
-  const slots = targets.map((t) => ({ ...t, cards: [] }));
-  const eligibleCount = (c) => slots.reduce((n, t) => n + (t.need > 0 && (!t.voids || !t.voids.has(es(c))) ? 1 : 0), 0);
-  const cards = [...pool].sort((a, b) => eligibleCount(a) - eligibleCount(b));
-  for (const c of cards) {
-    const elig = slots.filter((t) => t.cards.length < t.need && (!t.voids || !t.voids.has(es(c))));
-    if (!elig.length) return null;
-    let tot = 0; for (const t of elig) tot += t.need - t.cards.length;
-    let r = rng() * tot, chosen = elig[elig.length - 1];
-    for (const t of elig) { r -= t.need - t.cards.length; if (r <= 0) { chosen = t; break; } }
-    chosen.cards.push(c);
-  }
-  for (const t of slots) if (t.cards.length !== t.need) return null;
-  return slots;
-}
+export { cloneRoom as snapshotSearchRoom };
 
 // ── determinization (the card counter) ─────────────────────────────────────
 // Reassigns the hidden cards in `clone` to a world consistent with viewIndex's
@@ -108,37 +57,7 @@ function assignConstrained(pool, targets, room, rng) {
 // every other seat's hand and the buried kitty are resampled from the unseen
 // pool, preserving each location's card count AND respecting inferred voids.
 function determinize(room, viewIndex, clone, rng) {
-  const isDealer = room.dealerSeat === viewIndex;
-  const view = room.seats[viewIndex];
-
-  const known = new Set();
-  for (const c of view.hand) known.add(c.id);
-  for (const t of room.finishedTricks) for (const p of t.plays) for (const c of p.cards) known.add(c.id);
-  for (const p of room.currentTrick) for (const c of p.cards) known.add(c.id);
-  if (isDealer) for (const c of room.hiddenKitty) known.add(c.id);
-
-  const pool = createDeck(room.deckCopies).filter((c) => !known.has(c.id));
-  const voids = inferVoids(room, viewIndex);
-
-  const targets = [];
-  for (const s of room.seats) {
-    if (s.index === viewIndex) continue;
-    targets.push({ index: s.index, need: room.seats[s.index].hand.length, voids: voids[s.index] });
-  }
-  if (!isDealer) targets.push({ index: -1, need: room.hiddenKitty.length, voids: null });
-
-  let assigned = null;
-  for (let attempt = 0; attempt < 8 && !assigned; attempt += 1) assigned = assignConstrained(pool, targets, room, rng);
-  if (!assigned) { // voids made a clean deal infeasible — fall back to unconstrained
-    const sh = shuffle(pool, rng);
-    let i = 0;
-    assigned = targets.map((t) => { const cards = sh.slice(i, i + t.need); i += t.need; return { ...t, cards }; });
-  }
-  for (const t of assigned) {
-    if (t.index === -1) clone.hiddenKitty = t.cards;
-    else clone.seats[t.index].hand = t.cards;
-  }
-  return clone;
+  return determinizePublicWorld(room,viewIndex,clone,rng);
 }
 
 // ── rollout ────────────────────────────────────────────────────────────────
@@ -163,10 +82,65 @@ function rolloutToEnd(clone) {
   return clone.phase === ROUND_OVER;
 }
 
+// Playing changes hands, triple locks, trick lists, settlement state, and logs.
+// The sampled snapshot owns the card objects and completed trick records.
+function forkRollout(room) {
+  return {
+    ...room,
+    seats: room.seats.map(seat => ({ ...seat, hand: [...seat.hand], lockedTriples: [...(seat.lockedTriples || [])] })),
+    currentTrick: [...room.currentTrick],
+    finishedTricks: [...room.finishedTricks],
+    friendCall: room.friendCall && { ...room.friendCall },
+    scores: { ...room.scores },
+    seatPersonalScores: { ...room.seatPersonalScores },
+    teamLevels: { ...room.teamLevels },
+    tableLog: [],
+    matchLog: []
+  };
+}
+
+function simulateAction(base, viewer, cards, pointWeight, fork = cloneRoom) {
+  const world = fork(base);
+  world.trickPauseUntil = 0;
+  try {
+    playCards(world, world.seats[viewer].playerId, cards.map(card => card.id));
+    return rolloutToEnd(world) ? pimcOutcome(world, viewer, pointWeight) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Compare candidates in the same sampled world. A partial set of outcomes
+// cannot be used for a paired comparison.
+export function* pimcPairedWorlds(room, viewer, actions, options = {}) {
+  if (room.phase !== PLAYING || room.turnSeat !== viewer || !actions.length) {
+    throw new Error('Expected candidates for the current turn');
+  }
+  const snapshot = cloneRoom(room);
+  const rng = options.rng ?? Math.random;
+  const determinizations = options.determinizations ?? 24;
+  const fork = options.deepClone ? cloneRoom : forkRollout;
+  for (let i = 0; i < determinizations; i++) {
+    const base = fork(snapshot);
+    if (!determinize(snapshot, viewer, base, rng)) {
+      yield null;
+      continue;
+    }
+    makeAllAuto(base, options.rolloutLevel ?? 'hard', rng);
+    const values = actions.map(cards => simulateAction(base, viewer, cards, options.pointWeight, fork));
+    yield values.every(Number.isFinite) ? values : null;
+  }
+}
+
+export function pimcPairedOutcomes(room, viewer, actions, options = {}) {
+  return [...pimcPairedWorlds(room, viewer, actions, options)].filter(Boolean);
+}
+
 // Signed outcome from the view team's perspective. Primary term = net level
 // steps (what winning actually means); fine term = attacker-point margin so the
 // search can still rank moves when the level-step outcome ties.
-function outcome(clone, viewOnDealer) {
+export function pimcOutcome(clone, viewIndex, pointWeight = 1) {
+  const viewOnDealer=dealerTeamSeats(clone).includes(viewIndex);
   const res = clone.lastResult?.result;
   const atk = clone.scores?.attackers ?? 0;
   let steps = 0;
@@ -175,25 +149,15 @@ function outcome(clone, viewOnDealer) {
     steps = dealerWon === viewOnDealer ? res.steps : -res.steps;
   }
   const pointMargin = viewOnDealer ? -atk : atk;
-  return steps * 1000 + pointMargin;
+  return steps * 1000 + pointWeight * pointMargin;
 }
 
-// Which team is viewIndex on, from its OWN knowledge (it knows its hand, the
-// public dealer, and — in find-friend — whether it holds the called friend card).
-function viewIsDealerTeam(room, viewIndex) {
-  if (viewIndex === room.dealerSeat) return true;
-  if (room.mode === "fixedTeam6" || room.mode === "classic4") {
-    return viewIndex % 2 === room.dealerSeat % 2;
-  }
-  if (room.friendSeat !== null) return viewIndex === room.friendSeat;
-  const call = room.friendCall;
-  if (call && room.seats[viewIndex].hand.some((c) => c.rank === call.rank && c.suit === call.suit)) return true;
-  return false;
-}
-
+// In five-player games allegiance can depend on which occurrence of the called
+// card gets played. Each sampled world's terminal friend determines its reward;
+// merely holding one copy does not establish the root player's team.
 // Legal candidates, optionally capped to a manageable set for search. When
-// capping we always keep the heuristic's own pick (so search never does worse
-// than the heuristic by overlooking it) plus the leading spread of boss groups.
+// capping we keep the heuristic's own pick in the comparison, plus the leading
+// spread of boss groups. Sampling error can still select a worse move.
 function selectCandidates(room, seat, leaderCards, opts) {
   const all = legalCandidatePlays(room, seat, leaderCards);
   const cap = opts.maxCandidates ?? 0;
@@ -214,6 +178,9 @@ function selectCandidates(room, seat, leaderCards, opts) {
 // viewIndex's turn / not the playing phase.
 function* searchPlay(room, viewIndex, opts) {
   if (room.phase !== PLAYING || room.turnSeat !== viewIndex) return null;
+  // Candidate generation advances a seat's PRNG. Keep all search mutations in
+  // a snapshot, including the synchronous entry point.
+  room=cloneRoom(room);
   const maxDeterminizations = opts.determinizations ?? 80;
   const rolloutLevel = opts.rolloutLevel ?? "hard";
   const rng = opts.rng ?? Math.random;
@@ -223,29 +190,25 @@ function* searchPlay(room, viewIndex, opts) {
   const candidates = selectCandidates(room, seat, leaderCards, opts);
   if (candidates.length <= 1) return candidates[0] ?? chooseAiPlay(room, seat, leaderCards);
 
-  const viewOnDealer = viewIsDealerTeam(room, viewIndex);
   const totals = new Array(candidates.length).fill(0);
   const counts = new Array(candidates.length).fill(0);
 
   for (let d = 0; d < maxDeterminizations; d += 1) {
     const base = cloneRoom(room);
-    determinize(room, viewIndex, base, rng);
-    makeAllAuto(base, rolloutLevel, rng);
+    const assigned=determinize(room, viewIndex, base, rng);
+    if(assigned)makeAllAuto(base, rolloutLevel, rng);
 
-    for (let ci = 0; ci < candidates.length; ci += 1) {
-      const world = cloneRoom(base);
-      world.trickPauseUntil = 0;
-      try {
-        playCards(world, world.seats[viewIndex].playerId, candidates[ci].map((c) => c.id));
-        if (rolloutToEnd(world)) {
-          totals[ci] += outcome(world, viewOnDealer);
-          counts[ci] += 1;
-        }
-      } catch (_) { /* discard a broken rollout; others still count */ }
+    for (let ci = 0; assigned && ci < candidates.length; ci += 1) {
+      const score = simulateAction(base, viewIndex, candidates[ci]);
+      if (score !== null) {
+        totals[ci] += score;
+        counts[ci] += 1;
+      }
     }
     if (d + 1 < maxDeterminizations && (yield)) break; // caller says the budget is spent
   }
 
+  if(!counts.some(Boolean))return chooseAiPlay(room,seat,leaderCards);
   let best = 0;
   let bestAvg = counts[0] ? totals[0] / counts[0] : -Infinity;
   for (let i = 1; i < candidates.length; i += 1) {
@@ -284,25 +247,24 @@ export async function pimcChoosePlayAsync(room, viewIndex, opts = {}) {
 // Diagnostics: same search but returns the per-candidate averages (for tuning /
 // inspection), without committing to a move.
 export function pimcEvaluate(room, viewIndex, opts = {}) {
+  room=cloneRoom(room);
   const seat = room.seats[viewIndex];
   const leaderCards = room.currentTrick[0]?.cards ?? null;
   const candidates = legalCandidatePlays(room, seat, leaderCards);
   const rng = opts.rng ?? Math.random;
-  const viewOnDealer = viewIsDealerTeam(room, viewIndex);
   const D = opts.determinizations ?? 80;
   const totals = new Array(candidates.length).fill(0);
   const counts = new Array(candidates.length).fill(0);
   for (let d = 0; d < D; d += 1) {
     const base = cloneRoom(room);
-    determinize(room, viewIndex, base, rng);
+    if(!determinize(room, viewIndex, base, rng))continue;
     makeAllAuto(base, opts.rolloutLevel ?? "hard", rng);
     for (let ci = 0; ci < candidates.length; ci += 1) {
-      const world = cloneRoom(base);
-      world.trickPauseUntil = 0;
-      try {
-        playCards(world, world.seats[viewIndex].playerId, candidates[ci].map((c) => c.id));
-        if (rolloutToEnd(world)) { totals[ci] += outcome(world, viewOnDealer); counts[ci] += 1; }
-      } catch (_) { /* skip */ }
+      const score = simulateAction(base, viewIndex, candidates[ci]);
+      if (score !== null) {
+        totals[ci] += score;
+        counts[ci] += 1;
+      }
     }
   }
   return candidates.map((c, i) => ({

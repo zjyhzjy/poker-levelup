@@ -1,6 +1,7 @@
 server-out.txt
 server-err.txt
 node_modules/
+__pycache__/
 .env
 .data/
 .DS_Store

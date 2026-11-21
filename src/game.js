@@ -794,6 +794,14 @@ export function callFriend(room, playerId, call) {
   room.tableLog.push(`${dealer.nickname} 叫朋友：第 ${ordinal} 张 ${calledCardLabel(room.friendCall)}`);
 }
 
+// Observers are external to room state, so search clones never record simulated
+// moves. A broken observer cannot change legality or interrupt the game.
+const playObservers = new WeakMap();
+export function observeRoomPlays(room, observer) {
+  if (observer) playObservers.set(room, observer);
+  else playObservers.delete(room);
+}
+
 export function playCards(room, playerId, cardIds) {
   assertPhase(room, PHASES.PLAYING);
   const seat = findSeatByPlayer(room, playerId);
@@ -804,7 +812,20 @@ export function playCards(room, playerId, cardIds) {
   autoPlayRestOfLastTrick(room);
 }
 
-function playCardsInternal(room, seat, cardIds) {
+function playCardsInternal(room, seat, cardIds, forced = false) {
+  const observer = playObservers.get(room);
+  let token;
+  const notify = (method, ...args) => {
+    try { return observer?.[method]?.(...args); }
+    catch (error) { console.error('[play observer]', error.message); return undefined; }
+  };
+  token = notify('before', room, seat, cardIds, forced);
+  try { applyPlayCards(room, seat, cardIds); }
+  catch (error) { notify('cancel', token); throw error; }
+  notify('after', room, token);
+}
+
+function applyPlayCards(room, seat, cardIds) {
   const cards = pickCards(seat.hand, cardIds);
   if (!cards.length) throw new Error("请选择要出的牌");
   if (cards.length !== cardIds.length) throw new Error("选牌不在手牌中或有重复");
@@ -916,7 +937,7 @@ function autoPlayRestOfLastTrick(room) {
     const seat = room.seats[room.turnSeat];
     const leaderCards = room.currentTrick[0]?.cards ?? null;
     if (!seat || !leaderCards || seat.hand.length !== leaderCards.length) break;
-    playCardsInternal(room, seat, seat.hand.map((card) => card.id));
+    playCardsInternal(room, seat, seat.hand.map((card) => card.id), true);
   }
   if (room.currentTrick.length === 0 || room.phase !== PHASES.PLAYING) {
     room.autoFinishLastTrick = false;
@@ -1239,6 +1260,15 @@ export function legalCandidatePlays(room, seat, leaderCards = null) {
   } catch (_) { /* fall back to just the safe pick */ }
   add(chooseAiPlay(room, seat, led));
   return out;
+}
+
+// Reuse the rule policy's scoring terms as inputs for supervised action ranking.
+export function heuristicActionScores(room, seat, actions) {
+  const profile = aiProfile(seat);
+  const seen = seenCounts(room, seat);
+  const standing = trickStanding(room, seat);
+  if (standing) return actions.map(cards => scoreFollow(room, seat, cards, standing, profile, seen));
+  return actions.map(cards => scoreLead(room, seat, cards, profile, seen));
 }
 
 // Conservative baseline (the original behaviour): follow with the lowest legal
@@ -2976,6 +3006,11 @@ export function buildSharedState(room) {
       : null,
     trumpKillSeats: (room.phase === PHASES.PLAYING && room.currentTrick.length > 1)
       ? (() => { try { return trumpKillSeats(room, room.currentTrick); } catch { return []; } })()
+      : [],
+    // Keep legal kill metadata for the just-finished trick too: its final play
+    // may arrive in the same broadcast that clears currentTrick.
+    lastTrickKillSeats: room.lastTrick?.length > 1
+      ? (() => { try { return trumpKillSeats(room, room.lastTrick); } catch { return []; } })()
       : [],
     throwResult: room.throwResult,
     scores: room.scores,

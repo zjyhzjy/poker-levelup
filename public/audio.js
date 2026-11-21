@@ -221,6 +221,7 @@ function stopSynthMusic() {
 // Prefer a downloaded clip public/sfx/<name>.mp3 (real, polished); fall back to
 // the synth below if the file is absent.
 const sfxClips = {};
+const proceduralSfx = new Set(['tractor','bomb','throw-fail','throw-success','triple','celebrate']);
 function isTouchDevice() {
   return (typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches) ||
     (typeof navigator !== "undefined" && navigator.maxTouchPoints > 0);
@@ -230,6 +231,7 @@ function sfxVolume(name) {
 }
 export function sfx(name) {
   if (!voiceOn || fxVol <= 0) return;
+  if (proceduralSfx.has(name)) { synthSfx(name); return; }
   if (sfxClips[name] !== "missing") {
     let c = sfxClips[name];
     if (!c) { c = new Audio(`/sfx/${name}.wav`); sfxClips[name] = c; }
@@ -255,22 +257,43 @@ function synthSfx(name) {
     pluckFx(120, t + 0.06, 0.22, 0.28, "sawtooth");
   } else if (name === "deal") {
     pluckFx(800, t, 0.05, 0.12, "square");
-  } else if (name === "tractor") {
-    // 拖拉机=连对：火车汽笛 + 哐当哐当（可被 /sfx/tractor.wav 覆盖）
-    [349.23, 466.16].forEach((f) => {            // 双音汽笛 "呜——"
-      const o = ctx.createOscillator(); const g = ctx.createGain();
-      o.type = "sawtooth"; o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.16, t + 0.05);
-      g.gain.setValueAtTime(0.16, t + 0.32); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.48);
-      o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.5);
+  } else if (name === 'bomb') {
+    // Fuse rush, bass impact and a short debris tail. All follow the FX volume.
+    noiseBurst(t,0.13,0.09,3800);
+    const o=ctx.createOscillator(),g=ctx.createGain();
+    o.type='sine';o.frequency.setValueAtTime(150,t+0.18);
+    o.frequency.exponentialRampToValueAtTime(32,t+0.65);
+    g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(0.4,t+0.2);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+0.75);
+    o.connect(g);g.connect(master);o.start(t);o.stop(t+0.8);
+    noiseBurst(t+0.18,0.36,0.28,1900);
+    noiseBurst(t+0.35,0.24,0.1,3600);
+  } else if (name === 'throw-fail') {
+    noiseBurst(t,0.1,0.2,1300);
+    [392,330,247,131].forEach((f,i)=>pluckFx(f,t+i*0.1,0.2,0.16,'triangle'));
+  } else if (name === 'throw-success') {
+    [392,523,659,784].forEach((f,i)=>pluckFx(f,t+i*0.065,0.25,0.13,'triangle'));
+    noiseBurst(t,0.12,0.07,4200);
+  } else if (name === 'triple') {
+    [110,145,196].forEach((f,i)=>{
+      pluckFx(f,t+i*0.09,0.18,0.2,'sine');noiseBurst(t+i*0.09,0.05,0.08,1200);
     });
-    for (let i = 0; i < 6; i++) {                 // 由慢到快的车轮声
-      const when = t + 0.5 + i * (0.16 - i * 0.008);
-      const o = ctx.createOscillator(); const g = ctx.createGain();
-      o.type = "sine"; o.frequency.setValueAtTime(95, when); o.frequency.exponentialRampToValueAtTime(52, when + 0.07);
-      g.gain.setValueAtTime(0.0001, when); g.gain.exponentialRampToValueAtTime(0.3, when + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, when + 0.1);
-      o.connect(g); g.connect(master); o.start(when); o.stop(when + 0.12);
-      noiseBurst(when + 0.005, 0.08, 0.14, 1400); // 蒸汽 "嚓"
+  } else if (name === 'celebrate') {
+    [523,659,784,1047,784,1047].forEach((f,i)=>pluckFx(f,t+i*0.1,0.35,0.15,'triangle'));
+  } else if (name === "tractor") {
+    // Layered low engine harmonics, a short rev and tire/gravel transients.
+    [48,96,144].forEach((frequency,index)=>{
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.type=index?'triangle':'sawtooth';o.frequency.setValueAtTime(frequency,t);
+      o.frequency.exponentialRampToValueAtTime(frequency*1.35,t+0.65);
+      o.frequency.exponentialRampToValueAtTime(frequency*1.05,t+1.5);
+      g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(0.085/(index+1),t+0.12);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+1.75);
+      o.connect(g);g.connect(master);o.start(t);o.stop(t+1.8);
+    });
+    for(let i=0;i<10;i++){
+      noiseBurst(t+i*0.135,0.09,0.035+(i%3)*0.008,450+i*45);
+      pluckFx(65+(i%3)*8,t+i*0.135,0.07,0.04,'sine');
     }
   }
 }

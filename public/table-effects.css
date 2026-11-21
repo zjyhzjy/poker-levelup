@@ -1,0 +1,108 @@
+/* Photographic VFX sprites, physical paper and restrained lighting. */
+.table-fx, .table-fx * { pointer-events: none !important; }
+.table-fx {
+  --fx-hot: #f3bb79; --fx-cold: #b96a35; --fx-hit: 160ms;
+  position:absolute;inset:0 0 max(26%,var(--hand-band,26%));z-index:180;overflow:hidden;
+  contain:layout style;isolation:isolate;animation:fx-scene var(--fx-duration,1500ms) both;
+}
+.fx-vignette {position:absolute;inset:0;background:radial-gradient(ellipse at 50% 48%,transparent 12%,#07100f50 55%,transparent 78%);animation:fx-shade var(--fx-duration) both;}
+.fx-atmosphere {position:absolute;inset:8%;background:radial-gradient(ellipse at 50% 43%,#e8c49518,transparent 60%);animation:fx-shade var(--fx-duration) both;}
+.fx-ring {position:absolute;left:50%;top:45%;width:160px;aspect-ratio:1;border:2px solid #f1ddbf70;border-radius:50%;opacity:0;filter:blur(1px);animation:fx-pressure 850ms ease-out var(--fx-hit) both;}
+.fx-ring-two {animation-delay:calc(var(--fx-hit) + 130ms);border-width:1px;filter:blur(2px);}
+.fx-art {position:absolute;left:50%;top:37%;width:220px;height:165px;transform:translate(-50%,-50%);perspective:850px;}
+.fx-copy {position:absolute;left:50%;top:70%;width:min(90%,480px);transform:translate(-50%,-50%);text-align:center;animation:fx-caption 360ms ease-out var(--fx-hit) both;}
+.fx-copy::before {content:'';display:block;width:64px;height:1px;margin:0 auto 9px;background:linear-gradient(90deg,transparent,#d7c09d,transparent);}
+.fx-title {display:block;color:#f0e6d3;font-family:'Noto Serif SC',serif;font-size:clamp(25px,6vw,43px);line-height:1.3;font-weight:700;letter-spacing:.12em;text-shadow:0 2px 4px #080e0e,0 6px 20px #000c;}
+.fx-subtitle {display:block;margin-top:5px;color:#d6d4c3;font:500 clamp(11px,2.6vw,14px)/1.6 system-ui,sans-serif;letter-spacing:.16em;text-shadow:0 2px 5px #000;}
+.fx-tag {display:inline-block;margin-top:7px;padding:2px 10px;border:1px solid #b09b7159;border-radius:3px;background:#171a18b8;color:#dac59d;font:600 14px/1.6 system-ui,sans-serif;box-shadow:0 2px 10px #0003;}
+.fx-spark {position:absolute;left:50%;top:46%;width:var(--size,3px);height:calc(var(--size,3px) * 2);background:#ecad72;border-radius:50%;opacity:0;box-shadow:0 0 4px #e99b6570;animation:fx-particles 1050ms cubic-bezier(.12,.42,.55,.95) calc(var(--fx-hit) + var(--delay)) both;}
+/* A heavy vehicle stays planted on the ground; dust trails behind its tires. */
+.fx-tractor {--fx-hit:100ms;}
+.fx-tractor .fx-art {width:340px;height:225px;top:40%;}
+.fx-vehicle-pass {position:absolute;inset:0;animation:fx-drive 1850ms cubic-bezier(.15,.42,.65,.95) both;}
+.fx-vehicle {position:absolute;width:100%;left:0;top:-4%;filter:drop-shadow(1px 9px 7px #030a09b3);animation:fx-engine-vibration 110ms linear infinite;}
+.fx-ground-shadow {position:absolute;left:9%;top:83%;width:85%;height:18%;border-radius:50%;background:#030808a6;filter:blur(10px);transform:rotate(-1deg);}
+.fx-dust {position:absolute;width:106%;left:-46%;top:47%;opacity:0;filter:brightness(.65) sepia(.2);animation:fx-tire-dust 1850ms ease-out both;}
+.fx-track {position:absolute;left:-75vw;right:-75vw;top:84%;height:26px;transform:rotate(-1deg);animation:fx-tracks 1600ms both;}
+.fx-track::before,.fx-track::after {content:'';position:absolute;inset:0 0 auto;height:8px;background:repeating-linear-gradient(110deg,transparent 0 9px,#10151070 10px 16px,transparent 17px 24px);filter:blur(.5px);}
+.fx-track::after {top:17px;}
+.fx-tractor .fx-spark {top:66%;background:#998973;box-shadow:none;height:var(--size);animation-name:fx-road-grit;}
+.fx-tractor .fx-ring,.fx-tractor .fx-ring-two {display:none;}
+/* A short light impulse, turbulent fire, then lingering particulate smoke. */
+.fx-bomb,.fx-overkill {--fx-hit:110ms;}
+.fx-bomb .fx-art,.fx-overkill .fx-art {width:300px;height:280px;top:39%;}
+.fx-blast-light {position:absolute;inset:8%;border-radius:50%;background:radial-gradient(#fff5c78c,#e9a15c38 30%,transparent 65%);filter:blur(5px);animation:fx-blast-light 700ms both;}
+.fx-fireball {position:absolute;left:0;top:0;width:100%;height:100%;object-fit:contain;opacity:0;transform-origin:50% 65%;animation:fx-fireball 1450ms ease-out both;}
+.fx-smoke-plume {position:absolute;left:-28%;top:36%;width:156%;height:auto;opacity:0;filter:brightness(.54) saturate(.55);animation:fx-smoke 1650ms 180ms ease-out both;}
+.fx-secondary-blast {width:70%;height:70%;left:32%;top:12%;animation-delay:180ms;}
+.fx-overkill .fx-ring-two {animation-delay:260ms;}
+.fx-bomb .fx-spark,.fx-overkill .fx-spark {background:#ffd3a3;box-shadow:0 0 5px #d88b42aa;}
+.fx-overkill .fx-title {color:#f3e1c8;}
+/* Matte paper, printed pips and shadows give cards weight without neon edges. */
+.fx-fan,.fx-triplet {position:absolute;inset:0;transform-style:preserve-3d;}
+.fx-card,.fx-shard,.fx-resting-card {position:absolute;width:66px;height:94px;border:1px solid #d4c8b7;border-radius:5px;color:#282824;background:repeating-linear-gradient(2deg,#f7f3e8 0px,#f7f3e8 2px,#f4f0e5 3px);box-shadow:1px 2px 0 #c1b7a5,3px 9px 14px #0008,inset 0 0 10px #d9c8ad66;overflow:hidden;font-style:normal;}
+.fx-card {--card-i:0;left:calc(50% - 33px);top:18px;transform-origin:50% 135%;animation:fx-fan-out 1200ms both;}
+.fx-card:nth-child(1){--card-i:-2}.fx-card:nth-child(2){--card-i:-1}.fx-card:nth-child(3){--card-i:0}.fx-card:nth-child(4){--card-i:1}.fx-card:nth-child(5){--card-i:2}
+.fx-red {color:#8d3534;}
+.fx-card-corner {position:absolute;top:5px;left:6px;font:700 16px/.95 Georgia,serif;text-align:center;}
+.fx-card-corner small {display:block;font-size:13px;line-height:1.1;}
+.fx-card-bottom {inset:auto 6px 5px auto;transform:rotate(180deg);}
+.fx-card-pip {position:absolute;inset:0;display:grid;place-items:center;font:40px/1 Georgia,serif;}
+.fx-triplet .fx-card {animation-name:fx-triple-in;}
+.fx-triplet .fx-card:nth-child(1){--card-i:-1}.fx-triplet .fx-card:nth-child(2){--card-i:0}.fx-triplet .fx-card:nth-child(3){--card-i:1}
+.fx-throw .fx-ring,.fx-triple .fx-ring {border-color:#e3d6b23d;filter:blur(3px);}
+/* Two complementary jagged edges expose the torn paper, then fall under gravity. */
+.fx-throw-fail {--fx-hit:130ms;}
+.fx-throw-fail .fx-art {width:190px;height:165px;top:35%;}
+.fx-shard {width:88px;height:124px;left:calc(50% - 44px);top:0;border-color:#dbd1bf;border-radius:4px;animation:fx-break-left 1250ms 100ms both;}
+.fx-shard .fx-card-pip {font-size:52px;}
+.fx-shard-left {clip-path:polygon(0 0,52% 0,48% 9%,54% 18%,45% 28%,53% 37%,47% 48%,56% 57%,46% 68%,52% 77%,44% 89%,49% 100%,0 100%);}
+.fx-shard-right {clip-path:polygon(52% 0,100% 0,100% 100%,49% 100%,44% 89%,52% 77%,46% 68%,56% 57%,47% 48%,53% 37%,45% 28%,54% 18%,48% 9%);animation-name:fx-break-right;}
+.fx-throw-fail .fx-title {color:#edc4ba;}
+.fx-throw-fail .fx-tag {font-size:23px;color:#e1a294;border-color:#80544a80;background:#311c1cb8;}
+.fx-throw-fail .fx-ring,.fx-throw-fail .fx-atmosphere {display:none;}
+.fx-throw-fail .fx-spark {width:calc(var(--size) + 2px);height:calc(var(--size) + 3px);top:37%;background:#eee8d9;box-shadow:1px 2px 2px #0005;border-radius:1px;clip-path:polygon(0 0,100% 18%,78% 100%,15% 72%);}
+.fx-coins {position:absolute;inset:0;perspective:600px;}
+.fx-coins i {--coin-i:0;position:absolute;left:calc(50% - 29px);top:35px;width:58px;height:58px;border-radius:50%;border:3px ridge #b5904a;background:linear-gradient(125deg,#9e7430,#e4cc8b 25%,#b28b43 56%,#e5ce8e 80%,#8e682f);color:#815a23;text-shadow:0 1px 0 #e9d494;font:32px/52px Georgia,serif;text-align:center;box-shadow:2px 5px 2px #775021,4px 10px 10px #0007;animation:fx-coin 1000ms both;}
+.fx-coins i:first-child{--coin-i:-1}.fx-coins i:last-child{--coin-i:1}
+.fx-trophy {display:block;position:absolute;left:5%;top:-8%;width:90%;height:114%;object-fit:contain;filter:drop-shadow(0 7px 12px #0009);animation:fx-trophy 1400ms both;}
+.fx-trophy-light {position:absolute;inset:0;background:radial-gradient(ellipse,#eddaab25,transparent 65%);animation:fx-shade 1500ms both;z-index:-1;}
+.fx-victory .fx-art {width:230px;height:220px;top:35%;}
+.fx-victory .fx-spark {width:4px;height:9px;background:#d5be89;box-shadow:none;animation-duration:1600ms;}
+.fx-victory .fx-ring {border-color:#ebd9a752;}
+.fx-resting-card {left:calc(50% - 33px);top:30px;transform:rotate(-8deg);animation:fx-settle 800ms both;}
+.fx-defeat .fx-title {color:#ccd1d0;}
+.fx-defeat .fx-art {filter:saturate(.2);}
+.fx-defeat .fx-ring,.fx-finish .fx-ring {display:none;}
+.fx-lite .fx-art,.fx-lite .fx-atmosphere,.fx-lite .fx-ring,.fx-lite .fx-vignette,.fx-lite .fx-spark {display:none;}
+.table-fx.fx-lite {animation:fx-soft 700ms both;}
+.fx-lite .fx-copy {top:24%;width:max-content;max-width:90%;transform:translateX(-50%);animation:none;border:1px solid #a99b755e;background:#142b28ef;border-radius:6px;padding:8px 16px;}
+.fx-lite .fx-copy::before {display:none;}
+.fx-lite .fx-title {font:600 20px/1.4 system-ui,sans-serif;letter-spacing:.06em;}
+.fx-lite .fx-subtitle {font-size:11px;letter-spacing:.04em;}
+.fx-lite .fx-tag {font-size:13px;margin-top:4px;}
+.table-felt[data-effects="off"] .trick-slot,.table-felt[data-effects="lite"] .trick-slot,.table-felt[data-effects="off"] .trick-cards::before,.table-felt[data-effects="lite"] .trick-cards::before {animation:none !important;}
+@keyframes fx-scene{0%{opacity:0}6%,82%{opacity:1}100%{opacity:0}}
+@keyframes fx-shade{0%,100%{opacity:0}22%,65%{opacity:1}}
+@keyframes fx-caption{from{transform:translate(-50%,calc(-50% + 8px));opacity:0}to{transform:translate(-50%,-50%);opacity:1}}
+@keyframes fx-pressure{from{transform:translate(-50%,-50%) scale(.3) scaleY(.45);opacity:.7}to{transform:translate(-50%,-50%) scale(3.3) scaleY(.55);opacity:0}}
+@keyframes fx-drive{0%{transform:translateX(-85vw)}27%{transform:translateX(-18%)}65%{transform:translateX(14%)}100%{transform:translateX(85vw)}}
+@keyframes fx-engine-vibration{0%,100%{transform:translateY(0)}35%{transform:translateY(.7px) rotate(.12deg)}70%{transform:translateY(-.7px) rotate(-.1deg)}}
+@keyframes fx-tire-dust{0%,8%{opacity:0;transform:scale(.5)}25%{opacity:.6;transform:translateX(-10px) scale(.8)}75%{opacity:.45;transform:translateX(-50px) scale(1.3)}100%{opacity:0;transform:translateX(-90px) scale(1.6)}}
+@keyframes fx-tracks{0%{opacity:0;transform:scaleX(.2) rotate(-1deg)}30%,70%{opacity:.8}100%{opacity:0;transform:scaleX(1.1) rotate(-1deg)}}
+@keyframes fx-road-grit{0%{opacity:0;transform:translate(-130px,0)}15%{opacity:.7}55%{transform:translate(calc(-130px + var(--drift)),-15px);opacity:.5}100%{transform:translate(calc(-130px + var(--drift)),45px);opacity:0}}
+@keyframes fx-blast-light{0%{transform:scale(.1);opacity:0}13%{transform:scale(1.2);opacity:.9}45%{opacity:.3}100%{transform:scale(1.8);opacity:0}}
+@keyframes fx-fireball{0%{transform:scale(.08);opacity:0}10%{opacity:1}30%{transform:scale(.82);opacity:.98}60%{transform:translateY(-6px) scale(1.08);opacity:.8}100%{transform:translateY(-16px) scale(1.25);opacity:0}}
+@keyframes fx-smoke{0%{transform:translateY(0) scale(.45);opacity:0}26%{opacity:.6}65%{transform:translate(-5px,-26px) scale(1.1);opacity:.42}100%{transform:translate(12px,-48px) scale(1.35);opacity:0}}
+@keyframes fx-particles{0%{transform:translate(-50%,-50%) scale(.4);opacity:0}12%{opacity:.9}50%{transform:translate(calc(-50% + var(--x) * .65),calc(-50% + var(--y) * .8)) rotate(calc(var(--spin) * .5));opacity:.7}100%{transform:translate(calc(-50% + var(--x)),calc(-50% + var(--y) + var(--fall))) rotate(var(--spin));opacity:0}}
+@keyframes fx-fan-out{from{transform:translateY(35px) rotateX(35deg) scale(.75);opacity:0}30%,78%{transform:rotate(calc(var(--card-i) * 13deg)) rotateX(8deg) translateY(-5px);opacity:1}to{transform:rotate(calc(var(--card-i) * 15deg)) translateY(8px);opacity:0}}
+@keyframes fx-triple-in{from{transform:translate(calc(var(--card-i) * 80px),-60px) rotateX(30deg);opacity:0}35%,80%{transform:translate(calc(var(--card-i) * 53px),0) rotate(calc(var(--card-i) * 3deg));opacity:1}to{transform:translate(calc(var(--card-i) * 55px),10px);opacity:0}}
+@keyframes fx-break-left{0%,12%{transform:translate(0,0) rotate(-2deg);opacity:1}38%{transform:translate(-25px,-10px) rotate(-13deg);opacity:1}100%{transform:translate(-85px,105px) rotate(-42deg) rotateY(28deg);opacity:0}}
+@keyframes fx-break-right{0%,12%{transform:translate(0,0) rotate(-2deg);opacity:1}38%{transform:translate(28px,-6px) rotate(15deg);opacity:1}100%{transform:translate(80px,118px) rotate(38deg) rotateY(-30deg);opacity:0}}
+@keyframes fx-coin{0%{transform:translate(calc(var(--coin-i) * 70px),-50px) rotateY(70deg);opacity:0}35%{opacity:1}65%,85%{transform:translate(calc(var(--coin-i) * 44px),15px) rotateY(350deg);opacity:1}100%{transform:translate(calc(var(--coin-i) * 48px),25px) rotateY(380deg);opacity:0}}
+@keyframes fx-trophy{from{transform:translateY(25px) scale(.85);opacity:0}35%,85%{transform:translateY(0) scale(1);opacity:1}to{transform:translateY(-3px) scale(1.02);opacity:.75}}
+@keyframes fx-settle{from{transform:translateY(-25px) rotate(-15deg);opacity:0}to{transform:translateY(5px) rotate(-8deg);opacity:1}}
+@keyframes fx-soft{0%,100%{opacity:0}15%,80%{opacity:1}}
+@media(min-width:820px){.fx-art{transform:translate(-50%,-50%) scale(1.12)}}
+@media(max-width:380px){.fx-art{transform:translate(-50%,-50%) scale(.78)}.fx-title{font-size:25px}}
+@media(prefers-reduced-motion:reduce){.table-fx *,.table-fx{animation:none !important}}
